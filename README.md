@@ -16,7 +16,7 @@ Then bring up the default stack:
 mrsm stack up -d
 ```
 
-Inside the `plugins/traffic` directory, create a folder `data` and drop in the Streetlights CSV files.
+Inside the `plugins/streetlights` directory, create a folder `data` and drop in the Streetlights CSV files.
 
 ## Ingest the Data
 
