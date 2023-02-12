@@ -39,6 +39,10 @@ sync:
       metric: "work"
       location: "grid"
 
+    - connector: "plugin:scdps"
+      metric: "collisions"
+      location: "greenville"
+
 config:
   meerschaum:
     instance: "sql:traffic"
