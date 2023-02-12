@@ -17,5 +17,5 @@ def fetch(pipe: mrsm.Pipe, **kw) -> 'pd.DataFrame':
     """
     import pandas as pd
     import duckdb
-    df = pd.read_csv(URL, dtype=str)
+    df = pd.read_csv(URL)
     return duckdb.query("SELECT * FROM df WHERE \"County\" = 'Greenville'").df()

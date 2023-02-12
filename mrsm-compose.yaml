@@ -3,45 +3,45 @@ plugins_dir:
 
 sync:
   pipes:
-    - connector: "plugin:traffic"
-      metric: "home"
-      location: "block_groups"
-
-    - connector: "plugin:traffic"
-      metric: "home"
-      location: "distance"
-
-    - connector: "plugin:traffic"
-      metric: "home"
-      location: "grid"
-
-    - connector: "plugin:traffic"
-      metric: "home"
-      location: "metro_area"
-
-    - connector: "plugin:traffic"
-      metric: "home"
-      location: "state"
-
-    - connector: "plugin:traffic"
-      metric: "home"
-      location: "zip_codes"
-
-    - connector: "plugin:traffic"
-      metric: "work"
-      location: "block_groups"
-
-    - connector: "plugin:traffic"
-      metric: "work"
-      location: "distance"
-
-    - connector: "plugin:traffic"
-      metric: "work"
-      location: "grid"
-
     - connector: "plugin:scdps"
       metric: "collisions"
       location: "greenville"
+
+    - connector: "plugin:streetlights"
+      metric: "home"
+      location: "block_groups"
+
+    - connector: "plugin:streetlights"
+      metric: "home"
+      location: "distance"
+
+    - connector: "plugin:streetlights"
+      metric: "home"
+      location: "grid"
+
+    - connector: "plugin:streetlights"
+      metric: "home"
+      location: "metro_area"
+
+    - connector: "plugin:streetlights"
+      metric: "home"
+      location: "state"
+
+    - connector: "plugin:streetlights"
+      metric: "home"
+      location: "zip_codes"
+
+    - connector: "plugin:streetlights"
+      metric: "work"
+      location: "block_groups"
+
+    - connector: "plugin:streetlights"
+      metric: "work"
+      location: "distance"
+
+    - connector: "plugin:streetlights"
+      metric: "work"
+      location: "grid"
 
 config:
   meerschaum:

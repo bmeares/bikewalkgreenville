@@ -1,5 +1,5 @@
-# SRT Streetlights Traffic Data
-This Meerschaum project builds several tables from the Streetlights SRT data for Bike Walk Greenville.
+# Bike Walk Greenville
+This Meerschaum project builds several tables from traffic data for Bike Walk Greenville.
 
 ## Setup
 
