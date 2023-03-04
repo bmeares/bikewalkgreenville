@@ -14,7 +14,6 @@ sync:
         troop: 'Troop'
       dtypes:
         'Troop': 'Int64'
-        'Recieved': 'datetime64[ns]'
 
 config:
   meerschaum:
