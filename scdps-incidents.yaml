@@ -6,7 +6,7 @@ sync:
   pipes:
     - connector: 'plugin:realtimetraffic'
       metric: 'incidents'
-      location: 'greenville'
+      location: 'sc'
       columns:
         datetime: 'Received'
         county: 'County'
