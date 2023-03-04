@@ -13,19 +13,6 @@ from meerschaum.utils.typing import Dict, List, Any
 required = ['beautifulsoup4', 'requests']
 
 URL: str = "https://realtimetraffic.scdps.gov/smartwebclient/"
-HEADERS: Dict[str, str] = {
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-    'Accept-Encoding': 'gzip, deflate, br',
-    'Accept-Language': 'en-US,en;q=0.5',
-    'Connection': 'keep-alive',
-    'Cookie': 'ASP.NET_SessionId=wkcgbmwg1not3to3eu1lm2a0',
-    'Host': 'realtimetraffic.scdps.gov',
-    'Sec-Fetch-Dest': 'document',
-    'Sec-Fetch-Mode': 'navigate',
-    'Sec-Fetch-Site': 'cross-site',
-    'Upgrade-Insecure-Requests': '1',
-    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/110.0',
-}
 
 def fetch(pipe: mrsm.Pipe, **kw) -> List[Dict[str, Any]]:
     """
@@ -33,7 +20,7 @@ def fetch(pipe: mrsm.Pipe, **kw) -> List[Dict[str, Any]]:
     """
     import requests
     from bs4 import BeautifulSoup
-    response = requests.get(URL, headers=HEADERS)
+    response = requests.get(URL)
     if not response.ok:
         return None
     soup = BeautifulSoup(response.text, 'html.parser')
