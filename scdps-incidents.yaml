@@ -1,0 +1,24 @@
+project_name: 'scdps-incidents'
+plugins_dir:
+  - "plugins"
+
+sync:
+  pipes:
+    - connector: 'plugin:realtimetraffic'
+      metric: 'incidents'
+      location: 'greenville'
+      columns:
+        datetime: 'Received'
+        county: 'County'
+        location: 'Location'
+        troop: 'Troop'
+      dtypes:
+        'Troop': 'Int64'
+        'Recieved': 'datetime64[ns]'
+
+config:
+  meerschaum:
+    instance: "sql:traffic"
+    connectors:
+      sql:
+        traffic: MRSM{meerschaum:connectors:sql:main}
