@@ -6,16 +6,34 @@
 Download and sync collisions data.
 """
 
+import os
+import pathlib
 import meerschaum as mrsm
-URL: str = 'https://opendata.arcgis.com/api/v3/datasets/52ae3a22b72740a29b9d7e98d4b395fc_16/downloads/data?format=csv&spatialRefId=4326&where=1=1'
+from meerschaum.utils.misc import wget, generate_password
+from meerschaum.utils.warnings import info
 
-required = ['pandas', 'duckdb']
+URL: str = 'https://opendata.arcgis.com/api/v3/datasets/52ae3a22b72740a29b9d7e98d4b395fc_16/downloads/data?format=csv&spatialRefId=4326&where=1=1'
 
 def fetch(pipe: mrsm.Pipe, **kw) -> 'pd.DataFrame':
     """
     Download and parse the collisions CSV.
     """
-    import pandas as pd
-    import duckdb
-    df = pd.read_csv(URL)
-    return duckdb.query("SELECT * FROM df WHERE \"County\" = 'Greenville'").df()
+    from meerschaum.utils.packages import import_pandas
+    pd = import_pandas()
+
+    session_id = generate_password(6)
+    conn = mrsm.get_connector(f"sql:{session_id}", flavor='duckdb', database=':memory:')
+
+    info("Downloading data from SCDPS...")
+    data = pd.read_csv(URL, dtype=str)
+    info(f"Finished downloading.")
+
+    temp_pipe = mrsm.Pipe(
+        connector = str(conn),
+        metric = pipe.metric_key,
+        location = pipe.location_key,
+        instance = pipe.instance_keys,
+        parameters = pipe.parameters,
+    )
+    df = temp_pipe.fetch(**kw)
+    return df

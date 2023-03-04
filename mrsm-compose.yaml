@@ -6,42 +6,58 @@ sync:
     - connector: "plugin:scdps"
       metric: "collisions"
       location: "greenville"
-
-    - connector: "plugin:streetlights"
-      metric: "home"
-      location: "block_groups"
-
-    - connector: "plugin:streetlights"
-      metric: "home"
-      location: "distance"
-
-    - connector: "plugin:streetlights"
-      metric: "home"
-      location: "grid"
-
-    - connector: "plugin:streetlights"
-      metric: "home"
-      location: "metro_area"
-
-    - connector: "plugin:streetlights"
-      metric: "home"
-      location: "state"
-
-    - connector: "plugin:streetlights"
-      metric: "home"
-      location: "zip_codes"
-
-    - connector: "plugin:streetlights"
-      metric: "work"
-      location: "block_groups"
-
-    - connector: "plugin:streetlights"
-      metric: "work"
-      location: "distance"
-
-    - connector: "plugin:streetlights"
-      metric: "work"
-      location: "grid"
+      columns:
+        datetime: "CrashDate"
+        accident_number: "AccidentNumber"
+        object_id: "OBJECTID"
+      parameters:
+        query: "SELECT * FROM data WHERE county = 'Greenville'"
+        chunk_time_interval: "INTERVAL '100 DAYS'"
+      dtypes:
+        'X': 'float64'
+        'Y': 'float64'
+        'OBJECTID': 'Int64'
+        'AccidentNumber': 'Int64'
+        'County': 'object'
+        'CrashDate': 'datetime64[ns]'
+        'dayofweek': 'object'
+        'hour': 'Int64'
+        'Agency': 'object'
+        'NumberOfUnits': 'Int64'
+        'NumberOfFatalities': 'Int64'
+        'NumberOfInjuries': 'Int64'
+        'Possible_Injuries': 'Int64'
+        'Suspected_Minor_Injuries': 'Int64'
+        'Suspected_Serious_Injuries': 'Int64'
+        'JunctionType': 'object'
+        'RouteCategory': 'object'
+        'RouteNum': 'object'
+        'Street': 'object'
+        'RouteCategoryBaseInt': 'object'
+        'RouteNumBaseInt': 'object'
+        'StreetBaseInt': 'object'
+        'RouteCategorySecInt': 'object'
+        'RouteNumSecInt': 'object'
+        'StreetSecInt': 'object'
+        'FirstHarmfulEvent': 'object'
+        'MostHarmfulEvent': 'object'
+        'PrimaryFactor': 'object'
+        'OtherFactor1': 'object'
+        'LightingCondition': 'object'
+        'RoadSurfaceCondition': 'object'
+        'TrafficControlType': 'object'
+        'WeatherCondition': 'object'
+        'Latitude': 'float64'
+        'Longitude': 'float64'
+        'CMV': 'Int64'
+        'WorkZone': 'object'
+        'TotalNumberOfOccupants': 'Int64'
+        'Unknown_HitAndRunOnly': 'object'
+        'TroopPost': 'object'
+        'Troop': 'object'
+        'Year': 'Int64'
+        'MonthNumber': 'Int64'
+        'Month': 'object'
 
 config:
   meerschaum:
