@@ -1,0 +1,23 @@
+services:
+  mrsm-compose:
+    build:
+      context: "./"
+      dockerfile: "./docker/Dockerfile"
+
+    ### Override the `bootstrap.sh` entrypoint for interactive development and testing.
+    entrypoint: ["/app/docker/sleep_forever.sh"]
+
+    environment:
+
+      MRSM_EXAMPLE_SECRET: |-
+        {
+          "username": "foo",
+          "password": "bar"
+        }
+
+    network_mode: "host"
+    volumes:
+      - "./:/app"
+    init: true
+    tty: true
+    user: "meerschaum:meerschaum"

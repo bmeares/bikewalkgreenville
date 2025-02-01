@@ -1,0 +1,54 @@
+### See https://meerschaum.io/reference/compose/ for the compose schema.
+
+project_name: bikewalkgreenville
+
+root_dir: ./root
+
+plugins_dir:
+- ./.installed_plugins
+- ./plugins
+
+plugins: ['clone']
+
+pipes:
+  - connector: "plugin:scdps"
+    metric: "fatalities"
+    location: "greenville"
+    target: "scdps_fatalities_greenville"
+
+  - connector: "plugin:scdps"
+    metric: "collisions"
+    location: "sc"
+    target: "scdps_collisions_sc"
+    columns:
+      datetime: "CrashDate"
+      accident_number: "AccidentNumber"
+      object_id: "OBJECTID"
+    indices:
+      county: "County"
+    parameters:
+      verify:
+        chunk_days: 365
+
+  - connector: "sql:bwg"
+    metric:  "collisions"
+    location: "greenville"
+    target: "scdps_collisions_greenville"
+    columns:
+      datetime: "CrashDate"
+      primary: "AccidentNumber"
+      object_id: "OBJECTID"
+    parameters:
+      query: |-
+        SELECT *
+        FROM {{Pipe('plugin:scdps', 'collisions', 'sc')}}
+        WHERE "County" = 'Greenville'
+
+config:
+  meerschaum:
+    instance: sql:bwg
+    connectors:
+      sql:
+        bwg: MRSM{meerschaum:connectors:sql:main}
+
+environment: {}
