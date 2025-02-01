@@ -49,6 +49,6 @@ config:
     instance: sql:bwg
     connectors:
       sql:
-        bwg: MRSM{meerschaum:connectors:sql:main}
+        bwg: MRSM{meerschaum:connectors:sql:bwg}
 
 environment: {}
