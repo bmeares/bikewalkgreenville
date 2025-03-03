@@ -11,11 +11,14 @@ plugins_dir:
 plugins: ['clone']
 
 pipes:
+
+  ### Parse the CSVs emailed by SCDPS
   - connector: "plugin:scdps"
     metric: "fatalities"
     location: "greenville"
     target: "scdps_fatalities_greenville"
 
+  ### 
   - connector: "plugin:scdps"
     metric: "collisions"
     location: "sc"
@@ -44,11 +47,27 @@ pipes:
         FROM {{Pipe('plugin:scdps', 'collisions', 'sc')}}
         WHERE "County" = 'Greenville'
 
+  - connector: "plugin:strava-metro"
+    metric: "activities"
+    location: "greenville"
+    target: "strava_metro_activities"
+
+  - connector: "plugin:strava-metro"
+    metric: "osm_ids"
+    location: "srt"
+    target: "srt_osm_ids"
+    columns:
+      edge_uid: "edge_uid"
+      osm_reference_id: "osm_reference_id"
+
 config:
   meerschaum:
     instance: sql:bwg
     connectors:
       sql:
-        bwg: MRSM{meerschaum:connectors:sql:bwg}
+        bwg: MRSM{meerschaum:connectors:sql:main}
+  plugins:
+    bwg:
+      data_path: './data'
 
 environment: {}
