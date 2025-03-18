@@ -1,0 +1,119 @@
+### See https://meerschaum.io/reference/compose/ for the compose schema.
+
+project_name: county
+
+root_dir: ../root
+
+plugins_dir:
+- ../.installed_plugins
+- ../plugins
+
+sync:
+  schedule: "daily"
+
+pipes:
+
+  - connector: "plugin:greenville-county"
+    metric: "Boundaries"
+    location: "GVCNTY"
+    parameters:
+      schema: "county"
+      target: "BND_GVCNTY"
+      columns:
+        name: "NAME"
+      tags: ["BND"]
+      greenville-county:
+        filetype: "shp"
+
+  - connector: "plugin:greenville-county"
+    metric: "Boundaries"
+    location: "MUNICIPAL"
+    parameters:
+      schema: "county"
+      target: "BND_MUNICIPAL"
+      columns:
+        name: "NAME"
+        jcode: "JCODE"
+        datetime: "CREATED"
+        primary: "GlobalID"
+      dtypes:
+        "CREATED": "datetime"
+        "GlobalID": "uuid"
+      tags: ["BND"]
+      greenville-county:
+        filetype: "shp"
+      verify:
+        chunk_days: 3650
+
+  - connector: "plugin:greenville-county"
+    metric: "Land Records"
+    location: "MISC_L"
+    parameters:
+      schema: "county"
+      target: "CAD_MISC_L"
+      columns:
+        feat_code: "FEAT_CODE"
+        primary: "GlobalID"
+      dtypes:
+        "GlobalID": "uuid"
+      tags: ["CAD"]
+
+  - connector: "plugin:greenville-county"
+    metric: "Land Records"
+    location: "PARCEL_MP"
+    parameters:
+      schema: "county"
+      target: "CAD_PARCEL_MP"
+      columns:
+        pin: "PIN"
+        sheet: "SHEET"
+        block: "BLOCK"
+        lot: "LOT"
+        dist: "DIST"
+        zip5: "ZIP5"
+        zip4: "ZIP4"
+        cubook: "CUBOOK"
+        primary: "GlobalID"
+        juris: "JURIS"
+        mktarea: "MKTAREA"
+        landuse: "LANDUSE"
+        proptype: "PROPTYPE"
+        acctno: "ACCTNO"
+        locate: "LOCATE"
+        zonecd: "ZONECD"
+        strnum: "STRNUM"
+        subdiv: "SUBDIV"
+      indices:
+        address: ["STREET", "CITY", "STATE"]
+      dtypes:
+        "GlobalID": "uuid"
+      tags: ["CAD"]
+      verify:
+        chunk_days: 3650
+
+  - connector: "plugin:greenville-county"
+    metric: "Land Records"
+    location: "SUBDIV"
+    parameters:
+      schema: "county"
+      target: "CAD_SUBDIV"
+      # columns:
+        # feat_code: "FEAT_CODE"
+        # primary: "GlobalID"
+      # dtypes:
+        # "GlobalID": "uuid"
+      tags: ["CAD"]
+      verify:
+        chunk_days: 3650
+
+config:
+  meerschaum:
+    instance: sql:bwg
+    connectors:
+      sql:
+        bwg: MRSM{meerschaum:connectors:sql:gis}
+  plugins:
+    bwg:
+      data_path: '{MRSM_ROOT_DIR}/../data'
+
+environment: {}

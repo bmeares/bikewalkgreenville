@@ -31,9 +31,10 @@ def setup():
 
 def get_data_path() -> pathlib.Path:
     """Return the data path configured in the plugin settings."""
+    from meerschaum.config.paths import ROOT_DIR_PATH
     cf = get_plugin_config()
     data_path_str = cf.get('data_path', None)
     if not data_path_str:
         raise FileNotFoundError("No data path defined. Run `setup plugin bwg`.")
+    data_path_str = data_path_str.replace('{MRSM_ROOT_DIR}', ROOT_DIR_PATH.as_posix())
     return pathlib.Path(data_path_str)
-

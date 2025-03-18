@@ -18,6 +18,9 @@ __version__ = '0.0.1'
 required: list[str] = ['openpyxl', 'pytz']
 
 
+bwg = mrsm.Plugin('bwg')
+
+
 def setup():
     from meerschaum.config.paths import ROOT_DIR_PATH
     from meerschaum.utils.prompt import prompt
@@ -120,7 +123,7 @@ def parse_collisions_gis_data() -> 'pd.DataFrame':
     https://opendata.arcgis.com/api/v3/datasets/52ae3a22b72740a29b9d7e98d4b395fc_16/downloads/data?format=csv&spatialRefId=4326&where=1=1
     """
     pd = mrsm.attempt_import('pandas')
-    collisions_path = get_data_path() / 'collisions'
+    collisions_path = bwg.module.get_data_path() / 'collisions'
     if not collisions_path.exists():
         raise FileNotFoundError(f"Path does not exist: {collisions_path}")
     dataframes = []
@@ -140,7 +143,7 @@ def parse_fatalities_spreadsheets() -> 'pd.DataFrame':
     pd = mrsm.attempt_import('pandas')
     eastern = pytz.timezone("US/Eastern")
 
-    fatalities_data_path = get_data_path() / 'fatalities'
+    fatalities_data_path = bwg.module.get_data_path() / 'fatalities'
     if not fatalities_data_path.exists():
         raise FileNotFoundError(f"Path does not exist: {fatalities_data_path}")
 

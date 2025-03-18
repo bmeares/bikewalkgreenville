@@ -60,12 +60,81 @@ pipes:
       edge_uid: "edge_uid"
       osm_reference_id: "osm_reference_id"
 
+  - connector: "plugin:brokenspoke-analyzer"
+    metric: "neighborhood_overall_scores"
+    location: "brokenspoke"
+    target: "neighborhood_overall_scores"
+    parameters:
+      schema: "brokenspoke"
+
+  - connector: "plugin:brokenspoke-analyzer"
+    metric: "neighborhood_connected_census_blocks"
+    location: "brokenspoke"
+    target: "neighborhood_connected_census_blocks"
+    parameters:
+      schema: "brokenspoke"
+
+  - connector: "plugin:greenville-county"
+    metric: "Boundaries"
+    location: "GVCNTY"
+    parameters:
+      schema: "county"
+      target: "BND_GVCNTY"
+      tags: ["BND"]
+
+  - connector: "plugin:greenville-county"
+    metric: "Boundaries"
+    location: "county"
+    columns:
+      feat_code: "FEAT_CODE"
+      shape_stle: "SHAPE_STLe"
+      shape_stle: "SHAPE_STAr"
+      name: "NAME"
+      cmethod: "CMETHOD"
+      csource: "CSOURCE"
+      isource: "ISOURCE"
+    dtypes:
+      "ZIPCODE": "string"
+    parameters:
+      target: "transportation"
+      schema: "county"
+
+  - connector: "plugin:greenville-county"
+    metric: "Transportation"
+    location: "county"
+    columns:
+      feat_code: "FEAT_CODE"
+      shape_stle: "SHAPE_STLe"
+      shape_stle: "SHAPE_STAr"
+      name: "NAME"
+      cmethod: "CMETHOD"
+      csource: "CSOURCE"
+      isource: "ISOURCE"
+    dtypes:
+      "ZIPCODE": "string"
+    parameters:
+      target: "transportation"
+      schema: "county"
+
+  - connector: "plugin:greenville-county"
+    metric: "Utility"
+    location: "county"
+    columns:
+      feat_code: "FEAT_CODE"
+      shape_stle: "SHAPE_STLe"
+      cmethod: "CMETHOD"
+      csource: "CSOURCE"
+      isource: "ISOURCE"
+    parameters:
+      target: "utility"
+      schema: "county"
+
 config:
   meerschaum:
     instance: sql:bwg
     connectors:
       sql:
-        bwg: MRSM{meerschaum:connectors:sql:main}
+        bwg: MRSM{meerschaum:connectors:sql:gis}
   plugins:
     bwg:
       data_path: './data'
