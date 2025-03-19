@@ -9,11 +9,17 @@ import meerschaum as mrsm
 
 bwg = mrsm.Plugin('bwg')
 
+required = ['geopandas', 'pyogrio', 'pandas']
+
 def fetch(pipe: mrsm.Pipe, **kwargs):
     """
     Parse the `greenville county` shapefiles.
     """
-    pd, gpd = mrsm.attempt_import('pandas', 'geopandas')
+    pd, gpd = mrsm.attempt_import(
+        'pandas', 'geopandas', 'pyogrio',
+        venv='greenville-county',
+        lazy=False,
+    )
     data_path = bwg.module.get_data_path()
     county_path = data_path / 'greenville county'
     metric_path = county_path / pipe.metric_key
