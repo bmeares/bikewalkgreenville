@@ -630,6 +630,28 @@ pipes:
         geometry: "geometry"
       tags: ["ZON"]
 
+  - connector: "sql:bwg"
+    metric: "Zoning"
+    location: "residential"
+    parameters:
+      schema: "Zoning"
+      target: "residential"
+      fetch:
+        definition: |-
+          SELECT *
+          FROM county."ZON_ZONING"
+          WHERE "ZONING" LIKE 'R%'
+      columns:
+        zoning: "ZONING"
+        editorname: "EDITORNAME"
+        isource: "ISOURCE"
+        global_id: "GlobalID"
+      dtypes:
+        "GlobalID": "uuid"
+      indices:
+        geometry: "geometry"
+      tags: ["ZON"]
+
 config:
   meerschaum:
     instance: sql:bwg
