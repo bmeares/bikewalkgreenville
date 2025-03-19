@@ -467,7 +467,7 @@ pipes:
         csource: "CSOURCE"
         isource: "ISOURCE"
       indices:
-        geometry: "GEOMETRY"
+        geometry: "geometry"
       tags: ["TOP"]
 
   - connector: "plugin:greenville-county"
