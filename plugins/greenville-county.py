@@ -15,7 +15,7 @@ def fetch(pipe: mrsm.Pipe, **kwargs):
     """
     Parse the `greenville county` shapefiles.
     """
-    pd, gpd = mrsm.attempt_import(
+    pd, gpd, _ = mrsm.attempt_import(
         'pandas', 'geopandas', 'pyogrio',
         venv='greenville-county',
         lazy=False,
