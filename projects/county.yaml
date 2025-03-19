@@ -15,19 +15,21 @@ pipes:
 
   - connector: "plugin:greenville-county"
     metric: "Boundaries"
-    location: "GVCNTY"
+    location: "BND_GVCNTY"
     parameters:
       schema: "county"
       target: "BND_GVCNTY"
       columns:
         name: "NAME"
+      indices:
+        geometry: "geometry"
       tags: ["BND"]
       greenville-county:
         filetype: "shp"
 
   - connector: "plugin:greenville-county"
     metric: "Boundaries"
-    location: "MUNICIPAL"
+    location: "BND_MUNICIPAL"
     parameters:
       schema: "county"
       target: "BND_MUNICIPAL"
@@ -39,6 +41,8 @@ pipes:
       dtypes:
         "CREATED": "datetime"
         "GlobalID": "uuid"
+      indices:
+        geometry: "geometry"
       tags: ["BND"]
       greenville-county:
         filetype: "shp"
@@ -47,7 +51,7 @@ pipes:
 
   - connector: "plugin:greenville-county"
     metric: "Land Records"
-    location: "MISC_L"
+    location: "CAD_MISC_L"
     parameters:
       schema: "county"
       target: "CAD_MISC_L"
@@ -56,11 +60,13 @@ pipes:
         primary: "GlobalID"
       dtypes:
         "GlobalID": "uuid"
+      indices:
+        geometry: "geometry"
       tags: ["CAD"]
 
   - connector: "plugin:greenville-county"
     metric: "Land Records"
-    location: "PARCEL_MP"
+    location: "CAD_PARCEL_MP"
     parameters:
       schema: "county"
       target: "CAD_PARCEL_MP"
@@ -73,7 +79,7 @@ pipes:
         zip5: "ZIP5"
         zip4: "ZIP4"
         cubook: "CUBOOK"
-        primary: "GlobalID"
+        global_id: "GlobalID"
         juris: "JURIS"
         mktarea: "MKTAREA"
         landuse: "LANDUSE"
@@ -85,6 +91,7 @@ pipes:
         subdiv: "SUBDIV"
       indices:
         address: ["STREET", "CITY", "STATE"]
+        geometry: "geometry"
       dtypes:
         "GlobalID": "uuid"
       tags: ["CAD"]
@@ -93,18 +100,545 @@ pipes:
 
   - connector: "plugin:greenville-county"
     metric: "Land Records"
-    location: "SUBDIV"
+    location: "CAD_SUBDIV"
     parameters:
       schema: "county"
       target: "CAD_SUBDIV"
-      # columns:
-        # feat_code: "FEAT_CODE"
-        # primary: "GlobalID"
-      # dtypes:
-        # "GlobalID": "uuid"
+      columns:
+        primary: "GlobalID"
+        subdiv: "SUBDIV"
+        community: "COMMUNITY"
+        plat_ref: "PLAT_REF"
+        pltbk: "PLTBK"
+        ppage: "PPAGE"
+        csource: "CSOURCE"
+        isource: "ISOURCE"
+      dtypes:
+        "GlobalID": "uuid"
+      indices:
+        geometry: "geometry"
       tags: ["CAD"]
-      verify:
-        chunk_days: 3650
+
+  - connector: "plugin:greenville-county"
+    metric: "Places of Interest"
+    location: "POI_CEMETERY"
+    parameters:
+      schema: "county"
+      target: "POI_CEMETERY"
+      columns:
+        feat_code: "FEAT_CODE"
+        name: "NAME"
+        keyword: "KEYWORD"
+        editorname: "EDITORNAME"
+        cmethod: "CMETHOD"
+        csource: "CSOURCE"
+        isource: "ISOURCE"
+      indices:
+        geometry: "geometry"
+      tags: ["POI"]
+
+  - connector: "plugin:greenville-county"
+    metric: "Places of Interest"
+    location: "POI_GOLFCOURSE"
+    parameters:
+      schema: "county"
+      target: "POI_GOLFCOURSE"
+      columns:
+        feat_code: "FEAT_CODE"
+        name: "NAME"
+        keyword: "KEYWORD"
+        editorname: "EDITORNAME"
+        cmethod: "CMETHOD"
+        csource: "CSOURCE"
+        isource: "ISOURCE"
+      indices:
+        geometry: "geometry"
+      tags: ["POI"]
+
+  - connector: "plugin:greenville-county"
+    metric: "Places of Interest"
+    location: "POI_PARK"
+    parameters:
+      schema: "county"
+      target: "POI_PARK"
+      columns:
+        feat_code: "FEAT_CODE"
+        name: "NAME"
+        rec_dist: "REC_DIST"
+        amenity: "AMENITY"
+        keyword: "KEYWORD"
+        editorname: "EDITORNAME"
+        cmethod: "CMETHOD"
+        csource: "CSOURCE"
+        isource: "ISOURCE"
+      indices:
+        geometry: "geometry"
+      tags: ["POI"]
+
+  - connector: "plugin:greenville-county"
+    metric: "Places of Interest"
+    location: "POI_POLLSITE"
+    parameters:
+      schema: "county"
+      target: "POI_POLLSITE"
+      columns:
+        ps_id: "PS_ID"
+        precinct: "PRECINCT"
+        poll_site: "POLL_SITE"
+        type: "TYPE"
+        keyword: "KEYWORD"
+        editorname: "EDITORNAME"
+      dtypes:
+        "ZIPCODE": "string"
+      indices:
+        address: ["ADDRESS", "CITY", "STATE", "ZIPCODE"]
+        geometry: "geometry"
+      tags: ["POI"]
+
+  ### TODO
+  - connector: "plugin:greenville-county"
+    metric: "Planimetric"
+    location: "PLN_BUILD_P"
+    parameters:
+      schema: "county"
+      target: "PLN_BUILD_P"
+      columns:
+        feat_code: "FEAT_CODE"
+        datetime: "CREATED"
+        editorname: "EDITORNAME"
+        cmethod: "CMETHOD"
+        csource: "CSOURCE"
+        isource: "ISOURCE"
+        global_id: "GlobalID"
+      dtypes:
+        geometry: "geometry[MultiPolygon, 6570]"
+        GlobalID: "uuid"
+      indices:
+        geometry: "geometry"
+      tags: ["PLN"]
+
+  - connector: "plugin:greenville-county"
+    metric: "Planimetric"
+    location: "PLN_HYDRO_L"
+    parameters:
+      schema: "county"
+      target: "PLN_HYDRO_L"
+      tags: ["PLN"]
+
+  - connector: "plugin:greenville-county"
+    metric: "Planimetric"
+    location: "PLN_HYDRO_P"
+    parameters:
+      schema: "county"
+      target: "PLN_HYDRO_P"
+      columns:
+        feat_code: "FEAT_CODE"
+        name: "NAME"
+        editorname: "EDITORNAME"
+        cmethod: "CMETHOD"
+        csource: "CSOURCE"
+        isource: "ISOURCE"
+      indices:
+        geometry: "geometry"
+      tags: ["PLN"]
+
+  - connector: "plugin:greenville-county"
+    metric: "Planimetric"
+    location: "PLN_MISC_P"
+    parameters:
+      schema: "county"
+      target: "PLN_MISC_P"
+      columns:
+        feat_code: "FEAT_CODE"
+        keyword: "KEYWORD"
+        cmethod: "CMETHOD"
+        csource: "CSOURCE"
+        isource: "ISOURCE"
+        editorname: "EDITORNAME"
+      indices:
+        geometry: "geometry"
+      tags: ["PLN"]
+
+  - connector: "plugin:greenville-county"
+    metric: "Planimetric"
+    location: "PLN_PARKING"
+    parameters:
+      schema: "county"
+      target: "PLN_PARKING"
+      columns:
+        feat_code: "FEAT_CODE"
+        editorname: "EDITORNAME"
+        cmethod: "CMETHOD"
+        csource: "CSOURCE"
+        isource: "ISOURCE"
+        global_id: "GlobalID"
+      dtypes:
+        "GlobalID": "uuid"
+      indices:
+        geometry: "geometry"
+      tags: ["PLN"]
+
+  - connector: "plugin:greenville-county"
+    metric: "Political"
+    location: "DIS_CNTYCN"
+    parameters:
+      schema: "county"
+      target: "DIS_CNTYCN"
+      columns:
+        primary: "DISTRICT"
+        zipcode: "ZIPCODE"
+        keyword: "KEYWORD"
+        editorname: "EDITORNAME"
+      dtypes:
+        "ZIPCODE": "string"
+      indices:
+        address: ["ADDRESS", "CITY", "STATE"]
+        geometry: "geometry"
+      tags: ["DIS"]
+
+  - connector: "plugin:greenville-county"
+    metric: "Political"
+    location: "DIS_SCHOOL"
+    parameters:
+      schema: "county"
+      target: "DIS_SCHOOL"
+      columns:
+        primary: "DISTRICT"
+        zipcode: "ZIPCODE"
+        keyword: "KEYWORD"
+        editorname: "EDITORNAME"
+      dtypes:
+        "ZIPCODE": "string"
+      indices:
+        address: ["ADDRESS", "CITY", "STATE"]
+        geometry: "geometry"
+      tags: ["DIS"]
+
+  - connector: "plugin:greenville-county"
+    metric: "Political"
+    location: "DIS_SCHOUSE"
+    parameters:
+      schema: "county"
+      target: "DIS_SCHOUSE"
+      columns:
+        primary: "DISTRICT"
+        zipcode: "ZIPCODE"
+        keyword: "KEYWORD"
+        editorname: "EDITORNAME"
+      dtypes:
+        "ZIPCODE": "string"
+      indices:
+        address: ["ADDRESS", "CITY", "STATE"]
+        geometry: "geometry"
+      tags: ["DIS"]
+
+  - connector: "plugin:greenville-county"
+    metric: "Political"
+    location: "DIS_SCSEN"
+    parameters:
+      schema: "county"
+      target: "DIS_SCSEN"
+      columns:
+        primary: "DISTRICT"
+        zipcode: "ZIPCODE"
+        keyword: "KEYWORD"
+        editorname: "EDITORNAME"
+      dtypes:
+        "ZIPCODE": "string"
+      indices:
+        address: ["ADDRESS", "CITY", "STATE"]
+        geometry: "geometry"
+      tags: ["DIS"]
+
+  - connector: "plugin:greenville-county"
+    metric: "Political"
+    location: "DIS_VOTEPRE"
+    parameters:
+      schema: "county"
+      target: "DIS_VOTEPRE"
+      columns:
+        precode: "PRECODE"
+        name: "NAME"
+        name2: "NAME2"
+        keyword: "KEYWORD"
+        editorname: "EDITORNAME"
+      indices:
+        geometry: "geometry"
+      tags: ["DIS"]
+
+  - connector: "plugin:greenville-county"
+    metric: "Taxation Districts"
+    location: "DIS_FIRE"
+    parameters:
+      schema: "county"
+      target: "DIS_FIRE"
+      columns:
+        firedist: "FIREDIST"
+        comptdist: "COMPTDIST"
+        keyword: "KEYWORD"
+        statncode: "STATNCODE"
+      indices:
+        geometry: "geometry"
+      tags: ["DIS"]
+
+  - connector: "plugin:greenville-county"
+    metric: "Taxation Districts"
+    location: "DIS_SANITATION"
+    parameters:
+      schema: "county"
+      target: "DIS_SANITATION"
+      columns:
+        sanitation: "SANITATION"
+        keyword: "KEYWORD"
+      indices:
+        geometry: "geometry"
+      tags: ["DIS"]
+
+  - connector: "plugin:greenville-county"
+    metric: "Taxation Districts"
+    location: "DIS_SEWER"
+    parameters:
+      schema: "county"
+      target: "DIS_SEWER"
+      columns:
+        sewerdist: "SEWERDIST"
+        keyword: "KEYWORD"
+      indices:
+        geometry: "geometry"
+      tags: ["DIS"]
+
+  - connector: "plugin:greenville-county"
+    metric: "Taxation Districts"
+    location: "DIS_TAX_P"
+    parameters:
+      schema: "county"
+      target: "DIS_TAX_P"
+      columns:
+        tdistnum: "TDISTNUM"
+        datetime: "CREATED"
+        editorname: "EDITORNAME"
+        isource: "ISOURCE"
+        global_id: "GlobalID"
+      dtypes:
+        global_id: "uuid"
+      indices:
+        geometry: "geometry"
+      tags: ["DIS"]
+
+  - connector: "plugin:greenville-county"
+    metric: "Topography"
+    location: "TOP_CONTOUR"
+    parameters:
+      schema: "county"
+      target: "TOP_CONTOUR"
+      columns:
+        feat_code: "FEAT_CODE"
+        editorname: "EDITORNAME"
+        cmethod: "CMETHOD"
+        csource: "CSOURCE"
+        isource: "ISOURCE"
+      indices:
+        geometry: "geometry"
+      tags: ["TOP"]
+
+  - connector: "plugin:greenville-county"
+    metric: "Topography"
+    location: "TOP_SPOT_X"
+    parameters:
+      schema: "county"
+      target: "TOP_SPOT_X"
+      columns:
+        feat_code: "FEAT_CODE"
+        editorname: "EDITORNAME"
+        cmethod: "CMETHOD"
+        csource: "CSOURCE"
+        isource: "ISOURCE"
+      indices:
+        geometry: "GEOMETRY"
+      tags: ["TOP"]
+
+  - connector: "plugin:greenville-county"
+    metric: "Transportation"
+    location: "RDCLASS"
+    parameters:
+      schema: "county"
+      target: "RDCLASS"
+      tags: "TRA"
+      columns:
+        rdclass_num: "RDCLASS_Num"
+      dtypes:
+        "RDCLASS_Num": "int32"
+      greenville-county:
+        filetype: "csv"
+
+  - connector: "plugin:greenville-county"
+    metric: "Transportation"
+    location: "TRA_ADDPNT"
+    parameters:
+      schema: "county"
+      target: "TRA_ADDPNT"
+      columns:
+        feat_code: "FEAT_CODE"
+        housenum: "HOUSENUM"
+        housesuf: "HOUSESUF"
+        prefix: "PREFIX"
+        name: "NAME"
+        type: "TYPE"
+        suffix: "SUFFIX"
+        comm: "COMM"
+        zipcode: "ZIPCODE"
+        editorname: "EDITORNAME"
+        cmethod: "CMETHOD"
+        csource: "CSOURCE"
+        isource: "ISOURCE"
+        address: "ADDRESS"
+        global_id: "GlobalID"
+        pin: "PIN"
+        facilityid: "FACILITYID"
+        legacyid: "LEGACYID"
+      dtypes:
+        "ZIPCODE": "string"
+        "GlobalID": "uuid"
+      indices:
+        geometry: "geometry"
+      tags: ["TRA"]
+
+  - connector: "plugin:greenville-county"
+    metric: "Transportation"
+    location: "TRA_AIRPORT"
+    parameters:
+      schema: "county"
+      target: "TRA_AIRPORT"
+      columns:
+        feat_code: "FEAT_CODE"
+        name: "NAME"
+        name2: "NAME2"
+        editorname: "EDITORNAME"
+        cmethod: "CMETHOD"
+        csource: "CSOURCE"
+        isource: "ISOURCE"
+      indices:
+        geometry: "geometry"
+      tags: ["TRA"]
+
+  - connector: "plugin:greenville-county"
+    metric: "Transportation"
+    location: "TRA_PAVEDGE"
+    parameters:
+      schema: "county"
+      target: "TRA_PAVEDGE"
+      columns:
+        feat_code: "FEAT_CODE"
+        feat_type: "FEAT_TYPE"
+        roadnum: "ROADNUM"
+        rdclass: "RDCLASS"
+        datetime: "CREATED"
+        editorname: "EDITORNAME"
+        cmethod: "CMETHOD"
+        csource: "CSOURCE"
+        isource: "ISOURCE"
+        global_id: "GlobalID"
+      dtypes:
+        "GlobalID": "uuid"
+      indices:
+        geometry: "geometry"
+      tags: ["TRA"]
+
+  - connector: "plugin:greenville-county"
+    metric: "Transportation"
+    location: "TRA_RAILROAD"
+    parameters:
+      schema: "county"
+      target: "TRA_RAILROAD"
+      columns:
+        feat_code: "FEAT_CODE"
+        name: "NAME"
+        editorname: "EDITORNAME"
+        cmethod: "CMETHOD"
+        csource: "CSOURCE"
+        isource: "ISOURCE"
+      indices:
+        geometry: "geometry"
+      tags: ["TRA"]
+
+  - connector: "plugin:greenville-county"
+    metric: "Transportation"
+    location: "TRA_STREETCL"
+    parameters:
+      schema: "county"
+      target: "TRA_STREETCL"
+      columns:
+        feat_code: "FEAT_CODE"
+        recnum: "RECNUM"
+        roadnum: "ROADNUM"
+        label: "LABEL"
+        ladd1: "LADD1"
+        ladd2: "LADD2"
+        radd1: "RADD1"
+        radd2: "RADD2"
+        prefix: "PREFIX"
+        name: "NAME"
+        type: "TYPE"
+        suffix: "SUFFIX"
+        zipl: "ZIPL"
+        zipr: "ZIPR"
+        comml: "COMML"
+        commr: "COMMR"
+        altname: "ALTNAME"
+        altname2: "ALTNAME2"
+        rdclass: "RDCLASS"
+        jcode: "JCODE"
+        editorname: "EDITORNAME"
+        cmethod: "CMETHOD"
+        csource: "CSOURCE"
+        isource: "ISOURCE"
+        global_id: "GlobalID"
+        facilityid: "FACILITYID"
+        legacyid: "LEGACYID"
+        location: "LOCATION"
+        lcitycode: "LCITYCODE"
+        rcitycode: "RCITYCODE"
+        sourcedept: "SOURCEDEPT"
+      dtypes:
+        "ZIPL": "string"
+        "ZIPR": "string"
+        "GlobalID": "uuid"
+      indices:
+        geometry: "geometry"
+      tags: ["TRA"]
+
+  - connector: "plugin:greenville-county"
+    metric: "Utility"
+    location: "UTL_TOWER"
+    parameters:
+      schema: "county"
+      target: "UTL_TOWER"
+      columns:
+        feat_code: "FEAT_CODE"
+        editorname: "EDITORNAME"
+        cmethod: "CMETHOD"
+        csource: "CSOURCE"
+        isource: "ISOURCE"
+      indices:
+        geometry: "geometry"
+      tags: ["UTL"]
+
+  - connector: "plugin:greenville-county"
+    metric: "Zoning"
+    location: "ZON_ZONING"
+    parameters:
+      schema: "county"
+      target: "ZON_ZONING"
+      columns:
+        zoning: "ZONING"
+        editorname: "EDITORNAME"
+        isource: "ISOURCE"
+        global_id: "GlobalID"
+      dtypes:
+        "GlobalID": "uuid"
+      indices:
+        geometry: "geometry"
+      tags: ["ZON"]
 
 config:
   meerschaum:
