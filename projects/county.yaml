@@ -195,7 +195,6 @@ pipes:
         geometry: "geometry"
       tags: ["POI"]
 
-  ### TODO
   - connector: "plugin:greenville-county"
     metric: "Planimetric"
     location: "PLN_BUILD_P"
@@ -204,14 +203,13 @@ pipes:
       target: "PLN_BUILD_P"
       columns:
         feat_code: "FEAT_CODE"
-        datetime: "CREATED"
         editorname: "EDITORNAME"
         cmethod: "CMETHOD"
         csource: "CSOURCE"
         isource: "ISOURCE"
         global_id: "GlobalID"
       dtypes:
-        geometry: "geometry[MultiPolygon, 6570]"
+        geometry: "geometry[MultiPolygonZ, 6570]"
         GlobalID: "uuid"
       indices:
         geometry: "geometry"
@@ -234,7 +232,7 @@ pipes:
         global_id: "GlobalID"
       dtypes:
         "GlobalID": "uuid"
-        geometry: "geometry[MultiLineString, 6570]"
+        geometry: "geometry[MultiLineStringZ, 6570]"
       indices:
         geometry: "geometry"
       tags: ["PLN"]
@@ -252,6 +250,8 @@ pipes:
         cmethod: "CMETHOD"
         csource: "CSOURCE"
         isource: "ISOURCE"
+      dtypes:
+        geometry: "geometry[PolygonZ, 6570]"
       indices:
         geometry: "geometry"
       tags: ["PLN"]
@@ -542,19 +542,14 @@ pipes:
       target: "TRA_PAVEDGE"
       columns:
         feat_code: "FEAT_CODE"
-        feat_type: "FEAT_TYPE"
-        roadnum: "ROADNUM"
-        rdclass: "RDCLASS"
         datetime: "CREATED"
-        editorname: "EDITORNAME"
-        cmethod: "CMETHOD"
-        csource: "CSOURCE"
-        isource: "ISOURCE"
         global_id: "GlobalID"
       dtypes:
         "GlobalID": "uuid"
       indices:
         geometry: "geometry"
+        roadnum: "ROADNUM"
+        rdclass: "RDCLASS"
       tags: ["TRA"]
 
   - connector: "plugin:greenville-county"
@@ -658,7 +653,7 @@ config:
     instance: sql:bwg
     connectors:
       sql:
-        bwg: MRSM{meerschaum:connectors:sql:gis}
+        bwg: MRSM{meerschaum:connectors:sql:bwg}
   plugins:
     bwg:
       data_path: '{MRSM_ROOT_DIR}/../data'
