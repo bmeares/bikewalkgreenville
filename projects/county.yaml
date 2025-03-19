@@ -223,6 +223,20 @@ pipes:
     parameters:
       schema: "county"
       target: "PLN_HYDRO_L"
+      columns:
+        feat_code: "FEAT_CODE"
+        name: "NAME"
+        name2: "NAME2"
+        editorname: "EDITORNAME"
+        cmethod: "CMETHOD"
+        csource: "CSOURCE"
+        isource: "ISOURCE"
+        global_id: "GlobalID"
+      dtypes:
+        "GlobalID": "uuid"
+        geometry: "geometry[MultiLineString, 6570]"
+      indices:
+        geometry: "geometry"
       tags: ["PLN"]
 
   - connector: "plugin:greenville-county"
@@ -415,7 +429,6 @@ pipes:
       target: "DIS_TAX_P"
       columns:
         tdistnum: "TDISTNUM"
-        datetime: "CREATED"
         editorname: "EDITORNAME"
         isource: "ISOURCE"
         global_id: "GlobalID"
