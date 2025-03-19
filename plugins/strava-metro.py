@@ -11,7 +11,7 @@ import pathlib
 import meerschaum as mrsm
 
 
-required = ['plugin:bwg']
+required = []
 bwg = mrsm.Plugin('bwg')
 
 
