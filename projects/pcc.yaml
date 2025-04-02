@@ -15,8 +15,9 @@ pipes:
 
   - connector: "plugin:pcc"
     metric: "stress_levels"
+    location: "sc"
     parameters:
-      target: "stress_levels_raw"
+      target: "stress_levels_sc"
       schema: "pcc"
       upsert: false
       static: true
@@ -40,6 +41,7 @@ pipes:
 
   - connector: "sql:bwg"
     metric: "stress_levels"
+    location: "greenville"
     parameters:
       schema: "pcc"
       target: "stress_levels"
@@ -54,7 +56,8 @@ pipes:
           "fc_name",
           "StressLeve" AS "stress_level",
           "geometry" AS "geometry"
-        FROM {{Pipe('plugin:pcc', 'stress_levels')}}
+        FROM {{Pipe('plugin:pcc', 'stress_levels', 'sc')}}
+        WHERE "COUNTY_ID" = 23
       indices:
         county_id: "county_id"
         feature_ty: "feature_type"
@@ -78,8 +81,18 @@ pipes:
       target: "stress_levels_high"
       sql: |-
         SELECT *
-        FROM {{Pipe('sql:bwg', 'stress_levels')}}
+        FROM {{Pipe('sql:bwg', 'stress_levels', 'greenville')}}
         WHERE "stress_level" = 'H'
+      indices:
+        county_id: "county_id"
+        feature_ty: "feature_type"
+        route_number: "route_number"
+        street_name: "street_name"
+        route_type: "route_type"
+        fc_type: "fc_type"
+        fc_name: "fc_name"
+        stress_level: "stress_level"
+        geometry: "geometry"
 
   - connector: "sql:bwg"
     metric: "stress_levels"
@@ -89,8 +102,18 @@ pipes:
       target: "stress_levels_medium-high"
       sql: |-
         SELECT *
-        FROM {{Pipe('sql:bwg', 'stress_levels')}}
+        FROM {{Pipe('sql:bwg', 'stress_levels', 'greenville')}}
         WHERE "stress_level" = 'MH'
+      indices:
+        county_id: "county_id"
+        feature_ty: "feature_type"
+        route_number: "route_number"
+        street_name: "street_name"
+        route_type: "route_type"
+        fc_type: "fc_type"
+        fc_name: "fc_name"
+        stress_level: "stress_level"
+        geometry: "geometry"
 
   - connector: "sql:bwg"
     metric: "stress_levels"
@@ -100,8 +123,18 @@ pipes:
       target: "stress_levels_medium"
       sql: |-
         SELECT *
-        FROM {{Pipe('sql:bwg', 'stress_levels')}}
+        FROM {{Pipe('sql:bwg', 'stress_levels', 'greenville')}}
         WHERE "stress_level" = 'M'
+      indices:
+        county_id: "county_id"
+        feature_ty: "feature_type"
+        route_number: "route_number"
+        street_name: "street_name"
+        route_type: "route_type"
+        fc_type: "fc_type"
+        fc_name: "fc_name"
+        stress_level: "stress_level"
+        geometry: "geometry"
 
   - connector: "sql:bwg"
     metric: "stress_levels"
@@ -111,8 +144,18 @@ pipes:
       target: "stress_levels_medium-low"
       sql: |-
         SELECT *
-        FROM {{Pipe('sql:bwg', 'stress_levels')}}
+        FROM {{Pipe('sql:bwg', 'stress_levels', 'greenville')}}
         WHERE "stress_level" = 'ML'
+      indices:
+        county_id: "county_id"
+        feature_ty: "feature_type"
+        route_number: "route_number"
+        street_name: "street_name"
+        route_type: "route_type"
+        fc_type: "fc_type"
+        fc_name: "fc_name"
+        stress_level: "stress_level"
+        geometry: "geometry"
 
   - connector: "sql:bwg"
     metric: "stress_levels"
@@ -122,8 +165,18 @@ pipes:
       target: "stress_levels_low"
       sql: |-
         SELECT *
-        FROM {{Pipe('sql:bwg', 'stress_levels')}}
+        FROM {{Pipe('sql:bwg', 'stress_levels', 'greenville')}}
         WHERE "stress_level" = 'L'
+      indices:
+        county_id: "county_id"
+        feature_ty: "feature_type"
+        route_number: "route_number"
+        street_name: "street_name"
+        route_type: "route_type"
+        fc_type: "fc_type"
+        fc_name: "fc_name"
+        stress_level: "stress_level"
+        geometry: "geometry"
 
 config:
   meerschaum:
