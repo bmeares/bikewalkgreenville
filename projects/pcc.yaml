@@ -1,0 +1,49 @@
+### See https://meerschaum.io/reference/compose/ for the compose schema.
+
+project_name: pcc
+
+root_dir: ../root
+
+plugins_dir:
+- ../.installed_plugins
+- ../plugins
+
+sync:
+  schedule: "daily"
+
+pipes:
+
+  - connector: "plugin:pcc"
+    metric: "stress_level"
+    parameters:
+      target: "stress_level"
+      schema: "pcc"
+      columns:
+        county_id: "COUNTY_ID"
+        feature_ty: "FEATURE_TY"
+        route_number: "ROUTE_NUMB"
+        street_name: "STREET_NAM"
+        route_type: "ROUTE_TYPE"
+        fc_type: "fc_type"
+      dtypes:
+        COUNTY_ID: "Int32"
+        ROUTE_NUMB: "Int32"
+        fc_type: "Int8"
+      indices:
+        fc_name: "fc_name"
+        stress_level: "StressLeve"
+        geometry: "geometry"
+        flag: "Flag"
+
+
+config:
+  meerschaum:
+    instance: sql:bwg
+    connectors:
+      sql:
+        bwg: MRSM{meerschaum:connectors:sql:gis}
+  plugins:
+    bwg:
+      data_path: '{MRSM_ROOT_DIR}/../data'
+
+environment: {}
