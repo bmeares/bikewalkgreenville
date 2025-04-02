@@ -14,9 +14,9 @@ sync:
 pipes:
 
   - connector: "plugin:pcc"
-    metric: "stress_level"
+    metric: "stress_levels"
     parameters:
-      target: "stress_levels"
+      target: "stress_levels_raw"
       schema: "pcc"
       upsert: false
       static: true
@@ -36,8 +36,94 @@ pipes:
       dtypes:
         COUNTY_ID: "Int32"
         ROUTE_NUMB: "Int32"
-        fc_type: "Int8"
+        fc_type: "Int16"
 
+  - connector: "sql:bwg"
+    metric: "stress_levels"
+    parameters:
+      schema: "pcc"
+      target: "stress_levels"
+      sql: |-
+        SELECT
+          "FEATURE_TY" AS "feature_type",
+          "COUNTY_ID" AS "county_id",
+          "ROUTE_NUMB" AS "route_number",
+          "ROUTE_TYPE" AS "route_type",
+          "STREET_NAM" AS "street_name",
+          "fc_type",
+          "fc_name",
+          "StressLeve" AS "stress_level",
+          "geometry" AS "geometry"
+        FROM {{Pipe('plugin:pcc', 'stress_levels')}}
+      indices:
+        county_id: "county_id"
+        feature_ty: "feature_type"
+        route_number: "route_number"
+        street_name: "street_name"
+        route_type: "route_type"
+        fc_type: "fc_type"
+        fc_name: "fc_name"
+        stress_level: "stress_level"
+        geometry: "geometry"
+      dtypes:
+        county_id: "Int32"
+        route_number: "Int32"
+        fc_type: "Int16"
+
+  - connector: "sql:bwg"
+    metric: "stress_levels"
+    location: "high"
+    parameters:
+      schema: "pcc"
+      target: "stress_levels_high"
+      sql: |-
+        SELECT *
+        FROM {{Pipe('sql:bwg', 'stress_levels')}}
+        WHERE "stress_level" = 'H'
+
+  - connector: "sql:bwg"
+    metric: "stress_levels"
+    location: "medium-high"
+    parameters:
+      schema: "pcc"
+      target: "stress_levels_medium-high"
+      sql: |-
+        SELECT *
+        FROM {{Pipe('sql:bwg', 'stress_levels')}}
+        WHERE "stress_level" = 'MH'
+
+  - connector: "sql:bwg"
+    metric: "stress_levels"
+    location: "medium"
+    parameters:
+      schema: "pcc"
+      target: "stress_levels_medium"
+      sql: |-
+        SELECT *
+        FROM {{Pipe('sql:bwg', 'stress_levels')}}
+        WHERE "stress_level" = 'M'
+
+  - connector: "sql:bwg"
+    metric: "stress_levels"
+    location: "medium-low"
+    parameters:
+      schema: "pcc"
+      target: "stress_levels_medium-low"
+      sql: |-
+        SELECT *
+        FROM {{Pipe('sql:bwg', 'stress_levels')}}
+        WHERE "stress_level" = 'ML'
+
+  - connector: "sql:bwg"
+    metric: "stress_levels"
+    location: "low"
+    parameters:
+      schema: "pcc"
+      target: "stress_levels_low"
+      sql: |-
+        SELECT *
+        FROM {{Pipe('sql:bwg', 'stress_levels')}}
+        WHERE "stress_level" = 'L'
 
 config:
   meerschaum:
