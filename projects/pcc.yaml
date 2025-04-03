@@ -55,7 +55,8 @@ pipes:
           "fc_type",
           "fc_name",
           "StressLeve" AS "stress_level",
-          "geometry" AS "geometry"
+          "geometry" AS "geometry",
+          ST_AsGeoJSON("geometry")::JSONB AS "geojson"
         FROM {{Pipe('plugin:pcc', 'stress_levels', 'sc')}}
         WHERE "COUNTY_ID" = 23
       indices:
@@ -72,6 +73,7 @@ pipes:
         county_id: "Int32"
         route_number: "Int32"
         fc_type: "Int16"
+        geojson: "json"
 
   - connector: "sql:bwg"
     metric: "stress_levels"
