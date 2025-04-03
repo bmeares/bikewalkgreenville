@@ -1,0 +1,47 @@
+### See https://meerschaum.io/reference/compose/ for the compose schema.
+
+project_name: parking
+
+root_dir: ../root
+
+plugins_dir:
+- ../.installed_plugins
+- ../plugins
+
+sync:
+  schedule: "daily"
+
+pipes:
+
+- connector: "sql:bwg"
+  metric: "parking"
+  location: "greenville"
+  parameters:
+    schema: "Parking"
+    target: "parking"
+    columns:
+      primary: "GlobalID"
+    sql: |-
+      SELECT
+        CASE
+          WHEN "FEAT_CODE" = 880 THEN 'Paved parking'
+          WHEN "FEAT_CODE" = 881 THEN 'Un-paved parking'
+          WHEN "FEAT_CODE" = 882 THEN 'Not a parking polygon'
+        END AS "polygon_type",
+        "GlobalID",
+        "SHAPE_STAr" AS "shape_area",
+        "SHAPE_STLe" AS "shape_length",
+        "geometry"
+      FROM county."PLN_PARKING"
+
+config:
+  meerschaum:
+    instance: sql:bwg
+    connectors:
+      sql:
+        bwg: MRSM{meerschaum:connectors:sql:bwg}
+  plugins:
+    bwg:
+      data_path: '{MRSM_ROOT_DIR}/../data'
+
+environment: {}
