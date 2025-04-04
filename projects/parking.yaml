@@ -33,6 +33,7 @@ pipes:
         "SHAPE_STLe" AS "shape_length",
         "geometry"
       FROM county."PLN_PARKING"
+      WHERE "FEAT_CODE" != 882
 
 config:
   meerschaum:
