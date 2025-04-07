@@ -1,0 +1,226 @@
+### See https://meerschaum.io/reference/compose/ for the compose schema.
+
+project_name: who-owns-what-roads
+
+root_dir: ../root
+
+plugins_dir:
+- ../.installed_plugins
+- ../plugins
+
+sync:
+  schedule: "daily"
+
+pipes:
+
+- connector: "sql:bwg"
+  metric: "roads"
+  location: "Roads"
+  parameters:
+    schema: Roads
+    target: roads
+    columns:
+      global_id: GlobalID
+      road_type: road_type
+    dtypes:
+      GlobalID: uuid
+      geometry: geometry[LINESTRING, 6570]
+    indices:
+      geometry: geometry
+      name: name
+    sql: |-
+      WITH road_types AS (
+        SELECT *
+        FROM (
+          VALUES
+          (1370, 'Interstate Highway'),
+          (1371, 'US Highway'),
+          (1372, 'State Road'),
+          (1373, 'County Road'),
+          (1374, 'Municipal Road'),
+          (1375, 'Subdivision'),
+          (1376, 'Private Drive')
+        ) AS t ("FEAT_CODE", "road_type")
+      )
+      SELECT
+        r.road_type,
+        "NAME" AS "name",
+        "GlobalID",
+        "geometry",
+        ST_Length("geometry") AS "length_ft"
+      FROM county."TRA_STREETCL" AS cl
+      LEFT JOIN road_types AS r
+        ON r."FEAT_CODE" = cl."FEAT_CODE"
+
+- connector: "sql:bwg"
+  metric: "roads_interstate_highway"
+  location: "Roads"
+  parameters:
+    schema: Roads
+    target: roads_interstate_highway
+    columns:
+      primary: GlobalID
+    dtypes:
+      GlobalID: uuid
+    sql: |-
+      SELECT
+          "GlobalID",
+          "name",
+          "geometry",
+          "length_ft"
+      FROM "Roads".roads
+      WHERE "road_type" = 'Interstate Highway'
+
+- connector: "sql:bwg"
+  metric: "roads_us_highway"
+  location: "Roads"
+  parameters:
+    schema: Roads
+    target: roads_us_highway
+    columns:
+      primary: GlobalID
+    dtypes:
+      GlobalID: uuid
+    sql: |-
+      SELECT
+          "GlobalID",
+          "name",
+          "geometry",
+          "length_ft"
+      FROM "Roads".roads
+      WHERE "road_type" = 'US Highway'
+
+- connector: "sql:bwg"
+  metric: "roads_state_road"
+  location: "Roads"
+  parameters:
+    schema: Roads
+    target: roads_state_road
+    columns:
+      primary: GlobalID
+    dtypes:
+      GlobalID: uuid
+    sql: |-
+      SELECT
+          "GlobalID",
+          "name",
+          "geometry",
+          "length_ft"
+      FROM "Roads".roads
+      WHERE "road_type" = 'State Road'
+
+- connector: "sql:bwg"
+  metric: "roads_county_road"
+  location: "Roads"
+  parameters:
+    schema: Roads
+    target: roads_county_road
+    columns:
+      primary: GlobalID
+    dtypes:
+      GlobalID: uuid
+    sql: |-
+      SELECT
+          "GlobalID",
+          "name",
+          "geometry",
+          "length_ft"
+      FROM "Roads".roads
+      WHERE "road_type" = 'County Road'
+
+- connector: "sql:bwg"
+  metric: "roads_municipal_road"
+  location: "Roads"
+  parameters:
+    schema: Roads
+    target: roads_municipal_road
+    columns:
+      primary: GlobalID
+    dtypes:
+      GlobalID: uuid
+    sql: |-
+      SELECT
+          "GlobalID",
+          "name",
+          "geometry",
+          "length_ft"
+      FROM "Roads".roads
+      WHERE "road_type" = 'Municipal Road'
+
+- connector: "sql:bwg"
+  metric: "roads_subdivision"
+  location: "Roads"
+  parameters:
+    schema: Roads
+    target: roads_subdivision
+    columns:
+      primary: GlobalID
+    dtypes:
+      GlobalID: uuid
+    sql: |-
+      SELECT
+          "GlobalID",
+          "name",
+          "geometry",
+          "length_ft"
+      FROM "Roads".roads
+      WHERE "road_type" = 'Subdivision'
+
+- connector: "sql:bwg"
+  metric: "roads_private_drive"
+  location: "Roads"
+  parameters:
+    schema: Roads
+    target: roads_private_drive
+    columns:
+      primary: GlobalID
+    dtypes:
+      GlobalID: uuid
+    sql: |-
+      SELECT
+          "GlobalID",
+          "name",
+          "geometry",
+          "length_ft"
+      FROM "Roads".roads
+      WHERE "road_type" = 'Private Drive'
+
+- connector: "sql:bwg"
+  metric: "road_total_lengths"
+  location: "Roads"
+  parameters:
+    schema: Roads
+    target: road_total_lengths
+    columns:
+      road_type: road_type
+    sql: |-
+      SELECT "road_type", SUM("length_ft") AS "total_length_ft"
+      FROM "Roads".roads
+      GROUP BY "road_type"
+
+- connector: "sql:bwg"
+  metric: "road_total_lengths_miles"
+  location: "Roads"
+  parameters:
+    schema: Roads
+    target: road_total_lengths_miles
+    columns:
+      road_type: road_type
+    sql: |-
+      SELECT
+        road_type,
+        ("total_length_ft" / 5280) AS "total_length_miles"
+      FROM "Roads".road_total_lengths
+
+
+config:
+  meerschaum:
+    instance: sql:bwg
+    connectors:
+      sql:
+        bwg: MRSM{meerschaum:connectors:sql:bwg}
+  plugins:
+    bwg:
+      data_path: '{MRSM_ROOT_DIR}/../data'
+
+environment: {}
