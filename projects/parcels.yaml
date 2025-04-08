@@ -1,0 +1,41 @@
+### See https://meerschaum.io/reference/compose/ for the compose schema.
+
+project_name: parcels
+
+root_dir: ../root
+
+plugins_dir:
+- ../.installed_plugins
+- ../plugins
+
+sync:
+  schedule: "daily"
+
+pipes:
+
+- connector: "sql:bwg"
+  metric: "parcels"
+  location: "Parcels"
+  parameters:
+    schema: Parcels
+    target: parcels
+    columns:
+      primary: "PIN"
+    indices:
+      geometry: geometry
+      name: name
+    sql: |-
+      SELECT *
+      FROM county."CAD_PARCEL_MP"
+
+config:
+  meerschaum:
+    instance: sql:bwg
+    connectors:
+      sql:
+        bwg: MRSM{meerschaum:connectors:sql:bwg}
+  plugins:
+    bwg:
+      data_path: '{MRSM_ROOT_DIR}/../data'
+
+environment: {}

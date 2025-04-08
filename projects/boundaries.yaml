@@ -1,0 +1,43 @@
+### See https://meerschaum.io/reference/compose/ for the compose schema.
+
+project_name: boundaries
+
+root_dir: ../root
+
+plugins_dir:
+- ../.installed_plugins
+- ../plugins
+
+sync:
+  schedule: "daily"
+
+pipes:
+
+- connector: "sql:bwg"
+  metric: "boundaries"
+  location: "Boundaries"
+  parameters:
+    schema: Boundaries
+    target: boundaries
+    columns:
+      municipality_name: "Municipality Name"
+    indices:
+      geometry: geometry
+    sql: |-
+      SELECT
+        "NAME" AS "Municipality Name",
+        ST_Union("geometry") AS "geometry"
+      FROM county."BND_MUNICIPAL"
+      GROUP BY "NAME"
+
+config:
+  meerschaum:
+    instance: sql:bwg
+    connectors:
+      sql:
+        bwg: MRSM{meerschaum:connectors:sql:bwg}
+  plugins:
+    bwg:
+      data_path: '{MRSM_ROOT_DIR}/../data'
+
+environment: {}
