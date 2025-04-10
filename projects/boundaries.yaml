@@ -30,6 +30,90 @@ pipes:
       FROM county."BND_MUNICIPAL"
       GROUP BY "NAME"
 
+- connector: "sql:bwg"
+  metric: "boundaries"
+  location: "greenville"
+  parameters:
+    schema: Boundaries
+    target: boundaries_greenville
+    indices:
+      geometry: geometry
+    sql: |-
+      SELECT
+        "geometry"
+      FROM "Boundaries"."boundaries"
+      WHERE "Municipality Name" = 'GREENVILLE'
+
+- connector: "sql:bwg"
+  metric: "boundaries"
+  location: "simpsonville"
+  parameters:
+    schema: Boundaries
+    target: boundaries_simpsonville
+    indices:
+      geometry: geometry
+    sql: |-
+      SELECT
+        "geometry"
+      FROM "Boundaries"."boundaries"
+      WHERE "Municipality Name" = 'SIMPSONVILLE'
+
+- connector: "sql:bwg"
+  metric: "boundaries"
+  location: "mauldin"
+  parameters:
+    schema: Boundaries
+    target: boundaries_mauldin
+    indices:
+      geometry: geometry
+    sql: |-
+      SELECT
+        "geometry"
+      FROM "Boundaries"."boundaries"
+      WHERE "Municipality Name" = 'MAULDIN'
+
+- connector: "sql:bwg"
+  metric: "boundaries"
+  location: "greer"
+  parameters:
+    schema: Boundaries
+    target: boundaries_greer
+    indices:
+      geometry: geometry
+    sql: |-
+      SELECT
+        "geometry"
+      FROM "Boundaries"."boundaries"
+      WHERE "Municipality Name" = 'GREER'
+
+- connector: "sql:bwg"
+  metric: "boundaries"
+  location: "fountain_inn"
+  parameters:
+    schema: Boundaries
+    target: boundaries_fountain_inn
+    indices:
+      geometry: geometry
+    sql: |-
+      SELECT
+        "geometry"
+      FROM "Boundaries"."boundaries"
+      WHERE "Municipality Name" = 'FOUNTAIN INN'
+
+- connector: "sql:bwg"
+  metric: "boundaries"
+  location: "travelers_rest"
+  parameters:
+    schema: Boundaries
+    target: boundaries_travelers_rest
+    indices:
+      geometry: geometry
+    sql: |-
+      SELECT
+        "geometry"
+      FROM "Boundaries"."boundaries"
+      WHERE "Municipality Name" = 'TRAVELERS REST'
+
 config:
   meerschaum:
     instance: sql:bwg
