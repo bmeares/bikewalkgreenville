@@ -21,6 +21,8 @@ pipes:
     target: boundaries
     columns:
       municipality_name: "Municipality Name"
+    dtypes:
+      geometry: "geometry[MULTIPOLYGON, 6570]"
     indices:
       geometry: geometry
     sql: |-
@@ -36,10 +38,15 @@ pipes:
   parameters:
     schema: Boundaries
     target: boundaries_greenville
+    columns:
+      municipality_name: "Municipality Name"
+    dtypes:
+      geometry: "geometry[MULTIPOLYGON, 6570]"
     indices:
       geometry: geometry
     sql: |-
       SELECT
+        "Municipality Name",
         "geometry"
       FROM "Boundaries"."boundaries"
       WHERE "Municipality Name" = 'GREENVILLE'
@@ -50,10 +57,15 @@ pipes:
   parameters:
     schema: Boundaries
     target: boundaries_simpsonville
+    columns:
+      municipality_name: "Municipality Name"
+    dtypes:
+      geometry: "geometry[MULTIPOLYGON, 6570]"
     indices:
       geometry: geometry
     sql: |-
       SELECT
+        "Municipality Name",
         "geometry"
       FROM "Boundaries"."boundaries"
       WHERE "Municipality Name" = 'SIMPSONVILLE'
@@ -64,10 +76,15 @@ pipes:
   parameters:
     schema: Boundaries
     target: boundaries_mauldin
+    columns:
+      municipality_name: "Municipality Name"
+    dtypes:
+      geometry: "geometry[MULTIPOLYGON, 6570]"
     indices:
       geometry: geometry
     sql: |-
       SELECT
+        "Municipality Name",
         "geometry"
       FROM "Boundaries"."boundaries"
       WHERE "Municipality Name" = 'MAULDIN'
@@ -78,13 +95,41 @@ pipes:
   parameters:
     schema: Boundaries
     target: boundaries_greer
+    columns:
+      municipality_name: "Municipality Name"
+    dtypes:
+      geometry: "geometry[MULTIPOLYGON, 6570]"
     indices:
       geometry: geometry
     sql: |-
       SELECT
+        "Municipality Name",
         "geometry"
       FROM "Boundaries"."boundaries"
       WHERE "Municipality Name" = 'GREER'
+
+- connector: "sql:bwg"
+  metric: "boundaries"
+  location: "greer-clipped"
+  parameters:
+    schema: Boundaries
+    target: boundaries_greer-clipped
+    columns:
+      municipality_name: "Municipality Name"
+    dtypes:
+      geometry: "geometry[MULTIPOLYGON, 6570]"
+    indices:
+      geometry: geometry
+    sql: |-
+      SELECT
+        'Greer' AS "Municipality Name",
+        ST_CollectionExtract(
+          ST_Intersection(greer."geometry", gvl_county."geometry"),
+          3
+        )::geometry(MULTIPOLYGON, 6570) AS "geometry"
+      FROM "Boundaries"."boundaries_greer" AS greer
+      LEFT JOIN county."BND_GVCNTY" AS gvl_county
+        ON ST_Intersects(greer.geometry, gvl_county.geometry)
 
 - connector: "sql:bwg"
   metric: "boundaries"
@@ -92,10 +137,15 @@ pipes:
   parameters:
     schema: Boundaries
     target: boundaries_fountain_inn
+    columns:
+      municipality_name: "Municipality Name"
+    dtypes:
+      geometry: "geometry[MULTIPOLYGON, 6570]"
     indices:
       geometry: geometry
     sql: |-
       SELECT
+        "Municipality Name",
         "geometry"
       FROM "Boundaries"."boundaries"
       WHERE "Municipality Name" = 'FOUNTAIN INN'
@@ -106,10 +156,15 @@ pipes:
   parameters:
     schema: Boundaries
     target: boundaries_travelers_rest
+    columns:
+      municipality_name: "Municipality Name"
+    dtypes:
+      geometry: "geometry[MULTIPOLYGON, 6570]"
     indices:
       geometry: geometry
     sql: |-
       SELECT
+        "Municipality Name",
         "geometry"
       FROM "Boundaries"."boundaries"
       WHERE "Municipality Name" = 'TRAVELERS REST'

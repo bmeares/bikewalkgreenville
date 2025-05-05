@@ -79,7 +79,7 @@ config:
     instance: sql:bwg
     connectors:
       sql:
-        bwg: MRSM{meerschaum:connectors:sql:gis}
+        bwg: MRSM{meerschaum:connectors:sql:bwg}
   plugins:
     bwg:
       data_path: './data'
