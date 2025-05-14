@@ -152,6 +152,29 @@ pipes:
 
 - connector: "sql:bwg"
   metric: "boundaries"
+  location: "fountain-inn-clipped"
+  parameters:
+    schema: Boundaries
+    target: boundaries_fountain-inn-clipped
+    columns:
+      municipality_name: "Municipality Name"
+    dtypes:
+      geometry: "geometry[MULTIPOLYGON, 6570]"
+    indices:
+      geometry: geometry
+    sql: |-
+      SELECT
+        'Fountain Inn' AS "Municipality Name",
+        ST_CollectionExtract(
+          ST_Intersection(fountain_inn."geometry", gvl_county."geometry"),
+          3
+        )::geometry(MULTIPOLYGON, 6570) AS "geometry"
+      FROM "Boundaries"."boundaries_fountain_inn" AS fountain_inn
+      LEFT JOIN county."BND_GVCNTY" AS gvl_county
+        ON ST_Intersects(fountain_inn.geometry, gvl_county.geometry)
+
+- connector: "sql:bwg"
+  metric: "boundaries"
   location: "travelers_rest"
   parameters:
     schema: Boundaries

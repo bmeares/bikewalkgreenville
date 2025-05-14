@@ -53,6 +53,35 @@ pipes:
         ON r."FEAT_CODE" = cl."FEAT_CODE"
 
 - connector: "sql:bwg"
+  metric: "roads_clip"
+  location: "Roads"
+  parameters:
+    schema: Roads
+    target: roads_clip
+    columns:
+      global_id: GlobalID
+      road_type: road_type
+    dtypes:
+      GlobalID: uuid
+      geometry: geometry[LINESTRING, 6570]
+    indices:
+      geometry: geometry
+      name: name
+    sql: |-
+      SELECT
+        r.road_type,
+        r."name",
+        r."GlobalID",
+        ST_Intersection(r."geometry", b."geometry") AS "geometry",
+        ST_Length(ST_Intersection(r."geometry", b."geometry")) AS "length_ft"
+      FROM
+        "Roads"."roads" r
+      JOIN
+        "Boundaries"."boundaries_greenville_county" b
+      ON
+        ST_Intersects(r."geometry", b."geometry")
+ 
+- connector: "sql:bwg"
   metric: "roads_interstate_highway"
   location: "Roads"
   parameters:
@@ -64,12 +93,13 @@ pipes:
       GlobalID: uuid
     sql: |-
       SELECT
-          "GlobalID",
           "name",
+          "road_type",
+          "GlobalID",
           "geometry",
           "length_ft"
-      FROM "Roads".roads
-      WHERE "road_type" = 'Interstate Highway'
+      FROM "Roads"."roads_clip"
+      WHERE "road_type" IN ('Interstate Highway')
 
 - connector: "sql:bwg"
   metric: "roads_us_highway"
@@ -83,12 +113,13 @@ pipes:
       GlobalID: uuid
     sql: |-
       SELECT
-          "GlobalID",
           "name",
+          "road_type",
+          "GlobalID",
           "geometry",
           "length_ft"
-      FROM "Roads".roads
-      WHERE "road_type" = 'US Highway'
+      FROM "Roads"."roads_clip"
+      WHERE "road_type" IN ('US Highway')
 
 - connector: "sql:bwg"
   metric: "roads_state_road"
@@ -102,12 +133,13 @@ pipes:
       GlobalID: uuid
     sql: |-
       SELECT
-          "GlobalID",
           "name",
+          "road_type",
+          "GlobalID",
           "geometry",
           "length_ft"
-      FROM "Roads".roads
-      WHERE "road_type" = 'State Road'
+      FROM "Roads"."roads_clip"
+      WHERE "road_type" IN ('State Road')
 
 - connector: "sql:bwg"
   metric: "roads_county_road"
@@ -121,12 +153,13 @@ pipes:
       GlobalID: uuid
     sql: |-
       SELECT
-          "GlobalID",
           "name",
+          "road_type",
+          "GlobalID",
           "geometry",
           "length_ft"
-      FROM "Roads".roads
-      WHERE "road_type" = 'County Road'
+      FROM "Roads"."roads_clip"
+      WHERE "road_type" IN ('County Road')
 
 - connector: "sql:bwg"
   metric: "roads_municipal_road"
@@ -140,12 +173,13 @@ pipes:
       GlobalID: uuid
     sql: |-
       SELECT
-          "GlobalID",
           "name",
+          "road_type",
+          "GlobalID",
           "geometry",
           "length_ft"
-      FROM "Roads".roads
-      WHERE "road_type" = 'Municipal Road'
+      FROM "Roads"."roads_clip"
+      WHERE "road_type" IN ('Municipal Road')
 
 - connector: "sql:bwg"
   metric: "roads_subdivision"
@@ -159,12 +193,13 @@ pipes:
       GlobalID: uuid
     sql: |-
       SELECT
-          "GlobalID",
           "name",
+          "road_type",
+          "GlobalID",
           "geometry",
           "length_ft"
-      FROM "Roads".roads
-      WHERE "road_type" = 'Subdivision'
+      FROM "Roads"."roads_clip"
+      WHERE "road_type" IN ('Subdivision')
 
 - connector: "sql:bwg"
   metric: "roads_private_drive"
@@ -178,12 +213,13 @@ pipes:
       GlobalID: uuid
     sql: |-
       SELECT
-          "GlobalID",
           "name",
+          "road_type",
+          "GlobalID",
           "geometry",
           "length_ft"
-      FROM "Roads".roads
-      WHERE "road_type" = 'Private Drive'
+      FROM "Roads"."roads_clip"
+      WHERE "road_type" IN ('Private Drive')
 
 - connector: "sql:bwg"
   metric: "road_total_lengths"
