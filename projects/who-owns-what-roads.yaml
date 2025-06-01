@@ -30,9 +30,9 @@ pipes:
         (45045, 1371, 'SCDOT', 'https://apps.scdot.org/mwro/', '(864) 241-1224'),
         (45045, 1372, 'SCDOT', 'https://apps.scdot.org/mwro/', '(864) 241-1224'),
         (45045, 1373, 'Greenville County', 'https://www.greenvillecounty.org/apps/servicerequest/Request.aspx', '(864) 467-7016'),
-        (30850, 1374, 'City of Greenville', 'mailto:cares@greenvillesc.gov', '(864) 232-2273'),
+        (30850, 1374, 'City of Greenville', 'cares@greenvillesc.gov', '(864) 232-2273'),
         (30985, 1374, 'City of Greer', 'https://gree.csqrcloud.com/community-etrakit/CRM/issue.aspx', '(864) 848‐2184'),
-        (45115, 1374, 'City of Mauldin', 'mailto:mauldinpublicworks@mauldincitysc.com', '(864) 289-8904'),
+        (45115, 1374, 'City of Mauldin', 'mauldinpublicworks@mauldincitysc.com', '(864) 289-8904'),
         (27070, 1374, 'City of Fountain Inn', 'https://apps.scdot.org/mwro/', '(864) 531-0644'),
         (66580, 1374, 'City of Simpsonville', 'https://www.simpsonville.com/contact/', '(864) 967-9531'),
         (72430, 1374, 'City of Travelers Rest', 'https://travelersrestsc.com/businesses/departments/public-works/report-a-problem/', '(864) 834-8740')
@@ -191,6 +191,29 @@ pipes:
           "Phone"
       FROM "Roads"."roads_clip"
       WHERE "Type" IN ('State Road')
+
+- connector: "sql:bwg"
+  metric: "roads_interstate_us_state"
+  location: "Roads"
+  parameters:
+    schema: Roads
+    target: roads_interstate_us_state
+    columns:
+      primary: GlobalID
+    dtypes:
+      GlobalID: uuid
+    sql: |-
+      SELECT
+          "Name",
+          "Type",
+          "GlobalID",
+          "geometry",
+          "Length (ft)",
+          "Owner",
+          "Contact",
+          "Phone"
+      FROM "Roads"."roads_clip"
+      WHERE "Type" IN ('Interstate Highway','US Highway', 'State Road')
 
 - connector: "sql:bwg"
   metric: "roads_county_road"
