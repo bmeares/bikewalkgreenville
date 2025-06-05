@@ -192,6 +192,24 @@ pipes:
       FROM "Boundaries"."boundaries"
       WHERE "Municipality Name" = 'TRAVELERS REST'
 
+- connector: sql:bwg
+  metric: boundaries
+  location: county-districts
+  parameters:
+    schema: Boundaries
+    target: county_council_districts
+    columns:
+      primary: "district_num"
+    dtypes:
+      zipcode: string
+      geometry: geometry[POLYGON, 6570]
+    indices:
+      zipcode: zipcode
+      geometry: geometry
+    sql: |-
+      SELECT "DISTRICT" AS "district_num", "ZIPCODE" AS "zipcode", "geometry"
+      FROM county."DIS_CNTYCN"
+
 config:
   meerschaum:
     instance: sql:bwg

@@ -108,15 +108,6 @@ def fetch(pipe: mrsm.Pipe, **kwargs) -> 'pd.DataFrame':
     return parse_collisions_gis_data()
 
 
-def get_data_path() -> pathlib.Path:
-    """Return the data path configured in the plugin settings."""
-    cf = get_plugin_config()
-    data_path_str = cf.get('data_path', None)
-    if not data_path_str:
-        raise FileNotFoundError("No data path defined. Run `setup plugin scdps`.")
-    return pathlib.Path(data_path_str)
-
-
 def parse_collisions_gis_data() -> 'pd.DataFrame':
     """
     Parse the Collisions data:
@@ -133,6 +124,21 @@ def parse_collisions_gis_data() -> 'pd.DataFrame':
         df['CrashDate'] = pd.to_datetime(df['CrashDate'])
         dataframes.append(df)
     return pd.concat(dataframes, ignore_index=True)
+
+
+def parse_2009_data() -> 'pd.DataFrame':
+    """
+    Parse the 2009 data files.
+    """
+    (openpyxl, pytz) = mrsm.attempt_import('openpyxl', 'pytz', venv='scdps') 
+    pd = mrsm.attempt_import('pandas')
+    eastern = pytz.timezone("US/Eastern")
+
+    scdps_data_path = bwg.module.get_data_path() / 'scdps'
+    if not scdps_data_path.exists():
+        raise FileNotFoundError(f"Path does not exist: {scdps_data_path}")
+
+
 
 
 def parse_fatalities_spreadsheets() -> 'pd.DataFrame':
