@@ -14,6 +14,18 @@ sync:
 pipes:
 
 - connector: "sql:bwg"
+  metric: "jcodes_road_types"
+  location: "Roads"
+  parameters:
+    schema: "Roads"
+    target: jcodes_road_types
+    sql: |-
+      SELECT DISTINCT "JCODE", road_type
+      FROM county."TRA_STREETCL" AS cl
+      LEFT JOIN "Roads".road_types AS r
+        ON r."FEAT_CODE" = cl."FEAT_CODE"
+
+- connector: "sql:bwg"
   metric: "contact_info"
   location: "Roads"
   parameters:
@@ -93,7 +105,11 @@ pipes:
         ON r."FEAT_CODE" = cl."FEAT_CODE"
       LEFT JOIN "Roads".contact_info AS c
         ON c."FEAT_CODE" = cl."FEAT_CODE"
-        AND COALESCE(c."JCODE", 0) = COALESCE(cl."JCODE"::INT, 0)
+        AND COALESCE(c."JCODE", 0) = CASE 
+          WHEN cl."FEAT_CODE" = 1374 THEN COALESCE(cl."LCITYCODE"::INT, 0)
+          WHEN cl."FEAT_CODE" IN (1370, 1371, 1372) THEN 45045
+          ELSE COALESCE(cl."JCODE"::INT, 0)
+        END
 
 - connector: "sql:bwg"
   metric: "roads_clip"
