@@ -17,6 +17,9 @@ pipes:
   metric: "jcodes_road_types"
   location: "Roads"
   parameters:
+    columns:
+      jcode: "JCODE"
+      road_type: "road_type"
     schema: "Roads"
     target: jcodes_road_types
     sql: |-
