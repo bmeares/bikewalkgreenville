@@ -105,7 +105,34 @@ def fetch(pipe: mrsm.Pipe, **kwargs) -> 'pd.DataFrame':
     """
     if pipe.metric_key == 'fatalities':
         return parse_fatalities_spreadsheets()
+    if pipe.metric_key == 'UNITS':
+        return parse_units_file()
+    if pipe.metric_key == 'OCCUPANT':
+        return parse_occupant_file()
+    if pipe.metric_key == 'LOCATION':
+        return parse_location_file()
     return parse_collisions_gis_data()
+
+
+def parse_units_file():
+    scdps_2024_path = bwg.module.get_data_path() / 'scdps' / 'SCDPS_2024'
+    pd = mrsm.attempt_import('pandas')
+    file_path = scdps_2024_path / 'Greenville County UNITS.csv'
+    return pd.read_csv(file_path, dtype='str')
+
+
+def parse_occupant_file():
+    scdps_2024_path = bwg.module.get_data_path() / 'scdps' / 'SCDPS_2024'
+    pd = mrsm.attempt_import('pandas')
+    file_path = scdps_2024_path / 'Greenville County Stats OCCUPANT.csv'
+    return pd.read_csv(file_path, dtype='str')
+
+
+def parse_location_file():
+    scdps_2024_path = bwg.module.get_data_path() / 'scdps' / 'SCDPS_2024'
+    pd = mrsm.attempt_import('pandas')
+    file_path = scdps_2024_path / 'Greenville County LOCATION.csv'
+    return pd.read_csv(file_path, dtype='str')
 
 
 def parse_collisions_gis_data() -> 'pd.DataFrame':

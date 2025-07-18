@@ -14,21 +14,6 @@ sync:
 pipes:
 
 - connector: "sql:bwg"
-  metric: "jcodes_road_types"
-  location: "Roads"
-  parameters:
-    columns:
-      jcode: "JCODE"
-      road_type: "road_type"
-    schema: "Roads"
-    target: jcodes_road_types
-    sql: |-
-      SELECT DISTINCT "JCODE", road_type
-      FROM county."TRA_STREETCL" AS cl
-      LEFT JOIN "Roads".road_types AS r
-        ON r."FEAT_CODE" = cl."FEAT_CODE"
-
-- connector: "sql:bwg"
   metric: "contact_info"
   location: "Roads"
   parameters:
@@ -45,10 +30,17 @@ pipes:
         (45045, 1371, 'SCDOT', 'https://apps.scdot.org/mwro/', '(864) 241-1224'),
         (45045, 1372, 'SCDOT', 'https://apps.scdot.org/mwro/', '(864) 241-1224'),
         (45045, 1373, 'Greenville County', 'https://www.greenvillecounty.org/apps/servicerequest/Request.aspx', '(864) 467-7016'),
+        (27070, 1373, 'Greenville County', 'https://www.greenvillecounty.org/apps/servicerequest/Request.aspx', '(864) 467-7016'),
+        (30850, 1373, 'Greenville County', 'https://www.greenvillecounty.org/apps/servicerequest/Request.aspx', '(864) 467-7016'),
+        (30985, 1373, 'Greenville County', 'https://www.greenvillecounty.org/apps/servicerequest/Request.aspx', '(864) 467-7016'),
+        (37149, 1373, 'Greenville County', 'https://www.greenvillecounty.org/apps/servicerequest/Request.aspx', '(864) 467-7016'),
+        (45115, 1373, 'Greenville County', 'https://www.greenvillecounty.org/apps/servicerequest/Request.aspx', '(864) 467-7016'),
+        (66580, 1373, 'Greenville County', 'https://www.greenvillecounty.org/apps/servicerequest/Request.aspx', '(864) 467-7016'),
+        (72430, 1373, 'Greenville County', 'https://www.greenvillecounty.org/apps/servicerequest/Request.aspx', '(864) 467-7016'),
         (30850, 1374, 'City of Greenville', 'cares@greenvillesc.gov', '(864) 232-2273'),
         (30985, 1374, 'City of Greer', 'https://gree.csqrcloud.com/community-etrakit/CRM/issue.aspx', '(864) 848‐2184'),
         (45115, 1374, 'City of Mauldin', 'mauldinpublicworks@mauldincitysc.com', '(864) 289-8904'),
-        (27070, 1374, 'City of Fountain Inn', 'https://apps.scdot.org/mwro/', '(864) 531-0644'),
+        (27070, 1374, 'City of Fountain Inn', 'https://portal.iworq.net/FOUNTAININN/new-case/400/2473', '(864) 409-3310'),
         (66580, 1374, 'City of Simpsonville', 'https://www.simpsonville.com/contact/', '(864) 967-9531'),
         (72430, 1374, 'City of Travelers Rest', 'https://travelersrestsc.com/businesses/departments/public-works/report-a-problem/', '(864) 834-8740')
       ) AS t ("JCODE", "FEAT_CODE", "owner", "url", "phone")
@@ -77,6 +69,21 @@ pipes:
         (1375, 'Subdivision'),
         (1376, 'Private Drive')
       ) AS t ("FEAT_CODE", "road_type")
+
+- connector: "sql:bwg"
+  metric: "jcodes_road_types"
+  location: "Roads"
+  parameters:
+    columns:
+      jcode: "JCODE"
+      road_type: "road_type"
+    schema: "Roads"
+    target: jcodes_road_types
+    sql: |-
+      SELECT DISTINCT "JCODE", road_type
+      FROM county."TRA_STREETCL" AS cl
+      LEFT JOIN "Roads".road_types AS r
+        ON r."FEAT_CODE" = cl."FEAT_CODE"
 
 - connector: "sql:bwg"
   metric: "roads"
@@ -108,10 +115,22 @@ pipes:
         ON r."FEAT_CODE" = cl."FEAT_CODE"
       LEFT JOIN "Roads".contact_info AS c
         ON c."FEAT_CODE" = cl."FEAT_CODE"
-        AND COALESCE(c."JCODE", 0) = CASE 
-          WHEN cl."FEAT_CODE" = 1374 THEN COALESCE(cl."LCITYCODE"::INT, 0)
-          WHEN cl."FEAT_CODE" IN (1370, 1371, 1372) THEN 45045
-          ELSE COALESCE(cl."JCODE"::INT, 0)
+        AND COALESCE(c."JCODE", 0) = CASE
+          WHEN cl."FEAT_CODE" = 1374 THEN
+            -- For FEAT_CODE 1374 (Municipal Road):
+            CASE
+              -- Use LCITYCODE if it's not null and not 45045.
+              WHEN cl."LCITYCODE"::INT IS NOT NULL AND cl."LCITYCODE"::INT != 45045 THEN cl."LCITYCODE"::INT
+              -- Edge case: If LCITYCODE, RCITYCODE, and JCODE are all 45045, AND LOCATION is 'GV',
+              -- then use 30850 (JCODE for City of Greenville). This handles specific municipal road scenarios.
+              WHEN cl."LCITYCODE"::INT = 45045 AND cl."RCITYCODE"::INT = 45045 AND COALESCE(cl."JCODE"::INT, 0) = 45045 AND cl."LOCATION" = 'GV' THEN 30850
+              -- If LCITYCODE is null or 45045, AND RCITYCODE is also 45045, then fall back to JCODE.
+              WHEN cl."RCITYCODE"::INT = 45045 THEN COALESCE(cl."JCODE"::INT, 0)
+              -- Otherwise (LCITYCODE is null/45045 and RCITYCODE is not 45045), use RCITYCODE.
+              ELSE cl."RCITYCODE"::INT
+            END
+          WHEN cl."FEAT_CODE" IN (1370, 1371, 1372) THEN 45045 -- For these specific FEAT_CODEs, always use 45045.
+          ELSE COALESCE(cl."JCODE"::INT, 0) -- For all other FEAT_CODEs, use JCODE from TRA_STREETCL, defaulting to 0.
         END
 
 - connector: "sql:bwg"

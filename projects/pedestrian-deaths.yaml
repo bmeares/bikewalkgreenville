@@ -20,6 +20,51 @@ pipes:
       county: County
     schema: "SCDPS"
 
+- connector: plugin:scdps
+  metric: UNITS
+  location: greenville
+  parameters:
+    schema: SCDPS
+    target: UNITS
+    columns:
+      crash_number: crash_number
+      unit_number: unit_number
+    dtypes:
+      crash_number: int
+      unit_number: int
+    indices:
+      unit_type: unit_type
+
+- connector: plugin:scdps
+  metric: OCCUPANT
+  location: greenville
+  parameters:
+    schema: SCDPS
+    target: OCCUPANT
+    columns:
+      collision_number: collision_number
+      unit_number: unit_number
+    dtypes:
+      collision_number: int
+      unit_number: int
+
+- connector: plugin:scdps
+  metric: LOCATION
+  location: greenville
+  parameters:
+    schema: SCDPS
+    target: LOCATION
+    columns:
+      datetime: "date"
+      crash_number: crash_number
+    dtypes:
+      crash_number: int
+      number_of_units: int
+      decimal_degrees_latitude: numeric
+      decimal_degrees_longitude: numeric
+    indices:
+      collision_type: collision_type
+
 - connector: sql:bwg
   metric: collisions
   location: greenville
