@@ -8,13 +8,33 @@ plugins_dir:
 - ../.installed_plugins
 - ../plugins
 
-sync:
-  schedule: "daily"
-
 pipes:
 
-  - connector: "plugin:city-of-greenville"
+  - connector: "plugin:city-gis"
+    metric: "feature_codes"
+    parameters:
+      columns:
+        feat_code: "FEAT_CODE"
+        metric_key: "metric_key"
+      dtypes:
+        "FEAT_CODE": "int"
+        "feat_name": "string"
+        "metric_key": "string"
+      schema: "city"
+      target: "feature_codes"
+
+  - connector: "plugin:city-gis"
     metric: "Parking"
+    parameters:
+      columns:
+        feat_code: "FEAT_CODE"
+      dtypes:
+        "FEAT_CODE": "int"
+        geometry: "geometry[3361]"
+      indices:
+        geometry: "geometry"
+      target: "Parking"
+      schema: "city"
 
 config:
   meerschaum:
