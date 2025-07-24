@@ -17,7 +17,7 @@ pipes:
         feat_code: "FEAT_CODE"
         metric_key: "metric_key"
       dtypes:
-        "FEAT_CODE": "int"
+        "FEAT_CODE": "string"
         "feat_name": "string"
         "metric_key": "string"
       schema: "city"
@@ -36,6 +36,19 @@ pipes:
       target: "Parking"
       schema: "city"
 
+  - connector: "plugin:city-gis"
+    metric: "MajorWaterBodies"
+    parameters:
+      columns:
+        feat_code: "FEAT_CODE"
+      dtypes:
+        "FEAT_CODE": "string"
+        geometry: "geometry[3361]"
+      indices:
+        geometry: "geometry"
+      target: "MajorWaterBodies"
+      schema: "city"
+      
 config:
   meerschaum:
     instance: sql:bwg

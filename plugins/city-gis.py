@@ -17,13 +17,20 @@ required = ['geopandas', 'pyogrio', 'pandas[pyarrow]']
 
 bwg = mrsm.Plugin('bwg')
 
-FEAT_CODES: dict[str, dict[int, str]] = {
+FEAT_CODES: dict[str, dict[str, str]] = {
     'Parking': {
-        121: 'Paved',
-        122: 'Unpaved',
-        123: 'Background',
-        124: 'Residential Driveway',
-        127: 'Under Construction',
+        '121': 'Paved',
+        '122': 'Unpaved',
+        '123': 'Background',
+        '124': 'Residential Driveway',
+        '127': 'Under Construction',
+    },
+    'MajorWaterBodies': {
+        '80': 'River',
+        '81': 'Water Body',
+        '82': 'Marsh',
+        '83': 'Island',
+        '84': 'Waterfall',
     },
 }
 
