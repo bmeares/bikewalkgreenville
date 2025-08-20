@@ -27,7 +27,7 @@ pipes:
       geometry: geometry
     sql: |-
       SELECT
-        "NAME" AS "Municipality Name",
+        SMART_CAPITALIZE("NAME") AS "Municipality Name",
         ST_Union("geometry") AS "geometry"
       FROM county."BND_MUNICIPAL"
       GROUP BY "NAME"
@@ -49,7 +49,7 @@ pipes:
         "Municipality Name",
         "geometry"
       FROM "Boundaries"."boundaries"
-      WHERE "Municipality Name" = 'GREENVILLE'
+      WHERE "Municipality Name" = 'Greenville'
 
 - connector: "sql:bwg"
   metric: "boundaries"
@@ -68,7 +68,7 @@ pipes:
         "Municipality Name",
         "geometry"
       FROM "Boundaries"."boundaries"
-      WHERE "Municipality Name" = 'SIMPSONVILLE'
+      WHERE "Municipality Name" = 'Simpsonville'
 
 - connector: "sql:bwg"
   metric: "boundaries"
@@ -87,7 +87,7 @@ pipes:
         "Municipality Name",
         "geometry"
       FROM "Boundaries"."boundaries"
-      WHERE "Municipality Name" = 'MAULDIN'
+      WHERE "Municipality Name" = 'Mauldin'
 
 - connector: "sql:bwg"
   metric: "boundaries"
@@ -106,7 +106,7 @@ pipes:
         "Municipality Name",
         "geometry"
       FROM "Boundaries"."boundaries"
-      WHERE "Municipality Name" = 'GREER'
+      WHERE "Municipality Name" = 'Greer'
 
 - connector: "sql:bwg"
   metric: "boundaries"
@@ -148,7 +148,7 @@ pipes:
         "Municipality Name",
         "geometry"
       FROM "Boundaries"."boundaries"
-      WHERE "Municipality Name" = 'FOUNTAIN INN'
+      WHERE "Municipality Name" = 'Fountain Inn'
 
 - connector: "sql:bwg"
   metric: "boundaries"
@@ -190,7 +190,7 @@ pipes:
         "Municipality Name",
         "geometry"
       FROM "Boundaries"."boundaries"
-      WHERE "Municipality Name" = 'TRAVELERS REST'
+      WHERE "Municipality Name" = 'Travelers Rest'
 
 - connector: sql:bwg
   metric: boundaries
