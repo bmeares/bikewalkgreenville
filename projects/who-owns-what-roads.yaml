@@ -26,24 +26,24 @@ pipes:
       SELECT *
       FROM (
         VALUES
-        (45045, 1370, 'SCDOT', 'https://apps.scdot.org/mwro/', '(864) 241-1224'),
-        (45045, 1371, 'SCDOT', 'https://apps.scdot.org/mwro/', '(864) 241-1224'),
-        (45045, 1372, 'SCDOT', 'https://apps.scdot.org/mwro/', '(864) 241-1224'),
-        (45045, 1373, 'Greenville County', 'https://www.greenvillecounty.org/apps/servicerequest/Request.aspx', '(864) 467-7016'),
-        (27070, 1373, 'Greenville County', 'https://www.greenvillecounty.org/apps/servicerequest/Request.aspx', '(864) 467-7016'),
-        (30850, 1373, 'Greenville County', 'https://www.greenvillecounty.org/apps/servicerequest/Request.aspx', '(864) 467-7016'),
-        (30985, 1373, 'Greenville County', 'https://www.greenvillecounty.org/apps/servicerequest/Request.aspx', '(864) 467-7016'),
-        (37149, 1373, 'Greenville County', 'https://www.greenvillecounty.org/apps/servicerequest/Request.aspx', '(864) 467-7016'),
-        (45115, 1373, 'Greenville County', 'https://www.greenvillecounty.org/apps/servicerequest/Request.aspx', '(864) 467-7016'),
-        (66580, 1373, 'Greenville County', 'https://www.greenvillecounty.org/apps/servicerequest/Request.aspx', '(864) 467-7016'),
-        (72430, 1373, 'Greenville County', 'https://www.greenvillecounty.org/apps/servicerequest/Request.aspx', '(864) 467-7016'),
-        (30850, 1374, 'City of Greenville', 'cares@greenvillesc.gov', '(864) 232-2273'),
-        (30985, 1374, 'City of Greer', 'https://gree.csqrcloud.com/community-etrakit/CRM/issue.aspx', '(864) 848‐2184'),
-        (45115, 1374, 'City of Mauldin', 'mauldinpublicworks@mauldincitysc.com', '(864) 289-8904'),
-        (27070, 1374, 'City of Fountain Inn', 'https://portal.iworq.net/FOUNTAININN/new-case/400/2473', '(864) 409-3310'),
-        (66580, 1374, 'City of Simpsonville', 'https://www.simpsonville.com/contact/', '(864) 967-9531'),
-        (72430, 1374, 'City of Travelers Rest', 'https://travelersrestsc.com/businesses/departments/public-works/report-a-problem/', '(864) 834-8740')
-      ) AS t ("JCODE", "FEAT_CODE", "owner", "url", "phone")
+        (45045, 1370, 'SCDOT', 'N/A', 'https://apps.scdot.org/mwro/', '(864) 241-1224'),
+        (45045, 1371, 'SCDOT', 'N/A', 'https://apps.scdot.org/mwro/', '(864) 241-1224'),
+        (45045, 1372, 'SCDOT', 'N/A', 'https://apps.scdot.org/mwro/', '(864) 241-1224'),
+        (45045, 1373, 'Greenville County', 'N/A', 'https://www.greenvillecounty.org/apps/servicerequest/Request.aspx', '(864) 467-7016'),
+        (27070, 1373, 'Greenville County', 'N/A', 'https://www.greenvillecounty.org/apps/servicerequest/Request.aspx', '(864) 467-7016'),
+        (30850, 1373, 'Greenville County', 'N/A', 'https://www.greenvillecounty.org/apps/servicerequest/Request.aspx', '(864) 467-7016'),
+        (30985, 1373, 'Greenville County', 'N/A', 'https://www.greenvillecounty.org/apps/servicerequest/Request.aspx', '(864) 467-7016'),
+        (37149, 1373, 'Greenville County', 'N/A', 'https://www.greenvillecounty.org/apps/servicerequest/Request.aspx', '(864) 467-7016'),
+        (45115, 1373, 'Greenville County', 'N/A', 'https://www.greenvillecounty.org/apps/servicerequest/Request.aspx', '(864) 467-7016'),
+        (66580, 1373, 'Greenville County', 'N/A', 'https://www.greenvillecounty.org/apps/servicerequest/Request.aspx', '(864) 467-7016'),
+        (72430, 1373, 'Greenville County', 'N/A', 'https://www.greenvillecounty.org/apps/servicerequest/Request.aspx', '(864) 467-7016'),
+        (30850, 1374, 'City of Greenville', 'cares@greenvillesc.gov', 'https://survey123.arcgis.com/share/daf25398c6254883aab80a31c7e142ce', '(864) 232-2273'),
+        (30985, 1374, 'City of Greer', 'public-services@cityofgreersc.gov', 'https://gree.csqrcloud.com/community-etrakit/CRM/issue.aspx', '(864) 848‐2184'),
+        (45115, 1374, 'City of Mauldin', 'mauldinpublicworks@mauldincitysc.com', 'https://cityofmauldin.org/service-request-form/', '(864) 289-8904'),
+        (27070, 1374, 'City of Fountain Inn', 'N/A', 'https://portal.iworq.net/FOUNTAININN/new-case/400/2473', '(864) 409-3310'),
+        (66580, 1374, 'City of Simpsonville', 'info@simpsonville.com', 'https://www.simpsonville.com/contact/', '(864) 967-9531'),
+        (72430, 1374, 'City of Travelers Rest', 'tate@travelersrestsc.com', 'https://travelersrestsc.com/businesses/departments/public-works/report-a-problem/', '(864) 834-8740')
+      ) AS t ("JCODE", "FEAT_CODE", "owner", "email", "url", "phone")
 
 - connector: "sql:bwg"
   metric: "road_types"
@@ -108,7 +108,8 @@ pipes:
         "geometry",
         ST_Length("geometry") AS "Length (ft)",
         c.owner AS "Owner",
-        c.url AS "Contact",
+        c.url AS "Online Form",
+        c.email AS "Email",
         c.phone AS "Phone"
       FROM county."TRA_STREETCL" AS cl
       LEFT JOIN "Roads".road_types AS r
@@ -156,7 +157,8 @@ pipes:
         ST_Intersection(r."geometry", b."geometry") AS "geometry",
         ST_Length(ST_Intersection(r."geometry", b."geometry")) AS "Length (ft)",
         "Owner",
-        "Contact",
+        "Online Form",
+        "Email",
         "Phone"
       FROM
         "Roads"."roads" r
@@ -187,7 +189,8 @@ pipes:
           "geometry",
           "Length (ft)",
           "Owner",
-          "Contact",
+          "Online Form",
+          "Email",
           "Phone"
       FROM "Roads"."roads_clip"
       WHERE "Type" IN ('Interstate Highway')
@@ -214,7 +217,8 @@ pipes:
           "geometry",
           "Length (ft)",
           "Owner",
-          "Contact",
+          "Online Form",
+          "Email",
           "Phone"
       FROM "Roads"."roads_clip"
       WHERE "Type" IN ('US Highway')
@@ -237,7 +241,8 @@ pipes:
           "geometry",
           "Length (ft)",
           "Owner",
-          "Contact",
+          "Online Form",
+          "Email",
           "Phone"
       FROM "Roads"."roads_clip"
       WHERE "Type" IN ('State Road')
@@ -260,7 +265,8 @@ pipes:
           "geometry",
           "Length (ft)",
           "Owner",
-          "Contact",
+          "Online Form",
+          "Email",
           "Phone"
       FROM "Roads"."roads_clip"
       WHERE "Type" IN ('Interstate Highway','US Highway', 'State Road')
@@ -283,7 +289,8 @@ pipes:
           r."geometry",
           r."Length (ft)",
           r."Owner",
-          r."Contact",
+          r."Online Form",
+          r."Email",
           r."Phone",
           string_agg(b.district_num::text, ', ') AS "Council District"
       FROM
@@ -299,7 +306,8 @@ pipes:
           r."geometry",
           r."Length (ft)",
           r."Owner",
-          r."Contact",
+          r."Online Form",
+          r."Email",
           r."Phone"
 
 - connector: "sql:bwg"
@@ -320,7 +328,8 @@ pipes:
           "geometry",
           "Length (ft)",
           "Owner",
-          "Contact",
+          "Online Form",
+          "Email",
           "Phone"
       FROM "Roads"."roads_clip"
       WHERE "Type" IN ('Municipal Road')
@@ -343,7 +352,8 @@ pipes:
           "geometry",
           "Length (ft)",
           "Owner",
-          "Contact",
+          "Online Form",
+          "Email",
           "Phone"
       FROM "Roads"."roads_clip"
       WHERE "Type" IN ('Subdivision')
@@ -366,7 +376,8 @@ pipes:
           "geometry",
           "Length (ft)",
           "Owner",
-          "Contact",
+          "Online Form",
+          "Email",
           "Phone"
       FROM "Roads"."roads_clip"
       WHERE "Type" IN ('Private Drive')

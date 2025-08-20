@@ -40,65 +40,6 @@ def setup():
     return True, "Success"
 
 
-def register(pipe: mrsm.Pipe) -> dict[str, Any]:
-    """Return the default parameters for a pipe."""
-    if pipe.metric_key == 'fatalities':
-        return {
-            'columns': {
-                'datetime': 'datetime',
-                'crash_number': 'crash_number',
-                'victim_mode': 'victim_mode',
-            },
-            'indices': {
-                'iac': 'iac',
-            },
-            'dtypes': {
-                'base_distance_offset': 'numeric',
-                'crash_number': 'Int64',
-                'decimal_degrees_longitude': 'numeric[12,9]',
-                'decimal_degrees_latitude': 'numeric[12,9]',
-                'latitude': 'Int64',
-                'longitude': 'Int64',
-                'lat_degrees': 'Int64',
-                'lat_minutes': 'numeric',
-                'lat_seconds': 'numeric',
-                'lon_degrees': 'Int64',
-                'lon_minutes': 'numeric',
-                'lon_seconds': 'numeric',
-            },
-        }
-    return {
-        'columns': {
-            'datetime': 'CrashDate',
-            'accident_number': 'AccidentNumber',
-            'object_id': 'OBJECTID',
-        },
-        'indices': {
-            'county': 'County',
-        },
-        'dtypes': {
-            'X': 'float64',
-            'Y': 'float64',
-            'OBJECTID': 'Int64',
-            'AccidentNumber': 'Int64',
-            'CrashDate': 'datetime64[ns]',
-            'hour': 'Int64',
-            'NumberOfUnits': 'Int64',
-            'NumberOfFatalities': 'Int64',
-            'NumberOfInjuries': 'Int64',
-            'Possible_Injuries': 'Int64',
-            'Suspected_Minor_Injuries': 'Int64',
-            'Suspected_Serious_Injuries': 'Int64',
-            'Latitude': 'numeric',
-            'Longitude': 'numeric',
-            'CMV': 'Int64',
-            'TotalNumberOfOccupants': 'Int64',
-            'Year': 'Int64',
-            'MonthNumber': 'Int64',
-        },
-    }
-
-
 def fetch(pipe: mrsm.Pipe, **kwargs) -> 'pd.DataFrame':
     """
     Fetch the 2017 to 2021 collisions data.

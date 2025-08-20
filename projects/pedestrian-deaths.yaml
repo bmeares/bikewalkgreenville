@@ -8,17 +8,17 @@ plugins_dir:
 
 pipes:
 
-- connector: plugin:scdps
-  metric: collisions
-  location: sc
-  parameters:
-    columns:
-       accident_number: AccidentNumber
-       datetime: CrashDate
-       object_id: OBJECTID
-    indices:
-      county: County
-    schema: "SCDPS"
+# - connector: plugin:scdps
+#   metric: collisions
+#   location: sc
+#   parameters:
+#     columns:
+#        accident_number: AccidentNumber
+#        datetime: CrashDate
+#        object_id: OBJECTID
+#     indices:
+#       county: County
+#     schema: "SCDPS"
 
 - connector: plugin:scdps
   metric: UNITS
@@ -55,199 +55,334 @@ pipes:
     schema: SCDPS
     target: LOCATION
     columns:
-      datetime: "date"
-      crash_number: crash_number
+      primary: crash_number
     dtypes:
       crash_number: int
+      date: string
       number_of_units: int
       decimal_degrees_latitude: numeric
       decimal_degrees_longitude: numeric
+      persons_killed: int
+      persons_injured: int
     indices:
       collision_type: collision_type
 
 - connector: sql:bwg
-  metric: collisions
+  metric: crashes
   location: greenville
   parameters:
+    schema: Ped
+    target: crashes
     columns:
-      datetime: CrashDate
-      accident_number: AccidentNumber
+      datetime: timestamp
+      primary: crash_number
     dtypes:
-      geometry: geometry[POINT, 4326]
+      geometry: geometry[point, 4326]
     indices:
-      victim_type: VictimType
-    schema: SCDPS
+      first_harmful_event: first_harmful_event
     sql: |-
-      WITH src AS (
-        SELECT
-          "CrashDate",
-          "AccidentNumber"::INT,
-          "TotalNumberOfOccupants"::INT,
-          "NumberOfUnits"::INT,
-          GREATEST("NumberOfUnits"::INT / GREATEST("TotalNumberOfOccupants"::INT, 1), 1) * 10 AS "NumberOfUnitsSizeScale",
-          "NumberOfInjuries"::INT,
-          GREATEST("NumberOfInjuries"::INT, 1) * 10 AS "NumberOfInjuriesSizeScale",
-          "NumberOfFatalities"::INT,
-          GREATEST("NumberOfFatalities"::INT, 1) * 10 AS "NumberOfFatalitiesSizeScale",
-          CASE
-            WHEN "FirstHarmfulEvent" = 'Pedestrian' THEN 'Pedestrian'
-            WHEN "MostHarmfulEvent" = 'Pedestrian' THEN 'Pedestrian'
-            WHEN "FirstHarmfulEvent" = 'Pedalcycle' THEN 'Pedalcycle'
-            WHEN "MostHarmfulEvent" = 'Pedalcycle' THEN 'Pedalcycle'
-          END AS "VictimType",
-          ST_SETSRID(
-            ST_MakePoint("Longitude"::NUMERIC, "Latitude"::NUMERIC),
+      SELECT
+        (TO_TIMESTAMP(date || ' ' || time, 'MM/DD/YY HH24MI') AT TIME ZONE 'US/Eastern') AT TIME ZONE 'UTC' AS "timestamp",
+        l.crash_number,
+        l.collision_type,
+        l.persons_killed::INT AS persons_killed,
+        l.persons_injured::INT AS persons_injured,
+        l.traffic_control_type,
+        l.junction_type,
+        l.lighting_conditions,
+        l.weather_conditions,
+        l.road_condition,
+        l.first_harmful_event,
+        CASE
+          WHEN decimal_degrees_longitude = 0 THEN NULL
+          ELSE ST_SETSRID(
+            ST_MakePoint(l."decimal_degrees_longitude"::NUMERIC, l."decimal_degrees_latitude"::NUMERIC),
             4326
-          ) AS "geometry"
-        FROM {{Pipe('plugin:scdps', 'collisions', 'sc')}}
-        WHERE
-          "County" = 'Greenville'
-          AND (
-            "FirstHarmfulEvent" IN ('Pedestrian', 'Pedalcycle')
-            OR "MostHarmfulEvent" IN ('Pedestrian', 'Pedalcycle')
           )
-          AND NOT ("FirstHarmfulEvent" = 'Pedestrian' AND "MostHarmfulEvent" = 'Pedalcycle')
-          AND "MostHarmfulEvent" != 'Spill (Two-Wheeled Vehicle)'
-        )
-        SELECT
-          "CrashDate",
-          "AccidentNumber",
-          "TotalNumberOfOccupants",
-          "NumberOfUnits",
-          "NumberOfUnitsSizeScale",
-          "NumberOfInjuries",
-          "NumberOfInjuriesSizeScale",
-          "NumberOfFatalities",
-          "NumberOfFatalitiesSizeScale",
-          "VictimType",
-          ST_Intersection(src."geometry", ST_Transform(b."geometry", 4326)) AS "geometry"
-        FROM src
-        INNER JOIN "Boundaries"."boundaries_greenville_county" AS b
-          ON ST_Intersects(ST_Transform(b."geometry", 4326), src."geometry")
+        END AS "geometry"
+      FROM "SCDPS"."LOCATION" AS l
 
-- connector: sql:bwg
-  metric: collisions
-  location: pedestrian
+- connector: "sql:bwg"
+  metric: "crashes"
+  location: "pedestrian"
   parameters:
+    schema: Ped
+    target: crashes_pedestrian
     columns:
-      datetime: "CrashDate"
-      accident_number: "AccidentNumber"
+      datetime: timestamp
+      primary: crash_number
     dtypes:
-      geometry: geometry[POINT, 4326]
-    schema: SCDPS
+      geometry: geometry[Point, 4326]
     sql: |-
       SELECT *
-      FROM {{Pipe('sql:bwg', 'collisions', 'greenville', instance='sql:bwg')}}
-      WHERE "VictimType" = 'Pedestrian'
+      FROM {{ Pipe('sql:bwg', 'crashes', 'greenville') }}
+      WHERE first_harmful_event = 'Pedestrian'
 
-- connector: sql:bwg
-  metric: collisions
-  location: pedalcycle
+- connector: "sql:bwg"
+  metric: "crashes"
+  location: "pedalcycle"
   parameters:
+    schema: Ped
+    target: crashes_pedalcycle
     columns:
-      datetime: "CrashDate"
-      accident_number: "AccidentNumber"
+      datetime: timestamp
+      primary: crash_number
     dtypes:
-      geometry: geometry[POINT, 4326]
-    schema: SCDPS
+      geometry: geometry[Point, 4326]
     sql: |-
       SELECT *
-      FROM {{Pipe('sql:bwg', 'collisions', 'greenville', instance='sql:bwg')}}
-      WHERE "VictimType" = 'Pedalcycle'
+      FROM {{ Pipe('sql:bwg', 'crashes', 'greenville') }}
+      WHERE first_harmful_event = 'Pedalcycle'
 
-- connector: sql:bwg
-  metric: fatalities
-  location: pedestrian
+- connector: "sql:bwg"
+  metric: "fatalities"
+  location: "pedestrian"
   parameters:
+    schema: Ped
+    target: fatalities_pedestrian
     columns:
-      datetime: "CrashDate"
-      accident_number: "AccidentNumber"
-    dtypes:
-      geometry: geometry[POINT, 4326]
-    schema: SCDPS
+      datetime: timestamp
+      primary: crash_number
+    dtype:
+      geometry: geometry[Point, 4326]
     sql: |-
       SELECT *
-      FROM {{Pipe('sql:bwg', 'collisions', 'pedestrian', instance='sql:bwg')}}
-      WHERE "NumberOfFatalities" > 0
+      FROM {{ Pipe('sql:bwg', 'crashes', 'pedestrian') }}
+      WHERE persons_killed > 0
 
-- connector: sql:bwg
-  metric: fatalities
-  location: pedalcycle 
+- connector: "sql:bwg"
+  metric: "fatalities"
+  location: "pedalcycle"
   parameters:
+    schema: Ped
+    target: fatalities_pedalcycle
     columns:
-      datetime: "CrashDate"
-      accident_number: "AccidentNumber"
-    dtypes:
-      geometry: geometry[POINT, 4326]
-    schema: SCDPS
+      datetime: timestamp
+      primary: crash_number
+    dtype:
+      geometry: geometry[point, 4326]
     sql: |-
       SELECT *
-      FROM {{Pipe('sql:bwg', 'collisions', 'pedalcycle', instance='sql:bwg')}}
-      WHERE "NumberOfFatalities" > 0
+      FROM {{ Pipe('sql:bwg', 'crashes', 'pedalcycle') }}
+      WHERE persons_killed > 0
 
-- connector: sql:bwg
-  metric: injuries
-  location: pedestrian
+- connector: "sql:bwg"
+  metric: "injuries"
+  location: "pedestrian"
   parameters:
+    schema: Ped
+    target: injuries_pedestrian
     columns:
-      datetime: CrashDate
-      accident_number: AccidentNumber
-    dtypes:
-      geometry: geometry[POINT, 4326]
-    schema: SCDPS
+      datetime: timestamp
+      primary: crash_number
+    dtype:
+      geometry: geometry[Point, 4326]
     sql: |-
       SELECT *
-      FROM {{Pipe('sql:bwg', 'collisions', 'pedestrian', instance='sql:bwg')}}
-      WHERE "NumberOfFatalities" = 0
-        AND "NumberOfInjuries" > 0 
+      FROM {{ Pipe('sql:bwg', 'crashes', 'pedestrian') }}
+      WHERE persons_injured > 0
 
-- connector: sql:bwg
-  metric: injuries
-  location: pedalcycle 
+- connector: "sql:bwg"
+  metric: "injuries"
+  location: "pedalcycle"
   parameters:
+    schema: Ped
+    target: injuries_pedalcycle
     columns:
-      datetime: CrashDate
-      accident_number: AccidentNumber
-    dtypes:
-      geometry: geometry[POINT, 4326]
-    schema: SCDPS
+      datetime: timestamp
+      primary: crash_number
+    dtype:
+      geometry: geometry[Point, 4326]
     sql: |-
       SELECT *
-      FROM {{Pipe('sql:bwg', 'collisions', 'pedalcycle', instance='sql:bwg')}}
-      WHERE "NumberOfFatalities" = 0
-        AND "NumberOfInjuries" > 0 
+      FROM {{ Pipe('sql:bwg', 'crashes', 'pedalcycle') }}
+      WHERE persons_injured > 0
 
-- connector: sql:bwg
-  metric: close_calls
-  location: pedestrian
-  parameters:
-    columns:
-      datetime: CrashDate
-      accident_number: AccidentNumber
-    dtypes:
-      geometry: geometry[POINT, 4326]
-    schema: SCDPS
-    sql: |-
-      SELECT *
-      FROM {{Pipe('sql:bwg', 'collisions', 'pedestrian', instance='sql:bwg')}}
-      WHERE "NumberOfFatalities" = 0
-        AND "NumberOfInjuries" = 0 
+######## 2017 ##########
 
-- connector: sql:bwg
-  metric: close_calls
-  location: pedalcycle 
-  parameters:
-    columns:
-      datetime: CrashDate
-      accident_number: AccidentNumber
-    dtypes:
-      geometry: geometry[POINT, 4326]
-    schema: SCDPS
-    sql: |-
-      SELECT *
-      FROM {{Pipe('sql:bwg', 'collisions', 'pedalcycle', instance='sql:bwg')}}
-      WHERE "NumberOfFatalities" = 0
-        AND "NumberOfInjuries" = 0 
+# - connector: sql:bwg
+#   metric: collisions
+#   location: greenville
+#   parameters:
+#     columns:
+#       datetime: CrashDate
+#       accident_number: AccidentNumber
+#     dtypes:
+#       geometry: geometry[POINT, 4326]
+#     indices:
+#       victim_type: VictimType
+#     schema: SCDPS
+#     sql: |-
+#       WITH src AS (
+#         SELECT
+#           "CrashDate",
+#           "AccidentNumber"::INT,
+#           "TotalNumberOfOccupants"::INT,
+#           "NumberOfUnits"::INT,
+#           GREATEST("NumberOfUnits"::INT / GREATEST("TotalNumberOfOccupants"::INT, 1), 1) * 10 AS "NumberOfUnitsSizeScale",
+#           "NumberOfInjuries"::INT,
+#           GREATEST("NumberOfInjuries"::INT, 1) * 10 AS "NumberOfInjuriesSizeScale",
+#           "NumberOfFatalities"::INT,
+#           GREATEST("NumberOfFatalities"::INT, 1) * 10 AS "NumberOfFatalitiesSizeScale",
+#           CASE
+#             WHEN "FirstHarmfulEvent" = 'Pedestrian' THEN 'Pedestrian'
+#             WHEN "MostHarmfulEvent" = 'Pedestrian' THEN 'Pedestrian'
+#             WHEN "FirstHarmfulEvent" = 'Pedalcycle' THEN 'Pedalcycle'
+#             WHEN "MostHarmfulEvent" = 'Pedalcycle' THEN 'Pedalcycle'
+#           END AS "VictimType",
+#           ST_SETSRID(
+#             ST_MakePoint("Longitude"::NUMERIC, "Latitude"::NUMERIC),
+#             4326
+#           ) AS "geometry"
+#         FROM {{Pipe('plugin:scdps', 'collisions', 'sc')}}
+#         WHERE
+#           "County" = 'Greenville'
+#           AND (
+#             "FirstHarmfulEvent" IN ('Pedestrian', 'Pedalcycle')
+#             OR "MostHarmfulEvent" IN ('Pedestrian', 'Pedalcycle')
+#           )
+#           AND NOT ("FirstHarmfulEvent" = 'Pedestrian' AND "MostHarmfulEvent" = 'Pedalcycle')
+#           AND "MostHarmfulEvent" != 'Spill (Two-Wheeled Vehicle)'
+#         )
+#         SELECT
+#           "CrashDate",
+#           "AccidentNumber",
+#           "TotalNumberOfOccupants",
+#           "NumberOfUnits",
+#           "NumberOfUnitsSizeScale",
+#           "NumberOfInjuries",
+#           "NumberOfInjuriesSizeScale",
+#           "NumberOfFatalities",
+#           "NumberOfFatalitiesSizeScale",
+#           "VictimType",
+#           ST_Intersection(src."geometry", ST_Transform(b."geometry", 4326)) AS "geometry"
+#         FROM src
+#         INNER JOIN "Boundaries"."boundaries_greenville_county" AS b
+#           ON ST_Intersects(ST_Transform(b."geometry", 4326), src."geometry")
+
+# - connector: sql:bwg
+#   metric: collisions
+#   location: pedestrian
+#   parameters:
+#     columns:
+#       datetime: "CrashDate"
+#       accident_number: "AccidentNumber"
+#     dtypes:
+#       geometry: geometry[POINT, 4326]
+#     schema: SCDPS
+#     sql: |-
+#       SELECT *
+#       FROM {{Pipe('sql:bwg', 'collisions', 'greenville', instance='sql:bwg')}}
+#       WHERE "VictimType" = 'Pedestrian'
+
+# - connector: sql:bwg
+#   metric: collisions
+#   location: pedalcycle
+#   parameters:
+#     columns:
+#       datetime: "CrashDate"
+#       accident_number: "AccidentNumber"
+#     dtypes:
+#       geometry: geometry[POINT, 4326]
+#     schema: SCDPS
+#     sql: |-
+#       SELECT *
+#       FROM {{Pipe('sql:bwg', 'collisions', 'greenville', instance='sql:bwg')}}
+#       WHERE "VictimType" = 'Pedalcycle'
+
+# - connector: sql:bwg
+#   metric: fatalities
+#   location: pedestrian
+#   parameters:
+#     columns:
+#       datetime: "CrashDate"
+#       accident_number: "AccidentNumber"
+#     dtypes:
+#       geometry: geometry[POINT, 4326]
+#     schema: SCDPS
+#     sql: |-
+#       SELECT *
+#       FROM {{Pipe('sql:bwg', 'collisions', 'pedestrian', instance='sql:bwg')}}
+#       WHERE "NumberOfFatalities" > 0
+
+# - connector: sql:bwg
+#   metric: fatalities
+#   location: pedalcycle 
+#   parameters:
+#     columns:
+#       datetime: "CrashDate"
+#       accident_number: "AccidentNumber"
+#     dtypes:
+#       geometry: geometry[POINT, 4326]
+#     schema: SCDPS
+#     sql: |-
+#       SELECT *
+#       FROM {{Pipe('sql:bwg', 'collisions', 'pedalcycle', instance='sql:bwg')}}
+#       WHERE "NumberOfFatalities" > 0
+
+# - connector: sql:bwg
+#   metric: injuries
+#   location: pedestrian
+#   parameters:
+#     columns:
+#       datetime: CrashDate
+#       accident_number: AccidentNumber
+#     dtypes:
+#       geometry: geometry[POINT, 4326]
+#     schema: SCDPS
+#     sql: |-
+#       SELECT *
+#       FROM {{Pipe('sql:bwg', 'collisions', 'pedestrian', instance='sql:bwg')}}
+#       WHERE "NumberOfFatalities" = 0
+#         AND "NumberOfInjuries" > 0 
+
+# - connector: sql:bwg
+#   metric: injuries
+#   location: pedalcycle 
+#   parameters:
+#     columns:
+#       datetime: CrashDate
+#       accident_number: AccidentNumber
+#     dtypes:
+#       geometry: geometry[POINT, 4326]
+#     schema: SCDPS
+#     sql: |-
+#       SELECT *
+#       FROM {{Pipe('sql:bwg', 'collisions', 'pedalcycle', instance='sql:bwg')}}
+#       WHERE "NumberOfFatalities" = 0
+#         AND "NumberOfInjuries" > 0 
+
+# - connector: sql:bwg
+#   metric: close_calls
+#   location: pedestrian
+#   parameters:
+#     columns:
+#       datetime: CrashDate
+#       accident_number: AccidentNumber
+#     dtypes:
+#       geometry: geometry[POINT, 4326]
+#     schema: SCDPS
+#     sql: |-
+#       SELECT *
+#       FROM {{Pipe('sql:bwg', 'collisions', 'pedestrian', instance='sql:bwg')}}
+#       WHERE "NumberOfFatalities" = 0
+#         AND "NumberOfInjuries" = 0 
+
+# - connector: sql:bwg
+#   metric: close_calls
+#   location: pedalcycle 
+#   parameters:
+#     columns:
+#       datetime: CrashDate
+#       accident_number: AccidentNumber
+#     dtypes:
+#       geometry: geometry[POINT, 4326]
+#     schema: SCDPS
+#     sql: |-
+#       SELECT *
+#       FROM {{Pipe('sql:bwg', 'collisions', 'pedalcycle', instance='sql:bwg')}}
+#       WHERE "NumberOfFatalities" = 0
+#         AND "NumberOfInjuries" = 0 
 
 config:
   meerschaum:
