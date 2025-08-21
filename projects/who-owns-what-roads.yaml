@@ -40,7 +40,7 @@ pipes:
         (30850, 1374, 'City of Greenville', 'cares@greenvillesc.gov', 'https://survey123.arcgis.com/share/daf25398c6254883aab80a31c7e142ce', '(864) 232-2273'),
         (30985, 1374, 'City of Greer', 'public-services@cityofgreersc.gov', 'https://gree.csqrcloud.com/community-etrakit/CRM/issue.aspx', '(864) 848‐2184'),
         (45115, 1374, 'City of Mauldin', 'mauldinpublicworks@mauldincitysc.com', 'https://cityofmauldin.org/service-request-form/', '(864) 289-8904'),
-        (27070, 1374, 'City of Fountain Inn', 'N/A', 'https://portal.iworq.net/FOUNTAININN/new-case/400/2473', '(864) 409-3310'),
+        (27070, 1374, 'City of Fountain Inn', 'fred.wilson@fountaininn.org', 'https://simpsonvillesc.mycusthelp.com/WEBAPP/_rs/(S(kv5landczq0lgxpr1apw4zis))/Requestselect.aspx?sSessionID=', '(864) 531-0644'),
         (66580, 1374, 'City of Simpsonville', 'info@simpsonville.com', 'https://www.simpsonville.com/contact/', '(864) 967-9531'),
         (72430, 1374, 'City of Travelers Rest', 'tate@travelersrestsc.com', 'https://travelersrestsc.com/businesses/departments/public-works/report-a-problem/', '(864) 834-8740')
       ) AS t ("JCODE", "FEAT_CODE", "owner", "email", "url", "phone")
