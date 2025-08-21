@@ -66,6 +66,7 @@ pipes:
       persons_injured: int
     indices:
       collision_type: collision_type
+      primary_contributing_factor: primary_contributing_factor
 
 - connector: sql:bwg
   metric: crashes
@@ -80,6 +81,7 @@ pipes:
       geometry: geometry[point, 4326]
     indices:
       first_harmful_event: first_harmful_event
+      primary_contributing_factor: primary_contributing_factor
     sql: |-
       SELECT
         (TO_TIMESTAMP(date || ' ' || time, 'MM/DD/YY HH24MI') AT TIME ZONE 'US/Eastern') AT TIME ZONE 'UTC' AS "timestamp",
@@ -93,6 +95,7 @@ pipes:
         l.weather_conditions,
         l.road_condition,
         l.first_harmful_event,
+        l.primary_contributing_factor,
         CASE
           WHEN decimal_degrees_longitude = 0 THEN NULL
           ELSE ST_SETSRID(
@@ -116,7 +119,8 @@ pipes:
     sql: |-
       SELECT *
       FROM {{ Pipe('sql:bwg', 'crashes', 'greenville') }}
-      WHERE first_harmful_event = 'Pedestrian'
+      WHERE "first_harmful_event" = 'Pedestrian'
+        OR "primary_contributing_factor" = 'Improper Crossing'
 
 - connector: "sql:bwg"
   metric: "crashes"
