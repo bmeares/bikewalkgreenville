@@ -6,6 +6,9 @@ plugins_dir:
 - ../.installed_plugins
 - ../plugins
 
+plugins:
+- "clone@api:mrsm"
+
 pipes:
 
 # - connector: plugin:scdps
