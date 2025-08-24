@@ -1,0 +1,551 @@
+#! /usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+Implement the plugin 'felt'.
+
+See the Writing Plugins guide for more information:
+https://meerschaum.io/reference/plugins/writing-plugins/
+"""
+
+from datetime import datetime, timedelta, timezone
+from typing import Any, Union, List, Dict
+
+import meerschaum as mrsm
+from meerschaum.config import get_plugin_config, write_plugin_config
+from meerschaum.connectors import InstanceConnector, make_connector
+
+__version__ = '0.0.1'
+
+required: list[str] = ['felt-python']
+
+
+def setup(**kwargs) -> mrsm.SuccessTuple:
+    """Executed during installation and `mrsm setup plugin felt`."""
+    return True, "Success"
+
+
+@make_connector
+class FeltConnector(InstanceConnector):
+    """Implement 'felt' connectors."""
+
+    REQUIRED_ATTRIBUTES: list[str] = ['token', 'map_id', 'instance_keys']
+    OPTIONAL_ATTRIBUTES: list[str] = ['project_id']
+
+    @property
+    def instance_connector(self):
+        """
+        Return the instance connector used to store metadata for the pipes.
+        """
+        return mrsm.get_connector(self.instance_keys)
+
+    def fetch(
+        self,
+        pipe: mrsm.Pipe,
+        begin: datetime | None = None,
+        end: datetime | None = None,
+        **kwargs
+    ):
+        """Return or yield dataframes."""
+        docs = []
+        # populate docs with dictionaries (rows).
+        return docs
+
+    def register_pipe(
+        self,
+        pipe: mrsm.Pipe,
+        debug: bool = False,
+        **kwargs: Any
+    ) -> mrsm.SuccessTuple:
+        """
+        Insert the pipe's attributes into the internal `pipes` table.
+
+        Parameters
+        ----------
+        pipe: mrsm.Pipe
+            The pipe to be registered.
+
+        Returns
+        -------
+        A `SuccessTuple` of the result.
+        """
+        return self.instance_connector.register_pipe(pipe, debug=debug, **kwargs)
+
+    def get_pipe_attributes(
+        self,
+        pipe: mrsm.Pipe,
+        debug: bool = False,
+        **kwargs: Any
+    ) -> dict[str, Any]:
+        """
+        Return the pipe's document from the internal `pipes` collection.
+
+        Parameters
+        ----------
+        pipe: mrsm.Pipe
+            The pipe whose attributes should be retrieved.
+
+        Returns
+        -------
+        The document that matches the keys of the pipe.
+        """
+        return self.instance_connector.get_pipe_attributes(pipe, debug=debug, **kwargs)
+
+    def get_pipe_id(
+        self,
+        pipe: mrsm.Pipe,
+        debug: bool = False,
+        **kwargs: Any
+    ) -> str | int | None:
+        """
+        Return the ID for the pipe if it exists.
+
+        Parameters
+        ----------
+        pipe: mrsm.Pipe
+            The pipe whose ID to fetch.
+
+        Returns
+        -------
+        The ID for the pipe or `None`.
+        """
+        return self.instance_connector.get_pipe_id(pipe, debug=debug, **kwargs)
+
+    def edit_pipe(
+        self,
+        pipe: mrsm.Pipe,
+        debug: bool = False,
+        **kwargs: Any
+    ) -> mrsm.SuccessTuple:
+        """
+        Edit the attributes of the pipe.
+
+        Parameters
+        ----------
+        pipe: mrsm.Pipe
+            The pipe whose in-memory parameters must be persisted.
+
+        Returns
+        -------
+        A `SuccessTuple` indicating success.
+        """
+        return self.instance_connector.edit_pipe(pipe, debug=debug, **kwargs)
+
+    def delete_pipe(
+        self,
+        pipe: mrsm.Pipe,
+        debug: bool = False,
+        **kwargs: Any
+    ) -> mrsm.SuccessTuple:
+        """
+        Delete a pipe's registration from the `pipes` collection.
+
+        Parameters
+        ----------
+        pipe: mrsm.Pipe
+            The pipe to be deleted.
+
+        Returns
+        -------
+        A `SuccessTuple` indicating success.
+        """
+        return self.instance_connector.delete_pipe(pipe, debug=debug, **kwargs)
+
+    def fetch_pipes_keys(
+        self,
+        connector_keys: list[str] | None = None,
+        metric_keys: list[str] | None = None,
+        location_keys: list[str] | None = None,
+        tags: list[str] | None = None,
+        debug: bool = False,
+        **kwargs: Any
+    ) -> list[tuple[str, str, str]]:
+        """
+        Return a list of tuples for the registered pipes' keys according to the provided filters.
+
+        Parameters
+        ----------
+        connector_keys: list[str] | None, default None
+            The keys passed via `-c`.
+
+        metric_keys: list[str] | None, default None
+            The keys passed via `-m`.
+
+        location_keys: list[str] | None, default None
+            The keys passed via `-l`.
+
+        tags: List[str] | None, default None
+            Tags passed via `--tags` which are stored under `parameters:tags`.
+
+        Returns
+        -------
+        A list of connector, metric, and location keys in tuples.
+        You may return the string "None" for location keys in place of nulls.
+
+        Examples
+        --------
+        >>> import meerschaum as mrsm
+        >>> conn = mrsm.get_connector('example:demo')
+        >>> 
+        >>> pipe_a = mrsm.Pipe('a', 'demo', tags=['foo'], instance=conn)
+        >>> pipe_b = mrsm.Pipe('b', 'demo', tags=['bar'], instance=conn)
+        >>> pipe_a.register()
+        >>> pipe_b.register()
+        >>> 
+        >>> conn.fetch_pipes_keys(['a', 'b'])
+        [('a', 'demo', 'None'), ('b', 'demo', 'None')]
+        >>> conn.fetch_pipes_keys(metric_keys=['demo'])
+        [('a', 'demo', 'None'), ('b', 'demo', 'None')]
+        >>> conn.fetch_pipes_keys(tags=['foo'])
+        [('a', 'demo', 'None')]
+        >>> conn.fetch_pipes_keys(location_keys=[None])
+        [('a', 'demo', 'None'), ('b', 'demo', 'None')]
+        
+        """
+        return self.instance_connector.fetch_pipes_keys(
+            connector_keys=connector_keys,
+            metric_keys=metric_keys,
+            location_keys=location_keys,
+            tags=tags,
+            debug=debug,
+            **kwargs
+        )
+
+    def get_pipe_layer_id(
+        self,
+        pipe: mrsm.Pipe,
+        check_parameters: bool = True,
+        save: bool = True,
+        debug: bool = False,
+    ) -> Union[str, None]:
+        """
+        Return the pipe's layer ID (either from `parameters` or deduced from the `target`).
+        """
+        felt_cf = pipe.parameters.get('felt', {}) if check_parameters else {}
+        configured_layer_id = felt_cf.get('layer_id', None)
+        if configured_layer_id:
+            return configured_layer_id
+
+        target = pipe.target
+
+        felt_python = mrsm.attempt_import('felt_python', venv='felt')
+        layers = felt_python.list_layers(map_id=self.map_id, api_token=self.token)
+        layer_id = None
+
+        for layer in layers:
+            if layer.get('name') == target:
+                layer_id = layer['id']
+                break
+
+        if not layer_id:
+            return None
+
+        if save and check_parameters:
+            pipe.update_parameters({'felt': {'layer_id': layer_id}})
+
+        return layer_id
+
+    def pipe_exists(
+        self,
+        pipe: mrsm.Pipe,
+        debug: bool = False,
+        **kwargs: Any
+    ) -> bool:
+        """
+        Check whether a pipe's target table exists.
+
+        Parameters
+        ----------
+        pipe: mrsm.Pipe
+            The pipe to check whether its table exists.
+
+        Returns
+        -------
+        A `bool` indicating the table exists.
+        """
+        return (
+            self.get_pipe_layer_id(
+                pipe,
+                check_parameters=False,
+                save=False,
+                debug=debug,
+            ) is not None
+        )
+
+    def drop_pipe(
+        self,
+        pipe: mrsm.Pipe,
+        debug: bool = False,
+        **kwargs: Any
+    ) -> mrsm.SuccessTuple:
+        """
+        Drop a pipe's collection if it exists.
+
+        Parameters
+        ----------
+        pipe: mrsm.Pipe
+            The pipe to be dropped.
+
+        Returns
+        -------
+        A `SuccessTuple` indicating success.
+        """
+        layer_id = self.get_pipe_layer_id(pipe, debug=debug)
+        if layer_id is None:
+            return True, "Nothing to drop."
+
+        felt_python = mrsm.attempt_import('felt_python', venv='felt')
+        try:
+            felt_python.delete_layer(self.map_id, layer_id, self.token)
+        except Exception as e:
+            return False, f"Failed to delete layer '{layer_id}':\n{e}"
+
+        return True, "Success"
+
+    def sync_pipe(
+        self,
+        pipe: mrsm.Pipe,
+        df: 'pd.DataFrame',
+        check_existing: bool = True,
+        debug: bool = False,
+        **kwargs: Any
+    ) -> mrsm.SuccessTuple:
+        """
+        Upsert new documents into the pipe's target table.
+
+        Parameters
+        ----------
+        pipe: mrsm.Pipe
+            The pipe to which the data should be upserted.
+
+        df: pd.DataFrame
+            The data to be synced.
+
+        Returns
+        -------
+        A `SuccessTuple` indicating success.
+        """
+        felt_python = mrsm.attempt_import('felt_python', venv='felt')
+        target = pipe.target
+
+        if not pipe.exists(debug=debug):
+            result = (
+                felt_python.upload_geodataframe(self.map_id, df, target, api_token=self.token)
+                if 'geodataframe' in str(type(df)).lower()
+                else felt_python.upload_dataframe(self.map_id, df, target, api_token=self.token)
+            )
+            mrsm.pprint(result)
+            layer_id = result.get('layer_id')
+            layer_group_id = result.get('layer_group_id')
+            if layer_id and layer_group_id:
+                pipe.update_parameters({
+                    'layer_id': layer_id,
+                    'layer_group_id': layer_group_id,
+                })
+                rowcount = len(df)
+                return True, f"Created layer '{layer_id}' ({rowcount} rows)."
+
+        layer_id = self.get_pipe_layer_id(debug=debug)
+        unseen_df, update_df, delta_df = (
+            pipe.filter_existing(df, debug=debug)
+            if check_existing
+            else df, None, df
+        )
+
+    def clear_pipe(
+        self,
+        pipe: mrsm.Pipe,
+        begin: datetime | int | None = None,
+        end: datetime | int | None = None,
+        params: dict[str, Any] | None = None,
+        debug: bool = False,
+    ) -> mrsm.SuccessTuple:
+        """
+        Delete rows within `begin`, `end`, and `params`.
+
+        Parameters
+        ----------
+        pipe: mrsm.Pipe
+            The pipe whose rows to clear.
+
+        begin: datetime | int | None, default None
+            If provided, remove rows >= `begin`.
+
+        end: datetime | int | None, default None
+            If provided, remove rows < `end`.
+
+        params: dict[str, Any] | None, default None
+            If provided, only remove rows which match the `params` filter.
+
+        Returns
+        -------
+        A `SuccessTuple` indicating success.
+        """
+        ### TODO Write a query to remove rows which match `begin`, `end`, and `params`.
+        return True, "Success"
+
+    def get_pipe_data(
+        self,
+        pipe: mrsm.Pipe,
+        select_columns: list[str] | None = None,
+        omit_columns: list[str] | None = None,
+        begin: datetime | int | None = None,
+        end: datetime | int | None = None,
+        params: dict[str, Any] | None = None,
+        debug: bool = False,
+        **kwargs: Any
+    ) -> Union['pd.DataFrame', None]:
+        """
+        Query a pipe's target table and return the DataFrame.
+
+        Parameters
+        ----------
+        pipe: mrsm.Pipe
+            The pipe with the target table from which to read.
+
+        select_columns: list[str] | None, default None
+            If provided, only select these given columns.
+            Otherwise select all available columns (i.e. `SELECT *`).
+
+        omit_columns: list[str] | None, default None
+            If provided, remove these columns from the selection.
+
+        begin: datetime | int | None, default None
+            The earliest `datetime` value to search from (inclusive).
+
+        end: datetime | int | None, default None
+            The lastest `datetime` value to search from (exclusive).
+
+        params: dict[str | str] | None, default None
+            Additional filters to apply to the query.
+
+        Returns
+        -------
+        The target table's data as a DataFrame.
+        """
+        from meerschaum.utils.dataframe import query_df
+        from meerschaum.config.paths import CACHE_RESOURCES_PATH
+        geopandas = mrsm.attempt_import('geopandas')
+        felt_python = mrsm.attempt_import('felt_python', venv='felt')
+
+        layer_id = self.get_pipe_layer_id(pipe, debug=debug)
+        if layer_id is None:
+            return None
+
+        cache_dir = CACHE_RESOURCES_PATH / 'felt'
+        cache_dir.mkdir(exist_ok=True, parents=True)
+        file_path = cache_dir / (layer_id + '.gpkg')
+        dt_col = pipe.columns.get("datetime", None)
+
+        output_path_str = felt_python.download_layer(self.map_id, layer_id, file_path.as_posix(), self.token)
+        print(f"{output_path_str=}")
+        gdf = gpd.read_file(output_path_str, layer='parsed')
+        return query_df(
+            gdf,
+            begin=begin,
+            end=end,
+            params=params,
+            datetime_column=dt_col,
+            select_columns=select_columns,
+            omit_columns=omit_columns,
+            inplace=True,
+            debug=debug,
+        )
+
+    def get_sync_time(
+        self,
+        pipe: mrsm.Pipe,
+        params: dict[str, Any] | None = None,
+        newest: bool = True,
+        debug: bool = False,
+        **kwargs: Any
+    ) -> datetime | int | None:
+        """
+        Return the most recent value for the `datetime` axis.
+
+        Parameters
+        ----------
+        pipe: mrsm.Pipe
+            The pipe whose collection contains documents.
+
+        params: dict[str, Any] | None, default None
+            Filter certain parameters when determining the sync time.
+
+        newest: bool, default True
+            If `True`, return the maximum value for the column.
+
+        Returns
+        -------
+        The largest `datetime` or `int` value of the `datetime` axis. 
+        """
+        ### TODO write a query to get the largest value for `dt_col`.
+        ### If `newest` is `False`, return the smallest value.
+        ### Apply the `params` filter in case of multiplexing.
+        return None
+
+    def get_pipe_columns_types(
+        self,
+        pipe: mrsm.Pipe,
+        debug: bool = False,
+        **kwargs: Any
+    ) -> dict[str, str]:
+        """
+        Return the data types for the columns in the target table for data type enforcement.
+
+        Parameters
+        ----------
+        pipe: mrsm.Pipe
+            The pipe whose target table contains columns and data types.
+
+        Returns
+        -------
+        A dictionary mapping columns to data types.
+        """
+        columns_types = {}
+
+        ### Return a dictionary mapping the columns
+        ### to their Pandas dtypes, e.g.:
+        ### `{'foo': 'int64'`}`
+        ### or to SQL-style dtypes, e.g.:
+        ### `{'bar': 'INT'}`
+        return columns_types
+
+    def get_pipe_rowcount(
+        self,
+        pipe: mrsm.Pipe,
+        begin: datetime | int | None = None,
+        end: datetime | int | None = None,
+        params: dict[str, Any] | None = None,
+        remote: bool = False,
+        debug: bool = False,
+        **kwargs: Any
+    ) -> int:
+        """
+        Return the rowcount for the pipe's table.
+
+        Parameters
+        ----------
+        pipe: mrsm.Pipe
+            The pipe whose table should be counted.
+
+        begin: datetime | int | None, default None
+            If provided, only count rows >= `begin`.
+
+        end: datetime | int | None, default None
+            If provided, only count rows < `end`.
+
+        params: dict[str, Any] | None
+            If provided, only count rows othat match the `params` filter.
+
+        remote: bool, default False
+            If `True`, return the rowcount for the pipe's fetch definition.
+            In this case, `self` refers to `Pipe.connector`, not `Pipe.instance_connector`.
+
+        Returns
+        -------
+        The rowcount for this pipe's table according the given parameters.
+        """
+        ### TODO write a query to count how many rows exist in `table_name` according to the filters.
+        table_name = pipe.target
+        count = 0
+        return count

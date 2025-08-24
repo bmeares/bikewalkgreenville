@@ -202,6 +202,73 @@ pipes:
       FROM {{ Pipe('sql:bwg', 'crashes', 'pedalcycle') }}
       WHERE persons_injured > 0
 
+### Felt layers
+
+- connector: "plugin:clone"
+  metric: "fatalities"
+  location: "pedestrian"
+  instance: "sql:pedestrian"
+  parameters:
+    target: "{{ Pipe('sql:bwg', 'fatalities', 'pedestrian', instance='sql:bwg').target }}"
+    columns: "{{ Pipe('sql:bwg', 'fatalities', 'pedestrian', instance='sql:bwg').columns }}"
+    dtypes: "{{ Pipe('sql:bwg', 'fatalities', 'pedestrian', instance='sql:bwg').dtypes }}"
+    source:
+      pipe:
+        connector: "sql:bwg"
+        metric: "fatalities"
+        location: "pedestrian"
+      chunk_minutes: 5259600
+      skip_pipe_keys: true
+
+- connector: "plugin:clone"
+  metric: "fatalities"
+  location: "pedalcycle"
+  instance: "sql:pedestrian"
+  parameters:
+    target: "{{ Pipe('sql:bwg', 'fatalities', 'pedalcycle', instance='sql:bwg').target }}"
+    columns: "{{ Pipe('sql:bwg', 'fatalities', 'pedalcycle', instance='sql:bwg').columns }}"
+    dtypes: "{{ Pipe('sql:bwg', 'fatalities', 'pedalcycle', instance='sql:bwg').dtypes }}"
+    source:
+      pipe:
+        connector: "sql:bwg"
+        metric: "fatalities"
+        location: "pedalcycle"
+      chunk_minutes: 5259600
+      skip_pipe_keys: true
+
+
+- connector: "plugin:clone"
+  metric: "injuries"
+  location: "pedestrian"
+  instance: "sql:pedestrian"
+  parameters:
+    target: "{{ Pipe('sql:bwg', 'injuries', 'pedestrian', instance='sql:bwg').target }}"
+    columns: "{{ Pipe('sql:bwg', 'injuries', 'pedestrian', instance='sql:bwg').columns }}"
+    dtypes: "{{ Pipe('sql:bwg', 'injuries', 'pedestrian', instance='sql:bwg').dtypes }}"
+    source:
+      pipe:
+        connector: "sql:bwg"
+        metric: "injuries"
+        location: "pedestrian"
+      chunk_minutes: 5259600
+      skip_pipe_keys: true
+
+- connector: "plugin:clone"
+  metric: "injuries"
+  location: "pedalcycle"
+  instance: "sql:pedestrian"
+  parameters:
+    target: "{{ Pipe('sql:bwg', 'injuries', 'pedalcycle', instance='sql:bwg').target }}"
+    columns: "{{ Pipe('sql:bwg', 'injuries', 'pedalcycle', instance='sql:bwg').columns }}"
+    dtypes: "{{ Pipe('sql:bwg', 'injuries', 'pedalcycle', instance='sql:bwg').dtypes }}"
+    source:
+      pipe:
+        connector: "sql:bwg"
+        metric: "injuries"
+        location: "pedalcycle"
+      chunk_minutes: 5259600
+      skip_pipe_keys: true
+
 ######## 2017 ##########
 
 # - connector: sql:bwg
@@ -394,6 +461,23 @@ config:
     connectors:
       sql:
         bwg: MRSM{meerschaum:connectors:sql:bwg}
+        felt:
+          username: MRSM{meerschaum:connectors:sql:bwg:username}
+          password: MRSM{meerschaum:connectors:sql:bwg:password}
+          port: MRSM{meerschaum:connectors:sql:bwg:port}
+          host: MRSM{meerschaum:connectors:sql:bwg:host}
+          database: MRSM{meerschaum:connectors:sql:bwg:database}
+          flavor: MRSM{meerschaum:connectors:sql:bwg:flavor}
+          schema: felt
+        pedestrian:
+          flavor: sqlite
+          database: '{MRSM_ROOT_DIR}/../output/pedestrian.sqlite'
+      felt:
+        pedestrian:
+          token: $FELT_API_TOKEN
+          map_id: m9B2snG3gTnSryijc3IW9AVC
+          project_id: 6W9B2V3v9ARKSQ9AV9BH2gLOhA
+          instance_keys: sql:felt
   plugins:
     bwg:
       data_path: '{MRSM_ROOT_DIR}/../data'
