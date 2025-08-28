@@ -114,6 +114,51 @@ pipes:
       WHERE unit_type = 'Pedestrian'
 
 - connector: "sql:bwg"
+  metric: "units"
+  location: "pedalcycle"
+  parameters:
+    schema: "Ped"
+    target: units_pedalcycle
+    columns:
+      crash_number: crash_number
+      unit_number: unit_number
+    dtypes:
+      crash_number: int
+      unit_number: int
+    sql: |-
+      SELECT *
+      FROM {{ Pipe('plugin:scdps', 'UNITS', 'greenville', instance='sql:bwg') }}
+      WHERE unit_type = 'Pedalcycle'
+
+- connector: "sql:bwg"
+  metric: "crash_numbers"
+  location: "pedestrian"
+  parameters:
+    schema: "Ped"
+    target: crash_numbers_pedestrian
+    columns:
+      primary: crash_number
+    dtypes:
+      crash_number: int
+    sql: |-
+      SELECT DISTINCT crash_number
+      FROM {{ Pipe('sql:bwg', 'units', 'pedestrian', instance='sql:bwg') }}
+
+- connector: "sql:bwg"
+  metric: "crash_numbers"
+  location: "pedalcycle"
+  parameters:
+    schema: "Ped"
+    target: crash_numbers_pedalcycle
+    columns:
+      primary: crash_number
+    dtypes:
+      crash_number: int
+    sql: |-
+      SELECT DISTINCT crash_number
+      FROM {{ Pipe('sql:bwg', 'units', 'pedalcycle', instance='sql:bwg') }}
+
+- connector: "sql:bwg"
   metric: "crashes"
   location: "pedestrian"
   parameters:
@@ -125,10 +170,10 @@ pipes:
     dtypes:
       geometry: geometry[Point, 4326]
     sql: |-
-      SELECT *
-      FROM {{ Pipe('sql:bwg', 'crashes', 'greenville', instance='sql:bwg') }}
-      WHERE "first_harmful_event" = 'Pedestrian'
-        OR "primary_contributing_factor" = 'Improper Crossing'
+      SELECT c.*
+      FROM {{ Pipe('sql:bwg', 'crashes', 'greenville', instance='sql:bwg') }} AS c
+      INNER JOIN {{ Pipe('sql:bwg', 'crash_numbers', 'pedestrian') }} AS cn
+        ON c.crash_number = cn.crash_number
 
 - connector: "sql:bwg"
   metric: "crashes"
@@ -142,9 +187,10 @@ pipes:
     dtypes:
       geometry: geometry[Point, 4326]
     sql: |-
-      SELECT *
-      FROM {{ Pipe('sql:bwg', 'crashes', 'greenville', instance='sql:bwg') }}
-      WHERE first_harmful_event = 'Pedalcycle'
+      SELECT c.*
+      FROM {{ Pipe('sql:bwg', 'crashes', 'greenville', instance='sql:bwg') }} AS c
+      INNER JOIN {{ Pipe('sql:bwg', 'crash_numbers', 'pedalcycle') }} AS cn
+        ON c.crash_number = cn.crash_number
 
 - connector: "sql:bwg"
   metric: "fatalities"
