@@ -438,7 +438,6 @@ class FeltConnector(InstanceConnector):
         dt_col = pipe.columns.get("datetime", None)
 
         output_path_str = felt_python.download_layer(self.map_id, layer_id, file_path.as_posix(), self.token)
-        print(f"{output_path_str=}")
         gdf = gpd.read_file(output_path_str, layer='parsed')
         return query_df(
             gdf,

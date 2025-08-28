@@ -11,18 +11,6 @@ plugins:
 
 pipes:
 
-# - connector: plugin:scdps
-#   metric: collisions
-#   location: sc
-#   parameters:
-#     columns:
-#        accident_number: AccidentNumber
-#        datetime: CrashDate
-#        object_id: OBJECTID
-#     indices:
-#       county: County
-#     schema: "SCDPS"
-
 - connector: plugin:scdps
   metric: UNITS
   location: greenville
@@ -109,6 +97,23 @@ pipes:
       FROM "SCDPS"."LOCATION" AS l
 
 - connector: "sql:bwg"
+  metric: "units"
+  location: "pedestrian"
+  parameters:
+    schema: "Ped"
+    target: units_pedestrian
+    columns:
+      crash_number: crash_number
+      unit_number: unit_number
+    dtypes:
+      crash_number: int
+      unit_number: int
+    sql: |-
+      SELECT *
+      FROM {{ Pipe('plugin:scdps', 'UNITS', 'greenville', instance='sql:bwg') }}
+      WHERE unit_type = 'Pedestrian'
+
+- connector: "sql:bwg"
   metric: "crashes"
   location: "pedestrian"
   parameters:
@@ -121,7 +126,7 @@ pipes:
       geometry: geometry[Point, 4326]
     sql: |-
       SELECT *
-      FROM {{ Pipe('sql:bwg', 'crashes', 'greenville') }}
+      FROM {{ Pipe('sql:bwg', 'crashes', 'greenville', instance='sql:bwg') }}
       WHERE "first_harmful_event" = 'Pedestrian'
         OR "primary_contributing_factor" = 'Improper Crossing'
 
@@ -138,7 +143,7 @@ pipes:
       geometry: geometry[Point, 4326]
     sql: |-
       SELECT *
-      FROM {{ Pipe('sql:bwg', 'crashes', 'greenville') }}
+      FROM {{ Pipe('sql:bwg', 'crashes', 'greenville', instance='sql:bwg') }}
       WHERE first_harmful_event = 'Pedalcycle'
 
 - connector: "sql:bwg"
@@ -154,7 +159,7 @@ pipes:
       geometry: geometry[Point, 4326]
     sql: |-
       SELECT *
-      FROM {{ Pipe('sql:bwg', 'crashes', 'pedestrian') }}
+      FROM {{ Pipe('sql:bwg', 'crashes', 'pedestrian', instance='sql:bwg') }}
       WHERE persons_killed > 0
 
 - connector: "sql:bwg"
@@ -170,7 +175,7 @@ pipes:
       geometry: geometry[point, 4326]
     sql: |-
       SELECT *
-      FROM {{ Pipe('sql:bwg', 'crashes', 'pedalcycle') }}
+      FROM {{ Pipe('sql:bwg', 'crashes', 'pedalcycle', instance='sql:bwg') }}
       WHERE persons_killed > 0
 
 - connector: "sql:bwg"
@@ -186,7 +191,7 @@ pipes:
       geometry: geometry[Point, 4326]
     sql: |-
       SELECT *
-      FROM {{ Pipe('sql:bwg', 'crashes', 'pedestrian') }}
+      FROM {{ Pipe('sql:bwg', 'crashes', 'pedestrian', instance='sql:bwg') }}
       WHERE persons_injured > 0
 
 - connector: "sql:bwg"
@@ -202,7 +207,7 @@ pipes:
       geometry: geometry[Point, 4326]
     sql: |-
       SELECT *
-      FROM {{ Pipe('sql:bwg', 'crashes', 'pedalcycle') }}
+      FROM {{ Pipe('sql:bwg', 'crashes', 'pedalcycle', instance='sql:bwg') }}
       WHERE persons_injured > 0
 
 ### Felt layers
@@ -238,7 +243,6 @@ pipes:
         location: "pedalcycle"
       chunk_minutes: 5259600
       skip_pipe_keys: true
-
 
 - connector: "plugin:clone"
   metric: "injuries"

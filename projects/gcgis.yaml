@@ -1,0 +1,41 @@
+project_name: gcgis
+
+root_dir: ../root
+
+plugins_dir:
+- ../.installed_plugins
+- ../plugins
+
+sync:
+  schedule: "daily"
+
+pipes:
+
+- connector: "plugin:greenville-county"
+  metric: "PRISMA Health Swamp Rabbit Trail"
+  parameters:
+    schema: "gcgis"
+    target: "PRISMA Health Swamp Rabbit Trail"
+    greenville-county:
+      layer: "PRISMA Health Swamp Rabbit Trail"
+    columns:
+      section: "SECTION"
+      facility_id: "FACILITYID"
+      feat_code: "FEAT_CODE"
+    dtypes:
+      geometry: "geometry[LINESTRING, 6570]"
+    indices:
+      geometry: "geometry"
+    
+
+config:
+  meerschaum:
+    instance: sql:bwg
+    connectors:
+      sql:
+        bwg: MRSM{meerschaum:connectors:sql:bwg}
+  plugins:
+    bwg:
+      data_path: '{MRSM_ROOT_DIR}/../data'
+
+environment: {}
