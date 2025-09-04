@@ -193,6 +193,25 @@ pipes:
         ON c.crash_number = cn.crash_number
 
 - connector: "sql:bwg"
+  metric: "crashes"
+  location: "vulnerable"
+  parameters:
+    schema: Ped
+    target: crashes_vulnerable
+    columns:
+      datetime: timestamp
+      primary: crash_number
+    dtypes:
+      geometry: geometry[Point, 4326]
+    sql: |-
+      SELECT *
+      FROM {{ Pipe('sql:bwg', 'crashes', 'pedestrian', instance='sql:bwg') }}
+      UNION ALL
+      SELECT *
+      FROM {{ Pipe('sql:bwg', 'crashes', 'pedalcycle', instance='sql:bwg') }}
+      WHERE crash_number NOT IN (SELECT crash_number FROM {{ Pipe('sql:bwg', 'crashes', 'pedestrian', instance='sql:bwg') }})
+
+- connector: "sql:bwg"
   metric: "fatalities"
   location: "pedestrian"
   parameters:
@@ -223,7 +242,26 @@ pipes:
       SELECT *
       FROM {{ Pipe('sql:bwg', 'crashes', 'pedalcycle', instance='sql:bwg') }}
       WHERE persons_killed > 0
-
+ 
+- connector: "sql:bwg"
+  metric: "fatalities"
+  location: "vulnerable"
+  parameters:
+    schema: Ped
+    target: fatalities_vulnerable
+    columns:
+      datetime: timestamp
+      primary: crash_number
+    dtypes:
+      geometry: geometry[Point, 4326]
+    sql: |-
+      SELECT *
+      FROM {{ Pipe('sql:bwg', 'fatalities', 'pedestrian', instance='sql:bwg') }}
+      UNION ALL
+      SELECT *
+      FROM {{ Pipe('sql:bwg', 'fatalities', 'pedalcycle', instance='sql:bwg') }}
+      WHERE crash_number NOT IN (SELECT crash_number FROM {{ Pipe('sql:bwg', 'fatalities', 'pedestrian', instance='sql:bwg') }})
+ 
 - connector: "sql:bwg"
   metric: "injuries"
   location: "pedestrian"
@@ -255,6 +293,78 @@ pipes:
       SELECT *
       FROM {{ Pipe('sql:bwg', 'crashes', 'pedalcycle', instance='sql:bwg') }}
       WHERE persons_injured > 0
+
+- connector: "sql:bwg"
+  metric: "injuries"
+  location: "vulnerable"
+  parameters:
+    schema: Ped
+    target: injuries_vulnerable
+    columns:
+      datetime: timestamp
+      primary: crash_number
+    dtypes:
+      geometry: geometry[Point, 4326]
+    sql: |-
+      SELECT *
+      FROM {{ Pipe('sql:bwg', 'injuries', 'pedestrian', instance='sql:bwg') }}
+      UNION ALL
+      SELECT *
+      FROM {{ Pipe('sql:bwg', 'injuries', 'pedalcycle', instance='sql:bwg') }}
+      WHERE crash_number NOT IN (SELECT crash_number FROM {{ Pipe('sql:bwg', 'injuries', 'pedestrian', instance='sql:bwg') }})
+ 
+- connector: "sql:bwg"
+  metric: "noninjuries"
+  location: "pedestrian"
+  parameters:
+    schema: Ped
+    target: noninjuries_pedestrian
+    columns:
+      datetime: timestamp
+      primary: crash_number
+    dtype:
+      geometry: geometry[Point, 4326]
+    sql: |-
+      SELECT *
+      FROM {{ Pipe('sql:bwg', 'crashes', 'pedestrian', instance='sql:bwg') }}
+      WHERE persons_injured = 0
+        AND persons_killed = 0
+
+- connector: "sql:bwg"
+  metric: "noninjuries"
+  location: "pedalcycle"
+  parameters:
+    schema: Ped
+    target: noninjuries_pedalcycle
+    columns:
+      datetime: timestamp
+      primary: crash_number
+    dtype:
+      geometry: geometry[Point, 4326]
+    sql: |-
+      SELECT *
+      FROM {{ Pipe('sql:bwg', 'crashes', 'pedalcycle', instance='sql:bwg') }}
+      WHERE persons_injured = 0
+        AND persons_killed = 0
+
+- connector: "sql:bwg"
+  metric: "noninjuries"
+  location: "vulnerable"
+  parameters:
+    schema: Ped
+    target: noninjuries_vulnerable
+    columns:
+      datetime: timestamp
+      primary: crash_number
+    dtypes:
+      geometry: geometry[Point, 4326]
+    sql: |-
+      SELECT 
+      FROM {{ Pipe('sql:bwg', 'noninjuries', 'pedestrian', instance='sql:bwg') }}
+      UNION ALL
+      SELECT *
+      FROM {{ Pipe('sql:bwg', 'noninjuries', 'pedalcycle', instance='sql:bwg') }}
+      WHERE crash_number NOT IN (SELECT crash_number FROM {{ Pipe('sql:bwg', 'noninjuries', 'pedestrian', instance='sql:bwg') }}
 
 ### Felt layers
 
