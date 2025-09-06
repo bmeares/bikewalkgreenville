@@ -207,9 +207,11 @@ pipes:
       SELECT *
       FROM {{ Pipe('sql:bwg', 'crashes', 'pedestrian', instance='sql:bwg') }}
       UNION ALL
-      SELECT *
-      FROM {{ Pipe('sql:bwg', 'crashes', 'pedalcycle', instance='sql:bwg') }}
-      WHERE crash_number NOT IN (SELECT crash_number FROM {{ Pipe('sql:bwg', 'crashes', 'pedestrian', instance='sql:bwg') }})
+      SELECT cyclist.*
+      FROM {{ Pipe('sql:bwg', 'crashes', 'pedalcycle', instance='sql:bwg') }} AS cyclist
+      LEFT JOIN {{ Pipe('sql:bwg', 'crashes', 'pedestrian', instance='sql:bwg') }} AS pedestrian
+        ON cyclist.crash_number = pedestrian.crash_number
+      WHERE pedestrian.crash_number IS NULL
 
 - connector: "sql:bwg"
   metric: "fatalities"
@@ -258,9 +260,11 @@ pipes:
       SELECT *
       FROM {{ Pipe('sql:bwg', 'fatalities', 'pedestrian', instance='sql:bwg') }}
       UNION ALL
-      SELECT *
-      FROM {{ Pipe('sql:bwg', 'fatalities', 'pedalcycle', instance='sql:bwg') }}
-      WHERE crash_number NOT IN (SELECT crash_number FROM {{ Pipe('sql:bwg', 'fatalities', 'pedestrian', instance='sql:bwg') }})
+      SELECT cyclist.*
+      FROM {{ Pipe('sql:bwg', 'fatalities', 'pedalcycle', instance='sql:bwg') }} AS cyclist
+      LEFT JOIN {{ Pipe('sql:bwg', 'fatalities', 'pedestrian', instance='sql:bwg') }} AS pedestrian
+        ON cyclist.crash_number = pedestrian.crash_number
+      WHERE pedestrian.crash_number IS NULL
  
 - connector: "sql:bwg"
   metric: "injuries"
@@ -309,9 +313,11 @@ pipes:
       SELECT *
       FROM {{ Pipe('sql:bwg', 'injuries', 'pedestrian', instance='sql:bwg') }}
       UNION ALL
-      SELECT *
-      FROM {{ Pipe('sql:bwg', 'injuries', 'pedalcycle', instance='sql:bwg') }}
-      WHERE crash_number NOT IN (SELECT crash_number FROM {{ Pipe('sql:bwg', 'injuries', 'pedestrian', instance='sql:bwg') }})
+      SELECT cyclist.*
+      FROM {{ Pipe('sql:bwg', 'injuries', 'pedalcycle', instance='sql:bwg') }} AS cyclist
+      LEFT JOIN {{ Pipe('sql:bwg', 'injuries', 'pedestrian', instance='sql:bwg') }} AS pedestrian
+        ON cyclist.crash_number = pedestrian.crash_number
+      WHERE pedestrian.crash_number IS NULL
  
 - connector: "sql:bwg"
   metric: "noninjuries"
@@ -359,12 +365,14 @@ pipes:
     dtypes:
       geometry: geometry[Point, 4326]
     sql: |-
-      SELECT 
+      SELECT *
       FROM {{ Pipe('sql:bwg', 'noninjuries', 'pedestrian', instance='sql:bwg') }}
       UNION ALL
-      SELECT *
-      FROM {{ Pipe('sql:bwg', 'noninjuries', 'pedalcycle', instance='sql:bwg') }}
-      WHERE crash_number NOT IN (SELECT crash_number FROM {{ Pipe('sql:bwg', 'noninjuries', 'pedestrian', instance='sql:bwg') }}
+      SELECT cyclist.*
+      FROM {{ Pipe('sql:bwg', 'noninjuries', 'pedalcycle', instance='sql:bwg') }} AS cyclist
+      LEFT JOIN {{ Pipe('sql:bwg', 'noninjuries', 'pedestrian', instance='sql:bwg') }} AS pedestrian
+        ON cyclist.crash_number = pedestrian.crash_number
+      WHERE pedestrian.crash_number IS NULL
 
 ### Felt layers
 
