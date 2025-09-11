@@ -409,6 +409,91 @@ pipes:
         ("Total Length (ft)" / 5280) AS "Total Length (miles)"
       FROM "Roads".road_total_lengths
 
+### Felt Layers
+
+- connector: "sql:bwg"
+  metric: "boundaries"
+  location: "greenville"
+  instance: "sql:boundaries"
+  parameters:
+    target: boundaries_greenville
+    columns:
+      municipality_name: "Municipality Name"
+    dtypes:
+      geometry: "geometry[MULTIPOLYGON, 6570]"
+    sql: |-
+      SELECT *
+      FROM "Boundaries"."boundaries_greenville"
+
+- connector: "sql:bwg"
+  metric: "boundaries"
+  location: "simpsonville"
+  instance: "sql:boundaries"
+  parameters:
+    target: boundaries_simpsonville
+    columns:
+      municipality_name: "Municipality Name"
+    dtypes:
+      geometry: "geometry[MULTIPOLYGON, 6570]"
+    sql: |-
+      SELECT *
+      FROM "Boundaries"."boundaries_simpsonville"
+
+- connector: "sql:bwg"
+  metric: "boundaries"
+  location: "mauldin"
+  instance: "sql:boundaries"
+  parameters:
+    target: boundaries_mauldin
+    columns:
+      municipality_name: "Municipality Name"
+    dtypes:
+      geometry: "geometry[MULTIPOLYGON, 6570]"
+    sql: |-
+      SELECT *
+      FROM "Boundaries"."boundaries_mauldin"
+
+- connector: "sql:bwg"
+  metric: "boundaries"
+  location: "greer-clipped"
+  instance: "sql:boundaries"
+  parameters:
+    target: boundaries_greer-clipped
+    columns:
+      municipality_name: "Municipality Name"
+    dtypes:
+      geometry: "geometry[MULTIPOLYGON, 6570]"
+    sql: |-
+      SELECT *
+      FROM "Boundaries"."boundaries_greer-clipped"
+
+- connector: "sql:bwg"
+  metric: "boundaries"
+  location: "fountain-inn-clipped"
+  instance: "sql:boundaries"
+  parameters:
+    target: boundaries_fountain-inn-clipped
+    columns:
+      municipality_name: "Municipality Name"
+    dtypes:
+      geometry: "geometry[MULTIPOLYGON, 6570]"
+    sql: |-
+      SELECT *
+      FROM "Boundaries"."boundaries_fountain-inn-clipped"
+
+- connector: "sql:bwg"
+  metric: "boundaries"
+  location: "travelers_rest"
+  instance: "sql:boundaries"
+  parameters:
+    target: boundaries_travelers_rest
+    columns:
+      municipality_name: "Municipality Name"
+    dtypes:
+      geometry: "geometry[MULTIPOLYGON, 6570]"
+    sql: |-
+      SELECT *
+      FROM "Boundaries"."boundaries_travelers_rest"
 
 config:
   meerschaum:
@@ -416,6 +501,9 @@ config:
     connectors:
       sql:
         bwg: MRSM{meerschaum:connectors:sql:bwg}
+        boundaries:
+          flavor: sqlite
+          database: '{MRSM_ROOT_DIR}/../data/output/boundaries.sqlite'
   plugins:
     bwg:
       data_path: '{MRSM_ROOT_DIR}/../data'
