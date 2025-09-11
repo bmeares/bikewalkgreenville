@@ -456,7 +456,7 @@ config:
           schema: felt
         pedestrian:
           flavor: sqlite
-          database: '{MRSM_ROOT_DIR}/../output/pedestrian.sqlite'
+          database: '{MRSM_ROOT_DIR}/../data/output/pedestrian.sqlite'
       felt:
         pedestrian:
           token: $FELT_API_TOKEN

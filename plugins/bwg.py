@@ -9,6 +9,8 @@ import pathlib
 from meerschaum.config import get_plugin_config, write_plugin_config
 from meerschaum.utils.warnings import warn, info
 
+__version__ = '0.1.0'
+
 
 def setup():
     from meerschaum.config.paths import ROOT_DIR_PATH
@@ -34,7 +36,17 @@ def get_data_path() -> pathlib.Path:
     from meerschaum.config.paths import ROOT_DIR_PATH
     cf = get_plugin_config()
     data_path_str = cf.get('data_path', None)
+
     if not data_path_str:
         raise FileNotFoundError("No data path defined. Run `setup plugin bwg`.")
+
     data_path_str = data_path_str.replace('{MRSM_ROOT_DIR}', ROOT_DIR_PATH.as_posix())
-    return pathlib.Path(data_path_str)
+    data_path = pathlib.Path(data_path_str)
+    output_path = data_path / 'output'
+    
+    if not data_path.exists():
+        warn("BWG data path does not exist: '{data_path}'", stack=False)
+    elif not output_path.exists():
+        output_path.mkdir(parents=True, exist_ok=True)
+
+    return data_path
