@@ -420,9 +420,9 @@ pipes:
     columns:
       municipality_name: "Municipality Name"
     dtypes:
-      geometry: "geometry[MULTIPOLYGON, 6570]"
+      geometry: "geometry[MULTIPOLYGON, 4326]"
     sql: |-
-      SELECT *
+      SELECT "Municipality Name", ST_Transform("geometry", 4326)
       FROM "Boundaries"."boundaries_greenville"
 
 - connector: "sql:bwg"
@@ -434,9 +434,9 @@ pipes:
     columns:
       municipality_name: "Municipality Name"
     dtypes:
-      geometry: "geometry[MULTIPOLYGON, 6570]"
+      geometry: "geometry[MULTIPOLYGON, 4326]"
     sql: |-
-      SELECT *
+      SELECT "Municipality Name", ST_Transform("geometry", 4326) AS "geometry"
       FROM "Boundaries"."boundaries_simpsonville"
 
 - connector: "sql:bwg"
@@ -448,9 +448,9 @@ pipes:
     columns:
       municipality_name: "Municipality Name"
     dtypes:
-      geometry: "geometry[MULTIPOLYGON, 6570]"
+      geometry: "geometry[MULTIPOLYGON, 4326]"
     sql: |-
-      SELECT *
+      SELECT "Municipality Name", ST_Transform("geometry", 4326) AS "geometry"
       FROM "Boundaries"."boundaries_mauldin"
 
 - connector: "sql:bwg"
@@ -462,9 +462,9 @@ pipes:
     columns:
       municipality_name: "Municipality Name"
     dtypes:
-      geometry: "geometry[MULTIPOLYGON, 6570]"
+      geometry: "geometry[MULTIPOLYGON, 4326]"
     sql: |-
-      SELECT *
+      SELECT "Municipality Name", ST_Transform("geometry", 4326) AS "geometry"
       FROM "Boundaries"."boundaries_greer-clipped"
 
 - connector: "sql:bwg"
@@ -476,9 +476,9 @@ pipes:
     columns:
       municipality_name: "Municipality Name"
     dtypes:
-      geometry: "geometry[MULTIPOLYGON, 6570]"
+      geometry: "geometry[MULTIPOLYGON, 4326]"
     sql: |-
-      SELECT *
+      SELECT "Municipality Name", ST_Transform("geometry", 4326) AS "geometry"
       FROM "Boundaries"."boundaries_fountain-inn-clipped"
 
 - connector: "sql:bwg"
@@ -490,9 +490,9 @@ pipes:
     columns:
       municipality_name: "Municipality Name"
     dtypes:
-      geometry: "geometry[MULTIPOLYGON, 6570]"
+      geometry: "geometry[MULTIPOLYGON, 4326]"
     sql: |-
-      SELECT *
+      SELECT "Municipality Name", ST_Transform("geometry", 4326) AS "geometry"
       FROM "Boundaries"."boundaries_travelers_rest"
 
 config:
