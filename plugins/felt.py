@@ -2,10 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Implement the plugin 'felt'.
-
-See the Writing Plugins guide for more information:
-https://meerschaum.io/reference/plugins/writing-plugins/
+Sync pipes to Felt layers.
 """
 
 import os
@@ -16,14 +13,9 @@ from typing import Any, Union
 import meerschaum as mrsm
 from meerschaum.connectors import InstanceConnector, make_connector
 
-__version__ = '0.0.1'
+__version__ = '0.1.0'
 
 required: list[str] = ['felt-python']
-
-
-def setup(**kwargs) -> mrsm.SuccessTuple:
-    """Executed during installation and `mrsm setup plugin felt`."""
-    return True, "Success"
 
 
 @make_connector
@@ -43,14 +35,39 @@ class FeltConnector(InstanceConnector):
     def fetch(
         self,
         pipe: mrsm.Pipe,
-        begin: datetime | None = None,
-        end: datetime | None = None,
+        debug: bool = False,
         **kwargs
     ):
-        """Return or yield dataframes."""
-        docs = []
-        # populate docs with dictionaries (rows).
-        return docs
+        """
+        Extract a layer and return a dataframe.
+        """
+        felt_python = mrsm.attempt_import('felt_python', venv='felt')
+        gpd = mrsm.attempt_import('geopandas')
+        fetch_cf = pipe.parameters.get('fetch', {})
+        layer_id = fetch_cf.get('layer_id')
+        layer_name = fetch_cf.get('layer', fetch_cf.get('layer_name'))
+        if not layer_id and not layer_name:
+            raise ValueError(f"No layer ID or layer name configured for {pipe}.")
+
+        layer_id = layer_id or self.get_target_layer_id(layer_name, debug=debug)
+        if not layer_id:
+            raise ValueError(f"Could not determine layer ID for {pipe}.")
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            file_name = os.path.join(tempdir, f'{layer_id}.gpkg')
+            felt_python.download_layer(
+                self.map_id,
+                layer_id,
+                file_name=file_name,
+                api_token=self.token,
+            )
+            gdf = gpd.read_file(file_name, layer='parsed')
+
+        cols_to_del = [col for col in gdf.columns if col.startswith('felt:')]
+        for col in cols_to_del:
+            del gdf[col]
+
+        return gdf
 
     def register_pipe(
         self,
@@ -227,8 +244,16 @@ class FeltConnector(InstanceConnector):
         if configured_layer_id:
             return configured_layer_id
 
-        target = pipe.target
+        layer_id = self.get_target_layer_id(pipe.target, debug=debug)
+        if save and check_parameters:
+            pipe.update_parameters({'felt': {'layer_id': layer_id}})
 
+        return layer_id
+
+    def get_target_layer_id(self, target: str, debug: bool = False) -> Union[str, None]:
+        """
+        Return a layer ID for a target name, if one exists.
+        """
         felt_python = mrsm.attempt_import('felt_python', venv='felt')
         layers = felt_python.list_layers(map_id=self.map_id, api_token=self.token)
         layer_id = None
@@ -238,11 +263,15 @@ class FeltConnector(InstanceConnector):
                 layer_id = layer['id']
                 break
 
-        if not layer_id:
-            return None
+        if layer_id:
+            return layer_id
 
-        if save and check_parameters:
-            pipe.update_parameters({'felt': {'layer_id': layer_id}})
+        groups = felt_python.list_layer_groups(self.map_id, api_token=self.token)
+        for group in groups:
+            for layer in group['layers']:
+                if layer.get('name') == target and layer.get('type', 'layer') == 'layer':
+                    layer_id = layer['id']
+                    break
 
         return layer_id
 
@@ -331,7 +360,7 @@ class FeltConnector(InstanceConnector):
         layer_id = self.get_pipe_layer_id(pipe, debug=debug)
         rowcount = len(df)
 
-        if not layer_id:
+        if not pipe.exists(debug=debug):
             result = (
                 felt_python.upload_geodataframe(self.map_id, df, target, api_token=self.token)
                 if 'geodataframe' in str(type(df)).lower()
@@ -439,21 +468,28 @@ class FeltConnector(InstanceConnector):
         The target table's data as a DataFrame.
         """
         from meerschaum.utils.dataframe import query_df
-        from meerschaum.config.paths import CACHE_RESOURCES_PATH
-        geopandas = mrsm.attempt_import('geopandas')
+        gpd = mrsm.attempt_import('geopandas')
         felt_python = mrsm.attempt_import('felt_python', venv='felt')
 
         layer_id = self.get_pipe_layer_id(pipe, debug=debug)
+        dt_col = pipe.columns.get("datetime", None)
         if layer_id is None:
             return None
 
-        cache_dir = CACHE_RESOURCES_PATH / 'felt'
-        cache_dir.mkdir(exist_ok=True, parents=True)
-        file_path = cache_dir / (layer_id + '.gpkg')
-        dt_col = pipe.columns.get("datetime", None)
+        with tempfile.TemporaryDirectory() as tempdir:
+            file_name = os.path.join(tempdir, f'{layer_id}.gpkg')
+            felt_python.download_layer(
+                self.map_id,
+                layer_id,
+                file_name,
+                self.token,
+            )
+            gdf = gpd.read_file(file_name, layer='parsed')
 
-        output_path_str = felt_python.download_layer(self.map_id, layer_id, file_path.as_posix(), self.token)
-        gdf = gpd.read_file(output_path_str, layer='parsed')
+        cols_to_del = [col for col in gdf.columns if col.startswith('felt:')]
+        for col in cols_to_del:
+            del gdf[col]
+
         return query_df(
             gdf,
             begin=begin,
