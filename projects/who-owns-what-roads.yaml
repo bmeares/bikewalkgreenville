@@ -422,7 +422,7 @@ pipes:
     dtypes:
       geometry: "geometry[MULTIPOLYGON, 4326]"
     sql: |-
-      SELECT "Municipality Name", ST_Transform("geometry", 4326)
+      SELECT "Municipality Name", ST_Transform("geometry", 4326) AS "geometry"
       FROM "Boundaries"."boundaries_greenville"
 
 - connector: "sql:bwg"
