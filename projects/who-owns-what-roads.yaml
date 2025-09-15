@@ -11,6 +11,8 @@ plugins_dir:
 sync:
   schedule: "daily"
 
+isolation: 'subprocess'
+
 pipes:
 
 - connector: "sql:bwg"
@@ -414,85 +416,87 @@ pipes:
 - connector: "sql:bwg"
   metric: "boundaries"
   location: "greenville"
-  instance: "sql:boundaries"
+  instance: "felt:roads"
   parameters:
-    target: boundaries_greenville
+    target: "Greenville"
     columns:
       municipality_name: "Municipality Name"
     dtypes:
-      geometry: "geometry[MULTIPOLYGON, 4326]"
+      geometry: "geometry[MULTIPOLYGON, 6570]"
+    felt:
+      layer_id: "wG5B9C3WKRVCW849BOY5kV8B"
     sql: |-
-      SELECT "Municipality Name", ST_Transform("geometry", 4326) AS "geometry"
+      SELECT *
       FROM "Boundaries"."boundaries_greenville"
 
 - connector: "sql:bwg"
   metric: "boundaries"
   location: "simpsonville"
-  instance: "sql:boundaries"
+  instance: "felt:roads"
   parameters:
-    target: boundaries_simpsonville
+    target: "Simpsonville"
     columns:
       municipality_name: "Municipality Name"
     dtypes:
-      geometry: "geometry[MULTIPOLYGON, 4326]"
+      geometry: "geometry[MULTIPOLYGON, 6570]"
     sql: |-
-      SELECT "Municipality Name", ST_Transform("geometry", 4326) AS "geometry"
+      SELECT *
       FROM "Boundaries"."boundaries_simpsonville"
 
 - connector: "sql:bwg"
   metric: "boundaries"
   location: "mauldin"
-  instance: "sql:boundaries"
+  instance: "felt:roads"
   parameters:
-    target: boundaries_mauldin
+    target: "Mauldin"
     columns:
       municipality_name: "Municipality Name"
     dtypes:
-      geometry: "geometry[MULTIPOLYGON, 4326]"
+      geometry: "geometry[MULTIPOLYGON, 6570]"
     sql: |-
-      SELECT "Municipality Name", ST_Transform("geometry", 4326) AS "geometry"
+      SELECT *
       FROM "Boundaries"."boundaries_mauldin"
 
 - connector: "sql:bwg"
   metric: "boundaries"
   location: "greer-clipped"
-  instance: "sql:boundaries"
+  instance: "felt:roads"
   parameters:
-    target: boundaries_greer-clipped
+    target: "Greer"
     columns:
       municipality_name: "Municipality Name"
     dtypes:
-      geometry: "geometry[MULTIPOLYGON, 4326]"
+      geometry: "geometry[MULTIPOLYGON, 6570]"
     sql: |-
-      SELECT "Municipality Name", ST_Transform("geometry", 4326) AS "geometry"
+      SELECT *
       FROM "Boundaries"."boundaries_greer-clipped"
 
 - connector: "sql:bwg"
   metric: "boundaries"
   location: "fountain-inn-clipped"
-  instance: "sql:boundaries"
+  instance: "felt:roads"
   parameters:
-    target: boundaries_fountain-inn-clipped
+    target: "Fountain Inn"
     columns:
       municipality_name: "Municipality Name"
     dtypes:
-      geometry: "geometry[MULTIPOLYGON, 4326]"
+      geometry: "geometry[MULTIPOLYGON, 6570]"
     sql: |-
-      SELECT "Municipality Name", ST_Transform("geometry", 4326) AS "geometry"
+      SELECT *
       FROM "Boundaries"."boundaries_fountain-inn-clipped"
 
 - connector: "sql:bwg"
   metric: "boundaries"
   location: "travelers_rest"
-  instance: "sql:boundaries"
+  instance: "felt:roads"
   parameters:
-    target: boundaries_travelers_rest
+    target: "Travelers Rest"
     columns:
       municipality_name: "Municipality Name"
     dtypes:
-      geometry: "geometry[MULTIPOLYGON, 4326]"
+      geometry: "geometry[MULTIPOLYGON, 6570]"
     sql: |-
-      SELECT "Municipality Name", ST_Transform("geometry", 4326) AS "geometry"
+      SELECT *
       FROM "Boundaries"."boundaries_travelers_rest"
 
 config:
@@ -504,8 +508,17 @@ config:
         boundaries:
           flavor: sqlite
           database: '{MRSM_ROOT_DIR}/../data/output/boundaries.sqlite'
+      felt:
+        roads:
+          token: ${FELT_API_TOKEN}
+          map_id: "uyICtyogTtuqrQs1Z19AtXC"
+          project_id: "6W9B2V3v9ARKSQ9AV9BH2gLOhA"
+          instance_keys: "sql:boundaries"
   plugins:
     bwg:
       data_path: '{MRSM_ROOT_DIR}/../data'
+  system:
+    experimental:
+      cli_daemon: false
 
 environment: {}

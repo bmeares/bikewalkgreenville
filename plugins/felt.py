@@ -8,11 +8,12 @@ See the Writing Plugins guide for more information:
 https://meerschaum.io/reference/plugins/writing-plugins/
 """
 
-from datetime import datetime, timedelta, timezone
-from typing import Any, Union, List, Dict
+import os
+import tempfile
+from datetime import datetime
+from typing import Any, Union
 
 import meerschaum as mrsm
-from meerschaum.config import get_plugin_config, write_plugin_config
 from meerschaum.connectors import InstanceConnector, make_connector
 
 __version__ = '0.0.1'
@@ -327,30 +328,44 @@ class FeltConnector(InstanceConnector):
         """
         felt_python = mrsm.attempt_import('felt_python', venv='felt')
         target = pipe.target
+        layer_id = self.get_pipe_layer_id(pipe, debug=debug)
+        rowcount = len(df)
 
-        if not pipe.exists(debug=debug):
+        if not layer_id:
             result = (
                 felt_python.upload_geodataframe(self.map_id, df, target, api_token=self.token)
                 if 'geodataframe' in str(type(df)).lower()
                 else felt_python.upload_dataframe(self.map_id, df, target, api_token=self.token)
             )
-            mrsm.pprint(result)
             layer_id = result.get('layer_id')
             layer_group_id = result.get('layer_group_id')
             if layer_id and layer_group_id:
                 pipe.update_parameters({
-                    'layer_id': layer_id,
-                    'layer_group_id': layer_group_id,
+                    'felt': {
+                        'layer_id': layer_id,
+                        'layer_group_id': layer_group_id,
+                    },
                 })
-                rowcount = len(df)
                 return True, f"Created layer '{layer_id}' ({rowcount} rows)."
 
-        layer_id = self.get_pipe_layer_id(debug=debug)
-        unseen_df, update_df, delta_df = (
-            pipe.filter_existing(df, debug=debug)
-            if check_existing
-            else df, None, df
-        )
+        file_ext = 'gpkg' if 'geodataframe' in str(type(df)).lower() else 'csv'
+        with tempfile.TemporaryDirectory() as tempdir:
+            file_name = os.path.join(tempdir, f"{target}.{file_ext}")
+
+            if file_ext == 'gpkg':
+                df.to_file(file_name, driver='GPKG')
+            else:
+                df.to_csv(file_name)
+
+            result = felt_python.refresh_file_layer(
+                self.map_id,
+                layer_id,
+                file_name,
+                api_token=self.token,
+            )
+
+        return True, f"Successfully replaced layer '{layer_id}' ({rowcount} rows)."
+
 
     def clear_pipe(
         self,
