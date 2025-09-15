@@ -40,12 +40,12 @@ pipes:
       primary: "GlobalID"
     dtypes:
       "CREATED": "datetime"
-      "GlobalID": "uuid"
     indices:
       geometry: "geometry"
     tags: ["BND"]
     greenville-county:
       filetype: "shp"
+      layer: "Municipal Boundary"
     verify:
       chunk_days: 3650
 
