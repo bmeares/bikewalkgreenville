@@ -214,6 +214,24 @@ pipes:
       WHERE pedestrian.crash_number IS NULL
 
 - connector: "sql:bwg"
+  metric: "crashes_occupant"
+  location: "pedestrian"
+  parameters:
+    schema: "Ped"
+    target: crashes_occupant_pedestrian
+    columns:
+      datetime: timestamp
+      crash_number: crash_number
+      unit_number: unit_number
+    dtypes: geometry[Point, 4326]
+    sql: |-
+      SELECT *
+      FROM "SCDPS"."OCCUPANT" AS o
+      INNER JOIN "Ped".crashes_pedestrian AS c
+        ON c.crash_number = o.collision_number
+      WHERE o.seat_location = 'Pedestrian'
+
+- connector: "sql:bwg"
   metric: "fatalities"
   location: "pedestrian"
   parameters:
