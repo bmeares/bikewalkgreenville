@@ -508,12 +508,13 @@ config:
         boundaries:
           flavor: sqlite
           database: '{MRSM_ROOT_DIR}/../data/output/boundaries.sqlite'
+        felt: MRSM{meerschaum:connectors:sql:felt}
       felt:
         roads:
           token: ${FELT_API_TOKEN}
           map_id: "uyICtyogTtuqrQs1Z19AtXC"
           project_id: "6W9B2V3v9ARKSQ9AV9BH2gLOhA"
-          instance_keys: "sql:boundaries"
+          instance_keys: "sql:felt"
   plugins:
     bwg:
       data_path: '{MRSM_ROOT_DIR}/../data'
