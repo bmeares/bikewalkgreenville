@@ -416,15 +416,13 @@ pipes:
 - connector: "sql:bwg"
   metric: "boundaries"
   location: "greenville"
-  instance: "felt:roads"
+  instance: "sql:boundaries"
   parameters:
     target: "Greenville"
     columns:
       municipality_name: "Municipality Name"
     dtypes:
       geometry: "geometry[MULTIPOLYGON, 6570]"
-    felt:
-      layer_id: "wG5B9C3WKRVCW849BOY5kV8B"
     sql: |-
       SELECT *
       FROM "Boundaries"."boundaries_greenville"
@@ -432,7 +430,7 @@ pipes:
 - connector: "sql:bwg"
   metric: "boundaries"
   location: "simpsonville"
-  instance: "felt:roads"
+  instance: "sql:boundaries"
   parameters:
     target: "Simpsonville"
     columns:
@@ -446,7 +444,7 @@ pipes:
 - connector: "sql:bwg"
   metric: "boundaries"
   location: "mauldin"
-  instance: "felt:roads"
+  instance: "sql:boundaries"
   parameters:
     target: "Mauldin"
     columns:
@@ -460,7 +458,7 @@ pipes:
 - connector: "sql:bwg"
   metric: "boundaries"
   location: "greer-clipped"
-  instance: "felt:roads"
+  instance: "sql:boundaries"
   parameters:
     target: "Greer"
     columns:
@@ -474,7 +472,7 @@ pipes:
 - connector: "sql:bwg"
   metric: "boundaries"
   location: "fountain-inn-clipped"
-  instance: "felt:roads"
+  instance: "sql:boundaries"
   parameters:
     target: "Fountain Inn"
     columns:
@@ -488,7 +486,7 @@ pipes:
 - connector: "sql:bwg"
   metric: "boundaries"
   location: "travelers_rest"
-  instance: "felt:roads"
+  instance: "sql:boundaries"
   parameters:
     target: "Travelers Rest"
     columns:
@@ -499,6 +497,7 @@ pipes:
       SELECT *
       FROM "Boundaries"."boundaries_travelers_rest"
 
+
 config:
   meerschaum:
     instance: sql:bwg
@@ -506,8 +505,8 @@ config:
       sql:
         bwg: MRSM{meerschaum:connectors:sql:bwg}
         boundaries:
-          flavor: sqlite
-          database: '{MRSM_ROOT_DIR}/../data/output/boundaries.sqlite'
+          flavor: geopackage
+          database: '{MRSM_ROOT_DIR}/../data/output/boundaries.gpkg'
         felt: MRSM{meerschaum:connectors:sql:felt}
       felt:
         roads:
