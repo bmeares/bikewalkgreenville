@@ -1,0 +1,46 @@
+project_name: spartanburg
+
+root_dir: ../root
+
+plugins_dir:
+- ../.installed_plugins
+- ../plugins
+
+sync:
+  schedule: "daily"
+
+pipes:
+
+  - connector: "plugin:arcgis"
+    metric: "parcels"
+    location: "spartanburg"
+    parameters:
+      schema: "spartanburg"
+      target: "parcels"
+      columns:
+        primary: "OBJECTID"
+      dtypes:
+        "SaleDate": "date"
+        geometry: "geometry[multipolygon, 3361]"
+      indices:
+        geometry: "geometry"
+        city: "City"
+        zip: "Zip"
+        property_type: "PropertyTy"
+        building_type: "BuildingTy"
+        owner_lookup: "OwnerLooku"
+      arcgis:
+        dataset: "f07cb730317e481fba314ab641949694"
+        srid: 3361
+
+config:
+  meerschaum:
+    instance: sql:bwg
+    connectors:
+      sql:
+        bwg: MRSM{meerschaum:connectors:sql:bwg}
+  plugins:
+    bwg:
+      data_path: '{MRSM_ROOT_DIR}/../data'
+
+environment: {}
