@@ -1,0 +1,32 @@
+project_name: srt
+
+root_dir: ../root
+
+plugins_dir:
+- ../.installed_plugins
+- ../plugins
+
+pipes:
+
+- connector: "sql:bwg"
+  metric: "srt"
+  location: "greenline"
+  parameters:
+    schema: "SRT"
+    target: "Green Line"
+    sql: |-
+      select *
+      from gcgis."PRISMA Health Swamp Rabbit Trail" 
+      where "SECTION" = 'Green Line' 
+
+config:
+  meerschaum:
+    instance: sql:bwg
+    connectors:
+      sql:
+        bwg: MRSM{meerschaum:connectors:sql:bwg}
+  plugins:
+    bwg:
+      data_path: '{MRSM_ROOT_DIR}/../data'
+
+environment: {}
