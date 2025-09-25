@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Download shapefiles from ArcGIS.
+Download geometry data from Spartanburg's ArcGIS instance.
 """
 
 import meerschaum as mrsm
