@@ -9,29 +9,159 @@ plugins_dir:
 sync:
   schedule: "daily"
 
+plugins:
+  - "clone@api:mrsm"
+
 pipes:
 
-  - connector: "plugin:arcgis"
-    metric: "parcels"
-    location: "spartanburg"
-    parameters:
-      schema: "spartanburg"
-      target: "parcels"
-      columns:
-        primary: "OBJECTID"
-      dtypes:
-        "SaleDate": "date"
-        geometry: "geometry[multipolygon, 3361]"
-      indices:
-        geometry: "geometry"
-        city: "City"
-        zip: "Zip"
-        property_type: "PropertyTy"
-        building_type: "BuildingTy"
-        owner_lookup: "OwnerLooku"
-      arcgis:
-        dataset: "f07cb730317e481fba314ab641949694"
-        srid: 3361
+- connector: "plugin:arcgis"
+  metric: "parcels"
+  location: "spartanburg"
+  parameters:
+    schema: "spartanburg"
+    target: "parcels"
+    columns:
+      primary: "OBJECTID"
+    dtypes:
+      "SaleDate": "date"
+      geometry: "geometry[multipolygon, 3361]"
+    indices:
+      geometry: "geometry"
+      city: "City"
+      zip: "Zip"
+      property_type: "PropertyTy"
+      building_type: "BuildingTy"
+      owner_lookup: "OwnerLooku"
+    arcgis:
+      dataset: "f07cb730317e481fba314ab641949694"
+      srid: 3361
+
+- connector: "plugin:spartanburggis"
+  metric: "trails"
+  location: "dan"
+  parameters:
+    schema: "spartanburg"
+    target: "dan_trails"
+    columns:
+      primary: "Name"
+    dtypes:
+      "Name": "string"
+      geometry: "geometry[MULTILINESTRING, 2273]"
+    indices:
+      geometry: "geometry"
+    spartanburggis:
+      layer: "Dan_Trails"
+
+- connector: "sql:bwg"
+  metric: "easements"
+  location: "dan"
+  parameters:
+    schema: "spartanburg"
+    target: "dan_easements"
+    columns: "{{ Pipe('plugin:spartanburg', 'trails', 'dan', instance='sql:bwg').columns }}"
+    dtypes:
+      "Name": "string"
+      geometry: "geometry[POLYGON, 2273]"
+    indices:
+      geometry: "geometry"
+    sql: |-
+      SELECT "Name", ST_Buffer(geometry, 25) AS geometry
+      FROM spartanburg.dan_trails
+
+- connector: "sql:bwg"
+  metric: "buffer"
+  location: "1-mile"
+  parameters:
+    schema: "spartanburg"
+    target: "dan_buffer_1_mile"
+    columns: "{{ Pipe('plugin:arcgis', 'parcels', 'spartanburg', instance='sql:bwg').columns }}"
+    dtypes: "{{ Pipe('plugin:arcgis', 'parcels', 'spartanburg', instance='sql:bwg').dtypes }}"
+    sql: |-
+      SELECT DISTINCT p.*
+      FROM
+          spartanburg.parcels AS p,
+          spartanburg.dan_trails AS t
+      WHERE
+          ST_DWithin(
+              p.geometry,
+              ST_Transform(t.geometry, 3361),
+              1609.344
+          )
+
+- connector: "sql:bwg"
+  metric: "buffer"
+  location: "half-mile"
+  parameters:
+    schema: "spartanburg"
+    target: "dan_buffer_half_mile"
+    columns: "{{ Pipe('plugin:arcgis', 'parcels', 'spartanburg', instance='sql:bwg').columns }}"
+    dtypes: "{{ Pipe('plugin:arcgis', 'parcels', 'spartanburg', instance='sql:bwg').dtypes }}"
+    sql: |-
+      SELECT DISTINCT p.*
+      FROM
+          spartanburg.parcels AS p,
+          spartanburg.dan_trails AS t
+      WHERE
+          ST_DWithin(
+              p.geometry,
+              ST_Transform(t.geometry, 3361),
+              804.672
+          )
+
+#####################
+# GeoPackage export #
+#####################
+
+- connector: "plugin:clone"
+  metric: "easements"
+  location: "dan"
+  instance: "sql:dan"
+  parameters:
+    target: "dan_easements"
+    columns: "{{ Pipe('sql:bwg', 'easements', 'dan', instance='sql:bwg').columns }}"
+    dtypes: "{{ Pipe('sql:bwg', 'easements', 'dan', instance='sql:bwg').dtypes }}"
+    indices: "{{ Pipe('sql:bwg', 'easements', 'dan', instance='sql:bwg').indices }}"
+    source:
+      skip_pipe_keys: true
+      pipe:
+        connector: "sql:bwg"
+        metric: "easements"
+        location: "dan"
+        instance: "sql:bwg"
+
+- connector: "plugin:clone"
+  metric: "buffer"
+  location: "1-mile"
+  instance: "sql:dan"
+  parameters:
+    target: "dan_buffer_1_mile"
+    columns: "{{ Pipe('sql:bwg', 'buffer', '1-mile', instance='sql:bwg').columns }}"
+    dtypes: "{{ Pipe('sql:bwg', 'buffer', '1-mile', instance='sql:bwg').dtypes }}"
+    indices: "{{ Pipe('sql:bwg', 'buffer', '1-mile', instance='sql:bwg').indices }}"
+    source:
+      skip_pipe_keys: true
+      pipe:
+        connector: "sql:bwg"
+        metric: "buffer"
+        location: "1-mile"
+        instance: "sql:bwg"
+
+- connector: "plugin:clone"
+  metric: "buffer"
+  location: "half-mile"
+  instance: "sql:dan"
+  parameters:
+    target: "dan_buffer_half_mile"
+    columns: "{{ Pipe('sql:bwg', 'buffer', 'half-mile', instance='sql:bwg').columns }}"
+    dtypes: "{{ Pipe('sql:bwg', 'buffer', 'half-mile', instance='sql:bwg').dtypes }}"
+    indices: "{{ Pipe('sql:bwg', 'buffer', 'half-mile', instance='sql:bwg').indices }}"
+    source:
+      skip_pipe_keys: true
+      pipe:
+        connector: "sql:bwg"
+        metric: "buffer"
+        location: "half-mile"
+        instance: "sql:bwg"
 
 config:
   meerschaum:
@@ -39,6 +169,9 @@ config:
     connectors:
       sql:
         bwg: MRSM{meerschaum:connectors:sql:bwg}
+        dan:
+          database: '{MRSM_ROOT_DIR}/../data/output/dan.gpkg'
+          flavor: "geopackage"
   plugins:
     bwg:
       data_path: '{MRSM_ROOT_DIR}/../data'
