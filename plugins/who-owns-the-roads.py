@@ -29,23 +29,55 @@ def init_dash(dash_app):
     from dash.exceptions import PreventUpdate
     import dash_bootstrap_components as dbc
 
-    dl = mrsm.attempt_import('dash_leaflet', venv='who-owns-the-roads', lazy=False)
+    dl, dlx = mrsm.attempt_import('dash_leaflet', 'dash_leaflet.express', venv='who-owns-the-roads', lazy=False)
     gpd = mrsm.attempt_import('geopandas', lazy=False)
 
     from meerschaum.utils.dtypes import serialize_geometry
 
     roads_pipe = mrsm.Pipe('sql:bwg', 'roads', 'Roads', instance='sql:bwg')
-    boundaries_pipe = mrsm.Pipe('sql:bwg', 'boundaries', 'Boundaries', instance='sql:bwg')
-    boundaries_data = None
+    link_prefixes = {
+        'Email': 'mailto:',
+        'Phone': 'tel:',
+        'Online Form': '',
+    }
 
-    def get_boundaries_data():
-        nonlocal boundaries_data
-        if boundaries_data is not None:
-            return boundaries_data
-
-        df = boundaries_pipe.get_data()
-        boundaries_data = json.loads(df.to_json(to_wgs84=True, drop_id=True))
-        return boundaries_data
+    initial_map_layout = dl.Map(
+        children=[
+            dl.TileLayer(
+                url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+            ),
+            dl.GeoJSON(
+                url='https://meerschaum.io/files/bwg/output/geojson/Boundaries/boundaries_greenville.geojson',
+                id='wotr-boundaries-greenville',
+                style={'color': '#A3CF1F', 'fillColor': '#A3CF1F', 'weight': 2, 'opacity': 0.5},
+            ),
+            dl.GeoJSON(
+                url='https://meerschaum.io/files/bwg/output/geojson/Boundaries/boundaries_mauldin.geojson',
+                id='wotr-boundaries-greenville',
+                style={'color': '#44B6Ca', 'fillColor': '#44B6CA', 'weight': 2, 'opacity': 0.5},
+            ),
+            dl.GeoJSON(
+                url='https://meerschaum.io/files/bwg/output/geojson/county/BND_GVCNTY.geojson',
+                id='wotr-boundaries-county',
+                style={'color': '#333333', 'weight': 2, 'opacity': 0.2},
+            ),
+            dl.FeatureGroup(id='wotr-lines-group', interactive=True),
+            html.Div(id='wotr-click-marker-container'),
+            dl.FullScreenControl(),
+            dl.LocateControl(
+                locateOptions={"enableHighAccuracy": True},
+                drawCircle=False,
+                flyTo=True,
+                showPopup=False,
+                showCompass=True,
+            )
+        ],
+        zoom=10,
+        style={'height': '60vh'},
+        center=[34.843739, -82.393905],
+        id='wotr-map',
+    )
 
     @web_page(
         'who-owns-the-roads',
@@ -57,19 +89,27 @@ def init_dash(dash_app):
         """Return the layout objects for this page."""
         return dbc.Container([
             dcc.Location(id='who-owns-the-roads-location'),
-            html.Div(id='output-div'),
+            html.Div(id='who-owns-the-roads-output-div'),
         ])
 
     @dash_app.callback(
-        Output('output-div', 'children'),
+        Output('who-owns-the-roads-output-div', 'children'),
         Input('who-owns-the-roads-location', 'pathname'),
     )
     def render_page_on_url_change(pathname: str):
         """Reload page contents when the URL path changes."""
         form = html.Div([
-            dbc.Input(placeholder="Road Name", id="wotr-road-name-input"),
+            dbc.Input(
+                placeholder="Road Name",
+                id="wotr-road-name-input",
+                type='text',
+            ),
         ])
-        submit_button = dbc.Button("Search", id="wotr-submit-button")
+        submit_button = dbc.Button(
+            "Search",
+            id="wotr-submit-button",
+            n_clicks=0,
+        )
         return [
             html.Br(),
             dbc.Row([
@@ -80,16 +120,19 @@ def init_dash(dash_app):
                 dbc.Col([submit_button]),
             ]),
             html.Br(),
-            html.Div(id="wotr-output-div"),
+            initial_map_layout,
+            html.Div(id="wotr-results-table"),
         ]
 
     @dash_app.callback(
-        Output('wotr-output-div', 'children'),
+        Output('wotr-results-table', 'children'),
+        Output('wotr-lines-group', 'children'),
         Input('wotr-submit-button', 'n_clicks'),
+        Input('wotr-road-name-input', 'n_submit'),
         State('wotr-road-name-input', 'value'),
     )
-    def submit_click(n_clicks, road_name):
-        if not n_clicks or not road_name:
+    def submit_click(n_clicks, n_submit, road_name):
+        if not (n_clicks or n_submit) or not road_name:
             raise PreventUpdate
 
         road_name_clean = road_name.strip("'").strip(";").strip('-').lower()
@@ -98,7 +141,6 @@ def init_dash(dash_app):
             "  \"Name\",\n"
             "  \"Type\",\n"
             "  \"Owner\",\n"
-            "  \"Contact\",\n"
             "  \"Phone\",\n"
             "  \"Email\",\n"
             "  \"Online Form\",\n"
@@ -115,23 +157,134 @@ def init_dash(dash_app):
             "  \"Email\",\n"
             "  \"Online Form\"\n"
             "ORDER BY \"Name\" ASC\n"
-            "LIMIT 1000"
+            "LIMIT 100"
         )
         df = gpd.read_postgis(query, roads_pipe.instance_connector.engine, geom_col='geometry')
         non_geo_cols = [col for col in df.columns if col != 'geometry']
-        geojson_data = json.loads(df.to_json(to_wgs84=True))
-        boundaries_data = get_boundaries_data()
+        try:
+            geojson_data = json.loads(df.to_json(to_wgs84=True))
+        except ValueError:
+            geojson_data = {}
 
-        return [
-            dbc.Table.from_dataframe(df[non_geo_cols], striped=True, bordered=True, hover=True),
-            dl.Map(
-                children=[
-                    dl.TileLayer(),
-                    dl.GeoJSON(data=geojson_data),
-                    dl.GeoJSON(data=boundaries_data),
-                ],
-                zoom=10,
-                style={'height': '50vh'},
-                center=[34.843739, -82.393905],
-            )
+        table = dbc.Table(
+            [html.Thead([html.Tr([html.Th(col) for col in non_geo_cols])])] + [html.Tbody([
+                html.Tr([
+                    html.Td(
+                        val
+                        if (link_prefix := link_prefixes.get(col)) is None
+                        else (
+                            html.A(val, href=(link_prefix + val), style={'textDecoration': 'none'})
+                            if col != 'Online Form'
+                            else html.A(
+                                href=val,
+                                target="_blank",
+                                children=[dbc.Button("Report an Issue", class_name="w-100")],
+                                style={'textDecoration': 'none'},
+                            )
+                        )
+                    ) if ((val := doc.get(col)) and val != 'N/A') else html.Td()
+                    for col in non_geo_cols
+                ])
+                for doc in df[non_geo_cols].to_dict(orient='records')
+            ])],
+            striped=True,
+            bordered=True,
+            hover=True,
+        )
+
+        lines_geojson = dl.GeoJSON(
+            data=geojson_data,
+            id='wotr-lines',
+            zoomToBounds=True,
+            interactive=True,
+            hoverStyle={'color': 'green', 'weight': 6},
+            style={'color': 'green', 'weight': 3},
+            bubblingMouseEvents=True,
+            children=[
+                dl.Tooltip(
+                    id='wotr-tooltip',
+                    children=None,
+                    sticky=True,
+                    permanent=False,
+                ),
+            ],
+        )
+
+        table_children = [
+            html.Div(
+                html.P(
+                    (f"{len(df)} result" + ('s' if len(df) != 1 else '') + '.'),
+                    style={'color': '#999999', 'font-size': '12px', 'text-align': 'right'},
+                )
+            ),
+            table,
         ]
+
+        return table_children, lines_geojson
+
+    @dash_app.callback(
+        Output('wotr-tooltip', 'children', allow_duplicate=True),
+        Input('wotr-lines', 'hoverData'),
+        prevent_initial_call=True,
+    )
+    def update_tooltip_on_hover(hoverData):
+        if not (props := (hoverData or {}).get('properties')):
+            raise PreventUpdate
+
+        return build_tooltip_contents(props)
+
+    @dash_app.callback(
+        Output('wotr-click-marker-container', 'children'),
+        Input('wotr-lines', 'clickData'),
+        State('wotr-map', 'clickData'), 
+        prevent_initial_call=True,
+    )
+    def drop_marker_on_click(line_click_data, map_click_data):
+        if not line_click_data or not map_click_data:
+            raise PreventUpdate
+
+        props = line_click_data['properties']
+        latlng = map_click_data.get('latlng')
+       
+        return dl.Popup(
+            build_tooltip_contents(props),
+            keepInView=False,
+            position=latlng,
+            closeButton=True,
+            autoClose=False,
+            closeOnClick=False,
+        )
+
+
+    def build_tooltip_contents(props):
+        content = []
+        table_props = ['Type', 'Owner', 'Online Form', 'Email', 'Phone']
+        table = html.Table(html.Tbody([
+            html.Tr(
+                [
+                    html.Td(prop, style={'color': '#888888'}),
+                    html.Td(
+                        (
+                            val
+                            if not (link_prefix := link_prefixes.get(prop)) is not None
+                            else html.A(
+                                (val if prop != 'Online Form' else 'Report an Issue'),
+                                href=(link_prefix + val),
+                            )
+                        ),
+                    )
+                ],
+            )
+            for prop in table_props
+            if (val := props.get(prop)) and prop != 'Name'
+        ]),
+            style={
+                'borderCollapse': 'separate',
+                'borderSpacing': '20px 5px',
+            },
+        )
+        content.extend([
+            html.H6(html.B(props.get('Name', 'N/A'))),
+            table,
+        ])
+        return content
