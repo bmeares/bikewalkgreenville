@@ -54,13 +54,33 @@ def init_dash(dash_app):
             ),
             dl.GeoJSON(
                 url='https://meerschaum.io/files/bwg/output/geojson/Boundaries/boundaries_mauldin.geojson',
-                id='wotr-boundaries-greenville',
+                id='wotr-boundaries-mauldin',
                 style={'color': '#44B6Ca', 'fillColor': '#44B6CA', 'weight': 2, 'opacity': 0.5},
+            ),
+            dl.GeoJSON(
+                url='https://meerschaum.io/files/bwg/output/geojson/Boundaries/boundaries_simpsonville.geojson',
+                id='wotr-boundaries-simpsonville',
+                style={'color': '#c6c6c6', 'fillColor': '#c6c6c6', 'weight': 2, 'opacity': 0.5},
+            ),
+            dl.GeoJSON(
+                url='https://meerschaum.io/files/bwg/output/geojson/Boundaries/boundaries_travelers_rest.geojson',
+                id='wotr-boundaries-travelers-rest',
+                style={'color': '#9b6088', 'fillColor': '#9b6088', 'weight': 2, 'opacity': 0.5},
+            ),
+            dl.GeoJSON(
+                url='https://meerschaum.io/files/bwg/output/geojson/Boundaries/boundaries_fountain-inn-clipped.geojson',
+                id='wotr-boundaries-fountain-inn',
+                style={'color': '#f2da3a', 'fillColor': '#f2da3a', 'weight': 2, 'opacity': 0.5},
+            ),
+            dl.GeoJSON(
+                url='https://meerschaum.io/files/bwg/output/geojson/Boundaries/boundaries_greer-clipped.geojson',
+                id='wotr-boundaries-greer',
+                style={'color': '#eb9360', 'fillColor': '#eb9360', 'weight': 2, 'opacity': 0.5},
             ),
             dl.GeoJSON(
                 url='https://meerschaum.io/files/bwg/output/geojson/county/BND_GVCNTY.geojson',
                 id='wotr-boundaries-county',
-                style={'color': '#333333', 'weight': 2, 'opacity': 0.2},
+                style={'color': '#333333', 'weight': 3, 'opacity': 0.5, 'fill': False,},
             ),
             dl.FeatureGroup(id='wotr-lines-group', interactive=True),
             html.Div(id='wotr-click-marker-container'),
