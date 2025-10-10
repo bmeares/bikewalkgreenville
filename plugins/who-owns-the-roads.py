@@ -19,6 +19,8 @@ required: list[str] = ['dash-leaflet']
 def init_dash(dash_app):
     """Initialize the Plotly Dash application."""
 
+    import json
+    
     import dash.html as html
     import dash.dcc as dcc
     import plotly.express as px
@@ -33,6 +35,17 @@ def init_dash(dash_app):
     from meerschaum.utils.dtypes import serialize_geometry
 
     roads_pipe = mrsm.Pipe('sql:bwg', 'roads', 'Roads', instance='sql:bwg')
+    boundaries_pipe = mrsm.Pipe('sql:bwg', 'boundaries', 'Boundaries', instance='sql:bwg')
+    boundaries_data = None
+
+    def get_boundaries_data():
+        nonlocal boundaries_data
+        if boundaries_data is not None:
+            return boundaries_data
+
+        df = boundaries_pipe.get_data()
+        boundaries_data = json.loads(df.to_json(to_wgs84=True, drop_id=True))
+        return boundaries_data
 
     @web_page(
         'who-owns-the-roads',
@@ -89,17 +102,25 @@ def init_dash(dash_app):
             "  \"Phone\",\n"
             "  \"Email\",\n"
             "  \"Online Form\",\n"
-            "  \"geometry\"\n"
+            "  ST_Union(\"geometry\") AS \"geometry\"\n"
             "FROM \"Roads\".roads\n"
             "WHERE\n"
             "  LOWER(\"Name\") LIKE '%%" + road_name_clean + "%%'\n"
-            "LIMIT 20"
+            "GROUP BY\n"
+            "  \"Name\",\n"
+            "  \"Type\",\n"
+            "  \"Owner\",\n"
+            "  \"Contact\",\n"
+            "  \"Phone\",\n"
+            "  \"Email\",\n"
+            "  \"Online Form\"\n"
+            "ORDER BY \"Name\" ASC\n"
+            "LIMIT 1000"
         )
         df = gpd.read_postgis(query, roads_pipe.instance_connector.engine, geom_col='geometry')
         non_geo_cols = [col for col in df.columns if col != 'geometry']
-        geojson_data = df.to_json(to_wgs84=True)
-        print(df)
-        print(geojson_data)
+        geojson_data = json.loads(df.to_json(to_wgs84=True))
+        boundaries_data = get_boundaries_data()
 
         return [
             dbc.Table.from_dataframe(df[non_geo_cols], striped=True, bordered=True, hover=True),
@@ -107,6 +128,7 @@ def init_dash(dash_app):
                 children=[
                     dl.TileLayer(),
                     dl.GeoJSON(data=geojson_data),
+                    dl.GeoJSON(data=boundaries_data),
                 ],
                 zoom=10,
                 style={'height': '50vh'},
