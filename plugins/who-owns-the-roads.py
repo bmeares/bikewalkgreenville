@@ -10,7 +10,7 @@ import meerschaum as mrsm
 from meerschaum.config import get_plugin_config, write_plugin_config
 from meerschaum.plugins import web_page, dash_plugin
 
-__version__ = '0.1.0'
+__version__ = '0.1.1'
 
 required: list[str] = ['dash-leaflet']
 
@@ -225,7 +225,6 @@ def init_dash(dash_app):
     def drop_marker_on_click(lines_click_data, map_click_data):
         if not callback_context.inputs:
             raise PreventUpdate
-        trigger = callback_context.triggered[0]['prop_id'].split('.')[0]
         line_click_data = callback_context.args_grouping[0][0]['value']
         if not line_click_data or not map_click_data:
             raise PreventUpdate
@@ -241,10 +240,6 @@ def init_dash(dash_app):
             autoClose=False,
             closeOnClick=False,
         )
-
-    @dash_app.callback(
-        State('wotr-map', 'clickData'), 
-    )
 
     def build_tooltip_contents(props):
         content = []
