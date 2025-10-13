@@ -14,6 +14,15 @@ __version__ = '0.1.0'
 
 required: list[str] = ['dash-leaflet']
 
+TYPES_COLORS: dict[str, str] = {
+    'US Highway': '#C7962E',
+    'State Road': '#C7962E',
+    'County Road': '#B9B9B9',
+    'Municipal Road': '#6F9920',
+    'Private Drive': '#577DAB',
+    'Subdivision': '#577DAB',
+}
+
 
 @dash_plugin
 def init_dash(dash_app):
@@ -25,7 +34,7 @@ def init_dash(dash_app):
     import dash.dcc as dcc
     import plotly.express as px
     import plotly.graph_objects as go
-    from dash import Input, Output, State, no_update
+    from dash import Input, Output, State, no_update, MATCH, ALL, callback_context
     from dash.exceptions import PreventUpdate
     import dash_bootstrap_components as dbc
 
@@ -33,6 +42,7 @@ def init_dash(dash_app):
     gpd = mrsm.attempt_import('geopandas', lazy=False)
 
     from meerschaum.utils.dtypes import serialize_geometry
+    from meerschaum.utils.dataframe import query_df
 
     roads_pipe = mrsm.Pipe('sql:bwg', 'roads', 'Roads', instance='sql:bwg')
     link_prefixes = {
@@ -40,64 +50,6 @@ def init_dash(dash_app):
         'Phone': 'tel:',
         'Online Form': '',
     }
-
-    initial_map_layout = dl.Map(
-        children=[
-            dl.TileLayer(
-                url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
-                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-            ),
-            dl.GeoJSON(
-                url='https://meerschaum.io/files/bwg/output/geojson/Boundaries/boundaries_greenville.geojson',
-                id='wotr-boundaries-greenville',
-                style={'color': '#A3CF1F', 'fillColor': '#A3CF1F', 'weight': 2, 'opacity': 0.5},
-            ),
-            dl.GeoJSON(
-                url='https://meerschaum.io/files/bwg/output/geojson/Boundaries/boundaries_mauldin.geojson',
-                id='wotr-boundaries-mauldin',
-                style={'color': '#44B6Ca', 'fillColor': '#44B6CA', 'weight': 2, 'opacity': 0.5},
-            ),
-            dl.GeoJSON(
-                url='https://meerschaum.io/files/bwg/output/geojson/Boundaries/boundaries_simpsonville.geojson',
-                id='wotr-boundaries-simpsonville',
-                style={'color': '#c6c6c6', 'fillColor': '#c6c6c6', 'weight': 2, 'opacity': 0.5},
-            ),
-            dl.GeoJSON(
-                url='https://meerschaum.io/files/bwg/output/geojson/Boundaries/boundaries_travelers_rest.geojson',
-                id='wotr-boundaries-travelers-rest',
-                style={'color': '#9b6088', 'fillColor': '#9b6088', 'weight': 2, 'opacity': 0.5},
-            ),
-            dl.GeoJSON(
-                url='https://meerschaum.io/files/bwg/output/geojson/Boundaries/boundaries_fountain-inn-clipped.geojson',
-                id='wotr-boundaries-fountain-inn',
-                style={'color': '#f2da3a', 'fillColor': '#f2da3a', 'weight': 2, 'opacity': 0.5},
-            ),
-            dl.GeoJSON(
-                url='https://meerschaum.io/files/bwg/output/geojson/Boundaries/boundaries_greer-clipped.geojson',
-                id='wotr-boundaries-greer',
-                style={'color': '#eb9360', 'fillColor': '#eb9360', 'weight': 2, 'opacity': 0.5},
-            ),
-            dl.GeoJSON(
-                url='https://meerschaum.io/files/bwg/output/geojson/county/BND_GVCNTY.geojson',
-                id='wotr-boundaries-county',
-                style={'color': '#333333', 'weight': 3, 'opacity': 0.5, 'fill': False,},
-            ),
-            dl.FeatureGroup(id='wotr-lines-group', interactive=True),
-            html.Div(id='wotr-click-marker-container'),
-            dl.FullScreenControl(),
-            dl.LocateControl(
-                locateOptions={"enableHighAccuracy": True},
-                drawCircle=False,
-                flyTo=True,
-                showPopup=False,
-                showCompass=True,
-            )
-        ],
-        zoom=10,
-        style={'height': '60vh'},
-        center=[34.843739, -82.393905],
-        id='wotr-map',
-    )
 
     @web_page(
         'who-owns-the-roads',
@@ -130,7 +82,9 @@ def init_dash(dash_app):
             id="wotr-submit-button",
             n_clicks=0,
         )
+        initial_map_layout = build_initial_map_layout()
         return [
+            dcc.Store(id='wotr-click-store'),
             html.Br(),
             dbc.Row([
                 dbc.Col(form),
@@ -180,11 +134,16 @@ def init_dash(dash_app):
             "LIMIT 100"
         )
         df = gpd.read_postgis(query, roads_pipe.instance_connector.engine, geom_col='geometry')
+        road_types = df['Type'].unique()
         non_geo_cols = [col for col in df.columns if col != 'geometry']
-        try:
-            geojson_data = json.loads(df.to_json(to_wgs84=True))
-        except ValueError:
-            geojson_data = {}
+        road_types_geojson_data = {}
+        for road_type in road_types:
+            try:
+                road_types_geojson_data[road_type] = json.loads(
+                    query_df(df, {'Type': road_type}).to_json(to_wgs84=True, drop_id=True)
+                )
+            except ValueError:
+                pass
 
         table = dbc.Table(
             [html.Thead([html.Tr([html.Th(col) for col in non_geo_cols])])] + [html.Tbody([
@@ -212,23 +171,27 @@ def init_dash(dash_app):
             hover=True,
         )
 
-        lines_geojson = dl.GeoJSON(
-            data=geojson_data,
-            id='wotr-lines',
-            zoomToBounds=True,
-            interactive=True,
-            hoverStyle={'color': 'green', 'weight': 6},
-            style={'color': 'green', 'weight': 3},
-            bubblingMouseEvents=True,
-            children=[
-                dl.Tooltip(
-                    id='wotr-tooltip',
-                    children=None,
-                    sticky=True,
-                    permanent=False,
-                ),
-            ],
-        )
+        road_types_geojson = {
+            road_type: dl.GeoJSON(
+                data=geojson_data,
+                id={'type': 'wotr-lines', 'ix': road_type},
+                zoomToBounds=True,
+                interactive=True,
+                hoverStyle={'color': TYPES_COLORS[road_type], 'weight': 6},
+                style={'color': TYPES_COLORS[road_type], 'weight': 3},
+                bubblingMouseEvents=True,
+                children=[
+                    dl.Tooltip(
+                        id={'type': 'wotr-tooltip', 'ix': road_type},
+                        children=None,
+                        sticky=True,
+                        permanent=False,
+                    )
+                ],
+            )
+            for road_type in road_types
+            if (geojson_data := road_types_geojson_data.get(road_type))
+        }
 
         table_children = [
             html.Div(
@@ -240,11 +203,11 @@ def init_dash(dash_app):
             table,
         ]
 
-        return table_children, lines_geojson
+        return table_children, list(road_types_geojson.values())
 
     @dash_app.callback(
-        Output('wotr-tooltip', 'children', allow_duplicate=True),
-        Input('wotr-lines', 'hoverData'),
+        Output({'type': 'wotr-tooltip', 'ix': MATCH}, 'children', allow_duplicate=True),
+        Input({'type': 'wotr-lines', 'ix': MATCH}, 'hoverData'),
         prevent_initial_call=True,
     )
     def update_tooltip_on_hover(hoverData):
@@ -255,11 +218,15 @@ def init_dash(dash_app):
 
     @dash_app.callback(
         Output('wotr-click-marker-container', 'children'),
-        Input('wotr-lines', 'clickData'),
+        Input({'type': 'wotr-lines', 'ix': ALL}, 'clickData'),
         State('wotr-map', 'clickData'), 
         prevent_initial_call=True,
     )
-    def drop_marker_on_click(line_click_data, map_click_data):
+    def drop_marker_on_click(lines_click_data, map_click_data):
+        if not callback_context.inputs:
+            raise PreventUpdate
+        trigger = callback_context.triggered[0]['prop_id'].split('.')[0]
+        line_click_data = callback_context.args_grouping[0][0]['value']
         if not line_click_data or not map_click_data:
             raise PreventUpdate
 
@@ -275,6 +242,9 @@ def init_dash(dash_app):
             closeOnClick=False,
         )
 
+    @dash_app.callback(
+        State('wotr-map', 'clickData'), 
+    )
 
     def build_tooltip_contents(props):
         content = []
@@ -296,7 +266,7 @@ def init_dash(dash_app):
                 ],
             )
             for prop in table_props
-            if (val := props.get(prop)) and prop != 'Name'
+            if (val := props.get(prop)) and prop != 'Name' and val != 'N/A'
         ]),
             style={
                 'borderCollapse': 'separate',
@@ -308,3 +278,63 @@ def init_dash(dash_app):
             table,
         ])
         return content
+
+
+    def build_initial_map_layout(boundary_opacity: float = 0.4, fill_opacity: float = 0.1,):
+        return dl.Map(
+            children=[
+                dl.TileLayer(
+                    url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+                ),
+                dl.GeoJSON(
+                    url='https://meerschaum.io/files/bwg/output/geojson/Boundaries/boundaries_greenville.geojson',
+                    id='wotr-boundaries-greenville',
+                    style={'color': '#A3CF1F', 'fillColor': '#A3CF1F', 'weight': 2, 'opacity': boundary_opacity, 'fillOpacity': fill_opacity},
+                ),
+                dl.GeoJSON(
+                    url='https://meerschaum.io/files/bwg/output/geojson/Boundaries/boundaries_mauldin.geojson',
+                    id='wotr-boundaries-mauldin',
+                    style={'color': '#44B6Ca', 'fillColor': '#44B6CA', 'weight': 2, 'opacity': boundary_opacity, 'fillOpacity': fill_opacity},
+                ),
+                dl.GeoJSON(
+                    url='https://meerschaum.io/files/bwg/output/geojson/Boundaries/boundaries_simpsonville.geojson',
+                    id='wotr-boundaries-simpsonville',
+                    style={'color': '#c6c6c6', 'fillColor': '#c6c6c6', 'weight': 2, 'opacity': boundary_opacity, 'fillOpacity': fill_opacity},
+                ),
+                dl.GeoJSON(
+                    url='https://meerschaum.io/files/bwg/output/geojson/Boundaries/boundaries_travelers_rest.geojson',
+                    id='wotr-boundaries-travelers-rest',
+                    style={'color': '#9b6088', 'fillColor': '#9b6088', 'weight': 2, 'opacity': boundary_opacity, 'fillOpacity': fill_opacity},
+                ),
+                dl.GeoJSON(
+                    url='https://meerschaum.io/files/bwg/output/geojson/Boundaries/boundaries_fountain-inn-clipped.geojson',
+                    id='wotr-boundaries-fountain-inn',
+                    style={'color': '#f2da3a', 'fillColor': '#f2da3a', 'weight': 2, 'opacity': boundary_opacity, 'fillOpacity': fill_opacity},
+                ),
+                dl.GeoJSON(
+                    url='https://meerschaum.io/files/bwg/output/geojson/Boundaries/boundaries_greer-clipped.geojson',
+                    id='wotr-boundaries-greer',
+                    style={'color': '#eb9360', 'fillColor': '#eb9360', 'weight': 2, 'opacity': boundary_opacity, 'fillOpacity': fill_opacity},
+                ),
+                dl.GeoJSON(
+                    url='https://meerschaum.io/files/bwg/output/geojson/county/BND_GVCNTY.geojson',
+                    id='wotr-boundaries-county',
+                    style={'color': '#333333', 'weight': 3, 'opacity': 0.5, 'fill': False,},
+                ),
+                dl.FeatureGroup(id='wotr-lines-group', interactive=True),
+                html.Div(id='wotr-click-marker-container'),
+                dl.FullScreenControl(),
+                dl.LocateControl(
+                    locateOptions={"enableHighAccuracy": True},
+                    drawCircle=False,
+                    flyTo=True,
+                    showPopup=False,
+                    showCompass=True,
+                )
+            ],
+            zoom=10,
+            style={'height': '60vh'},
+            center=[34.843739, -82.393905],
+            id='wotr-map',
+        )
