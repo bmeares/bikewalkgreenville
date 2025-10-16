@@ -10,24 +10,66 @@ import meerschaum as mrsm
 from meerschaum.config import get_plugin_config, write_plugin_config
 from meerschaum.plugins import web_page, dash_plugin
 
-__version__ = '0.1.2'
+__version__ = '0.2.0'
 
 required: list[str] = ['dash-leaflet']
 
-TYPES_COLORS: dict[str, str] = {
-    'US Highway': '#C7962E',
-    'State Road': '#C7962E',
-    'County Road': '#B9B9B9',
-    'Municipal Road': '#6F9920',
-    'Private Drive': '#577DAB',
-    'Subdivision': '#577DAB',
+TYPES_COLORS = {
+    'US Highway': {
+        'hex': '#C7962E',
+        'button': {
+            'color': 'warning',
+            'outline': True,
+        },
+    },
+    'State Road': {
+        'hex': '#C7962E',
+        'button': {
+            'color': 'warning',
+            'outline': True,
+        }
+    },
+    'County Road': {
+        'hex': '#999999',
+        'button': {
+            'color': 'light',
+            'outline': True,
+        },
+    },
+    'Municipal Road': {
+        'hex': '#6F9920',
+        'button': {
+            'color': 'success',
+            'outline': True,
+        },
+    },
+    'Private Drive': {
+        'hex': '#577DAB',
+        'button': {
+            'color': 'info',
+            'outline': True,
+        },
+    },
+    'Subdivision': {
+        'hex': '#577DAB',
+        'button': {
+            'color': 'info',
+            'outline': True,
+        },
+    },
 }
 
-SUFFIX_ALIASES: dict[str, str] = {
+ALIASES: dict[str, str] = {
     'street': 'st',
     'road': 'rd',
     'avenue': 'ave',
     'court': 'ct',
+    'east': 'e',
+    'west': 'w',
+    'north': 'n',
+    'south': 's',
+    'northeast': 'ne',
+    'southeast': 'se',
 }
 
 
@@ -69,10 +111,14 @@ def init_dash(dash_app):
     )
     def page_layout():
         """Return the layout objects for this page."""
-        return dbc.Container([
+        return [
             dcc.Location(id='who-owns-the-roads-location'),
             html.Div(id='who-owns-the-roads-output-div'),
-        ])
+        ]
+        #  return dbc.Container([
+            #  dcc.Location(id='who-owns-the-roads-location'),
+            #  html.Div(id='who-owns-the-roads-output-div'),
+        #  ])
 
     @dash_app.callback(
         Output('who-owns-the-roads-output-div', 'children'),
@@ -93,39 +139,53 @@ def init_dash(dash_app):
             n_clicks=0,
         )
         form = html.Div([
-            dbc.InputGroup([
-                dbc.Input(
-                    value=initial_search_value,
-                    placeholder="Road Name",
-                    id="wotr-road-name-input",
-                    type='text',
-                    debounce=30,
-                ),
-                submit_button,
-            ]),
+            dbc.InputGroup(
+                [
+                    dbc.Input(
+                        value=initial_search_value,
+                        placeholder="Road Name",
+                        id="wotr-road-name-input",
+                        type='text',
+                        debounce=30,
+                    ),
+                    submit_button,
+                ],
+                size='lg',
+            ),
             html.Div(id='wotr-search-suggestions'),
         ])
-        iframe_scroll = url_params.get('embed', None) in ('true', 'True', '1')
-        initial_map_layout = build_initial_map_layout(iframe_scroll=iframe_scroll)
-        return [
+        is_embed = url_params.get('embed', None) in ('true', 'True', '1')
+        initial_map_layout = build_initial_map_layout(iframe_scroll=is_embed)
+        page_children = [
             dcc.Store(id='wotr-click-store'),
             html.Br(),
             dbc.Row([
                 dbc.Col(form),
             ]),
             html.Br(),
-            initial_map_layout,
+            html.Div(
+                initial_map_layout,
+                style={'visibility': 'hidden'},
+                id='wotr-map-div',
+            ),
             html.Div(id="wotr-results-table"),
         ]
 
+        return (
+            dbc.Container(page_children)
+            if not is_embed
+            else page_children
+        )
+
     @dash_app.callback(
-        Output('wotr-lines-group', 'children'),
-        Input({'type': 'wotr-card-name-button', 'ix': ALL}, 'n_clicks'),
+        Output('wotr-submit-button', 'n_clicks'),
+        Output('wotr-road-name-input', 'value'),
         Input({'type': 'wotr-search-suggest-button', 'ix': ALL}, 'n_clicks'),
-        prevent_initial_call=False,
+        State('wotr-submit-button', 'n_clicks'),
+        prevent_initial_call=True,
     )
-    def card_name_click(card_names_n_clicks, search_suggest_n_clicks):
-        if not any(card_names_n_clicks + search_suggest_n_clicks):
+    def suggest_click(search_suggest_n_clicks, search_n_clicks):
+        if not any(search_suggest_n_clicks):
             raise PreventUpdate
 
         try:
@@ -134,7 +194,24 @@ def init_dash(dash_app):
         except Exception:
             raise PreventUpdate
 
-        mrsm.pprint(road_dict)
+        road_name = road_dict['Name']
+        return ((search_n_clicks or 0) + 1), road_name
+
+    @dash_app.callback(
+        Output('wotr-lines-group', 'children'),
+        Input({'type': 'wotr-card-name-button', 'ix': ALL}, 'n_clicks'),
+        prevent_initial_call=False,
+    )
+    def card_name_click(card_names_n_clicks):
+        if not any(card_names_n_clicks):
+            raise PreventUpdate
+
+        try:
+            click_ix_val = callback_context.triggered_id['ix']
+            road_dict = json.loads(click_ix_val)
+        except Exception:
+            raise PreventUpdate
+
         road_name = road_dict['Name']
         owner = road_dict.get('Owner', None)
         road_type = road_dict.get('Type', None)
@@ -169,7 +246,6 @@ def init_dash(dash_app):
             "ORDER BY \"Name\" ASC\n"
             "LIMIT 100"
         )
-        print(query)
         df = gpd.read_postgis(query, roads_pipe.instance_connector.engine, geom_col='geometry')
         road_types_geojson = get_road_types_geojson(df)
         return list(road_types_geojson.values())
@@ -182,7 +258,7 @@ def init_dash(dash_app):
         road_name_clean = re.sub(r'\s+', ' ', road_name_clean).lower()
         name_parts = road_name_clean.split(' ')
         return ' '.join([
-            SUFFIX_ALIASES.get(part, part)
+            ALIASES.get(part, part)
             for part in name_parts
         ])
 
@@ -206,8 +282,8 @@ def init_dash(dash_app):
                 id={'type': layer_type, 'ix': road_type},
                 zoomToBounds=True,
                 interactive=True,
-                hoverStyle={'color': TYPES_COLORS[road_type], 'weight': 8},
-                style={'color': TYPES_COLORS[road_type], 'weight': 4},
+                hoverStyle={'color': TYPES_COLORS[road_type]['hex'], 'weight': 8},
+                style={'color': TYPES_COLORS[road_type]['hex'], 'weight': 4},
                 bubblingMouseEvents=True,
                 children=[
                     dl.Tooltip(
@@ -264,6 +340,7 @@ def init_dash(dash_app):
     @dash_app.callback(
         Output('wotr-results-table', 'children'),
         Output('wotr-lines-group', 'children'),
+        Output('wotr-map-div', 'style'),
         Input('wotr-submit-button', 'n_clicks'),
         Input('wotr-road-name-input', 'n_submit'),
         State('wotr-road-name-input', 'value'),
@@ -305,15 +382,16 @@ def init_dash(dash_app):
                     [
                         dbc.Button(
                             html.B(doc['Name']),
-                            color='dark',
                             size='lg',
                             id={
                                 'type': 'wotr-card-name-button',
                                 'ix': json.dumps(doc, separators=(',', ':'), sort_keys=True),
                             },
+                            **TYPES_COLORS[doc['Type']]['button']
                         ),
                     ] + build_tooltip_contents(doc, include_name=False)
-                )
+                ),
+                **TYPES_COLORS[doc['Type']]['button']
             )
             for doc in df[non_geo_cols].to_dict(orient='records')
         ]
@@ -325,10 +403,10 @@ def init_dash(dash_app):
                     style={'color': '#999999', 'font-size': '12px', 'text-align': 'right'},
                 )
             ),
-            build_cards_grid(cards, 2)
+            build_cards_grid(cards, 3),
         ]
 
-        return table_children, list(road_types_geojson.values())
+        return table_children, list(road_types_geojson.values()), {'visibility': 'visible'}
 
     @dash_app.callback(
         Output({'type': 'wotr-tooltip', 'ix': MATCH}, 'children', allow_duplicate=True),
@@ -369,17 +447,23 @@ def init_dash(dash_app):
     def build_tooltip_contents(props, include_name: bool = True):
         content = []
         table_props = ['Type', 'Owner', 'Online Form', 'Email', 'Phone']
+        road_type = props['Type']
         table = html.Table(html.Tbody([
             html.Tr(
                 [
-                    html.Td(prop, style={'color': '#888888'}),
+                    html.Td(
+                        prop,
+                        style={'font-weight': 'bold'},
+                    ),
                     html.Td(
                         (
                             val
-                            if not (link_prefix := link_prefixes.get(prop)) is not None
+                            if (link_prefix := link_prefixes.get(prop)) is None
                             else html.A(
                                 (val if prop != 'Online Form' else 'Report an Issue'),
-                                href=(link_prefix + val),
+                                href=(link_prefix + (re.sub(r'\D', '', val) if prop == 'Phone' else val)),
+                                target="_blank",
+                                style={'color': TYPES_COLORS[road_type]['hex']}
                             )
                         ),
                     )
@@ -397,7 +481,6 @@ def init_dash(dash_app):
             content.append(html.H6(html.B(props.get('Name', 'N/A'))))
         content.append(table)
         return content
-
 
     def build_initial_map_layout(
         boundary_opacity: float = 0.4,
@@ -458,7 +541,7 @@ def init_dash(dash_app):
                 )
             ],
             zoom=10,
-            style={'height': '60vh'},
+            style={'height': '30vh'},
             center=[34.843739, -82.393905],
             id='wotr-map',
         )

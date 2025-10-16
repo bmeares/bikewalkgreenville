@@ -33,6 +33,29 @@ pipes:
       GROUP BY "NAME"
 
 - connector: "sql:bwg"
+  metric: "boundaries_deltas"
+  location: "Boundaries"
+  parameters:
+    schema: Boundaries
+    target: boundaries_deltas
+    columns:
+      datetime: "edit_date"
+      municipality_name: "Municipality Name"
+      jcode: "JCODE"
+    dtypes:
+      geometry: "geometry[MULTIPOLYGON, 6570]"
+    indices:
+      geometry: geometry
+    sql: |-
+      SELECT
+        "last_edi_1"::DATE AS "edit_date",
+        SMART_CAPITALIZE("NAME") AS "Municipality Name",
+        "JCODE",
+        ST_Union("geometry") AS "geometry"
+      FROM county."BND_MUNICIPAL"
+      GROUP BY "NAME", "last_edi_1", "JCODE"
+
+- connector: "sql:bwg"
   metric: "boundaries"
   location: "greenville"
   parameters:

@@ -31,21 +31,24 @@ pipes:
   metric: "Boundaries"
   location: "BND_MUNICIPAL"
   parameters:
-    schema: "county"
-    target: "BND_MUNICIPAL"
+    autoincrement: true
     columns:
-      name: "NAME"
-      jcode: "JCODE"
-      datetime: "CREATED"
-      primary: "GlobalID"
+      datetime: created_da
+      jcode: JCODE
+      name: NAME
+      primary: row_id
     dtypes:
-      "CREATED": "datetime"
-    indices:
-      geometry: "geometry"
-    tags: ["BND"]
+      row_id: int
+      created_da: date
+      geometry: geometry[MULTIPOLYGON, 6570]
+      last_edi_1: date
     greenville-county:
-      filetype: "shp"
-      layer: "Municipal Boundary"
+      filetype: shp
+      layer: Municipal Boundary
+    indices:
+      geometry: geometry
+    schema: county
+    target: BND_MUNICIPAL
     verify:
       chunk_days: 3650
 
@@ -674,22 +677,6 @@ pipes:
       geometry: "geometry"
     tags: ["ZON"]
 
-- connector: "plugin:greenville-county"
-  metric: "PRISMA Health Swamp Rabbit Trail"
-  parameters:
-    schema: "gcgis"
-    target: "PRISMA Health Swamp Rabbit Trail"
-    greenville-county:
-      layer: "PRISMA Health Swamp Rabbit Trail"
-    columns:
-      section: "SECTION"
-      facility_id: "FACILITYID"
-      feat_code: "FEAT_CODE"
-    dtypes:
-      geometry: "geometry[LINESTRING, 6570]"
-    indices:
-      geometry: "geometry"
-    
 
 config:
   meerschaum:
