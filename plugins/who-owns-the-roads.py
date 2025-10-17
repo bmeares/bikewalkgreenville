@@ -174,7 +174,15 @@ def init_dash(dash_app):
         return (
             dbc.Container(page_children)
             if not is_embed
-            else page_children
+            else html.Div(
+                page_children,
+                style={
+                    'padding-left': '10px',
+                    'padding-right': '10px',
+                    'width': '100vw',
+                    'overflow-x': 'hidden',
+                },
+            )
         )
 
     @dash_app.callback(
@@ -391,6 +399,7 @@ def init_dash(dash_app):
                         ),
                     ] + build_tooltip_contents(doc, include_name=False)
                 ),
+                style={'margin-top': '15px'},
                 **TYPES_COLORS[doc['Type']]['button']
             )
             for doc in df[non_geo_cols].to_dict(orient='records')
