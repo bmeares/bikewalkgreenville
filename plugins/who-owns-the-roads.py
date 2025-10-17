@@ -10,7 +10,7 @@ import meerschaum as mrsm
 from meerschaum.config import get_plugin_config, write_plugin_config
 from meerschaum.plugins import web_page, dash_plugin
 
-__version__ = '0.2.0'
+__version__ = '0.3.0'
 
 required: list[str] = ['dash-leaflet']
 
@@ -23,6 +23,13 @@ TYPES_COLORS = {
         },
     },
     'State Road': {
+        'hex': '#C7962E',
+        'button': {
+            'color': 'warning',
+            'outline': True,
+        }
+    },
+    'Interstate Highway': {
         'hex': '#C7962E',
         'button': {
             'color': 'warning',
@@ -64,32 +71,40 @@ ALIASES: dict[str, str] = {
     'road': 'rd',
     'avenue': 'ave',
     'court': 'ct',
+    'drive': 'dr',
     'east': 'e',
     'west': 'w',
     'north': 'n',
     'south': 's',
     'northeast': 'ne',
     'southeast': 'se',
+    'northwest': 'nw',
+    'southwest': 'sw',
+    'highway': 'hwy',
+}
+LINK_PREFIXES = {
+    'Email': 'mailto:',
+    'Phone': 'tel:',
+    'Online Form': '',
 }
 
 
 @dash_plugin
 def init_dash(dash_app):
     """Initialize the Plotly Dash application."""
-
     import json
     import re
-    from urllib.parse import parse_qs
+    from urllib.parse import parse_qs, urlencode
 
     import dash.html as html
     import dash.dcc as dcc
     import plotly.express as px
     import plotly.graph_objects as go
-    from dash import Input, Output, State, no_update, MATCH, ALL, callback_context
+    from dash import Input, Output, State, no_update, MATCH, ALL, callback_context, clientside_callback
     from dash.exceptions import PreventUpdate
     import dash_bootstrap_components as dbc
 
-    dl, dlx = mrsm.attempt_import('dash_leaflet', 'dash_leaflet.express', venv='who-owns-the-roads', lazy=False)
+    dl = mrsm.attempt_import('dash_leaflet', venv='who-owns-the-roads', lazy=False)
     gpd = mrsm.attempt_import('geopandas', lazy=False)
 
     from meerschaum.utils.dtypes import serialize_geometry
@@ -97,11 +112,6 @@ def init_dash(dash_app):
     from meerschaum.api.dash.components import build_cards_grid
 
     roads_pipe = mrsm.Pipe('sql:bwg', 'roads', 'Roads', instance='sql:bwg')
-    link_prefixes = {
-        'Email': 'mailto:',
-        'Phone': 'tel:',
-        'Online Form': '',
-    }
 
     @web_page(
         'who-owns-the-roads',
@@ -115,60 +125,98 @@ def init_dash(dash_app):
             dcc.Location(id='who-owns-the-roads-location'),
             html.Div(id='who-owns-the-roads-output-div'),
         ]
-        #  return dbc.Container([
-            #  dcc.Location(id='who-owns-the-roads-location'),
-            #  html.Div(id='who-owns-the-roads-output-div'),
-        #  ])
 
     @dash_app.callback(
         Output('who-owns-the-roads-output-div', 'children'),
         Input('who-owns-the-roads-location', 'pathname'),
         State('who-owns-the-roads-location', 'search'),
+        State('who-owns-the-roads-location', 'href'),
     )
-    def render_page_on_url_change(pathname: str, search: str):
-        """Reload page contents when the URL path changes."""
+    def render_page_on_url_change(pathname: str, search: str, href: str):
+        """Reload page contents when the URL path changes.""" 
         url_params = {
             param: val[0]
             for param, val in parse_qs(search.lstrip('?')).items()
             if val
         }
+        is_embed = url_params.get('embed') in ('true', 'True', '1')
+        non_embed_params = {
+            k: v
+            for k, v in url_params.items()
+            if k != 'embed'
+        }
         initial_search_value = url_params.get('search', '')
         submit_button = dbc.Button(
-            "Search",
+            "⌕",
             id="wotr-submit-button",
             n_clicks=0,
+            color='light',
+            style={'font-weight': 'bold', 'color': '#FFFFFF'},
+            outline=True,
         )
-        form = html.Div([
-            dbc.InputGroup(
-                [
-                    dbc.Input(
-                        value=initial_search_value,
-                        placeholder="Road Name",
-                        id="wotr-road-name-input",
-                        type='text',
-                        debounce=30,
-                    ),
-                    submit_button,
-                ],
-                size='lg',
+        fullscreen_button = dbc.Button(
+            '⛶',
+            color='secondary',
+            outline=True,
+            style={'color': '#FFFFFF'},
+            href=(
+                href.split('?', maxsplit=1)[0]
+                + (
+                    ('?' + urlencode(non_embed_params))
+                    if non_embed_params
+                    else ''
+                )
             ),
-            html.Div(id='wotr-search-suggestions'),
-        ])
-        is_embed = url_params.get('embed', None) in ('true', 'True', '1')
+            target="_blank",
+        )
+        clear_button = dbc.Button(
+            '×',
+            color='secondary',
+            outline=True,
+            style={'color': '#FFFFFF'},
+            id='wotr-clear-button',
+        )
+        left_buttons = [fullscreen_button, clear_button] if is_embed else [clear_button]
+
+        form = html.Div(
+            [
+                dbc.InputGroup(
+                    left_buttons + [
+                        dbc.Input(
+                            value=initial_search_value,
+                            placeholder="Search a road name",
+                            id="wotr-road-name-input",
+                            type='text',
+                            debounce=50,
+                        ),
+                        submit_button,
+                    ],
+                    size='lg',
+                ),
+                html.Div(
+                    id='wotr-search-suggestions',
+                    style={
+                        'position': 'absolute',
+                        'zIndex': 1001,
+                        'width': '100%',
+                    },
+                ),
+            ],
+            style={'position': 'relative'},
+        )
         initial_map_layout = build_initial_map_layout(iframe_scroll=is_embed)
         page_children = [
-            dcc.Store(id='wotr-click-store'),
-            html.Br(),
-            dbc.Row([
+            dbc.Row(
                 dbc.Col(form),
-            ]),
-            html.Br(),
+                style={'margin-top': '15px', 'margin-bottom': '15px'},
+            ),
             html.Div(
                 initial_map_layout,
                 style={'visibility': 'hidden'},
                 id='wotr-map-div',
             ),
             html.Div(id="wotr-results-table"),
+            html.Div(id='wotr-dummy-for-clientside', style={'display': 'none'}),
         ]
 
         return (
@@ -179,21 +227,38 @@ def init_dash(dash_app):
                 style={
                     'padding-left': '10px',
                     'padding-right': '10px',
-                    'width': '100vw',
-                    'overflow-x': 'hidden',
                 },
             )
         )
 
+    clientside_callback(
+        """
+        function(pathname) {
+            const params = new URLSearchParams(window.location.search);
+            if (params.get('embed') === 'true') {
+                document.body.style.overflowX = 'hidden';
+            }
+            return '';
+        }
+        """,
+        Output('wotr-dummy-for-clientside', 'children'),
+        Input('who-owns-the-roads-location', 'pathname'),
+    )
+
     @dash_app.callback(
         Output('wotr-submit-button', 'n_clicks'),
         Output('wotr-road-name-input', 'value'),
+        Output('wotr-search-suggestions', 'children', allow_duplicate=True),
         Input({'type': 'wotr-search-suggest-button', 'ix': ALL}, 'n_clicks'),
+        Input('wotr-clear-button', 'n_clicks'),
         State('wotr-submit-button', 'n_clicks'),
         prevent_initial_call=True,
     )
-    def suggest_click(search_suggest_n_clicks, search_n_clicks):
-        if not any(search_suggest_n_clicks):
+    def suggest_click(search_suggest_n_clicks, clear_n_clicks, search_n_clicks):
+        if callback_context.triggered_id == 'wotr-clear-button' and clear_n_clicks:
+            return no_update, '', None
+
+        if not any(search_suggest_n_clicks) or callback_context.triggered_id is None:
             raise PreventUpdate
 
         try:
@@ -203,7 +268,7 @@ def init_dash(dash_app):
             raise PreventUpdate
 
         road_name = road_dict['Name']
-        return ((search_n_clicks or 0) + 1), road_name
+        return ((search_n_clicks or 0) + 1), road_name, None
 
     @dash_app.callback(
         Output('wotr-lines-group', 'children'),
@@ -265,8 +330,11 @@ def init_dash(dash_app):
         road_name_clean = re.sub(r'[^a-zA-Z0-9]', ' ', input_value)
         road_name_clean = re.sub(r'\s+', ' ', road_name_clean).lower()
         name_parts = road_name_clean.split(' ')
+        skip_aliases = []
+        if road_name_clean.startswith('e north'):
+            skip_aliases.append('north')
         return ' '.join([
-            ALIASES.get(part, part)
+            (ALIASES.get(part, part) if part not in skip_aliases else part)
             for part in name_parts
         ])
 
@@ -307,7 +375,7 @@ def init_dash(dash_app):
         }
 
     @dash_app.callback(
-        Output('wotr-search-suggestions', 'children'),
+        Output('wotr-search-suggestions', 'children', allow_duplicate=True),
         Output('wotr-submit-button', 'disabled'),
         Input('wotr-road-name-input', 'value'),
     )
@@ -317,19 +385,25 @@ def init_dash(dash_app):
         """
         road_name_clean = get_road_name_clean(input_value)
         if len(road_name_clean) < 3:
-            return [], True
+            return None, True
 
         query = (
-            "SELECT DISTINCT \"Name\"\n"
+            "SELECT DISTINCT \"Name\", LEVENSHTEIN(LOWER(REGEXP_REPLACE(\"Name\", '[^a-zA-Z0-9]', '', 'g')), '" + road_name_clean.replace(' ', '') + "') AS score\n"
             "FROM \"Roads\".roads_clip\n"
             "WHERE\n"
             "  LOWER(REGEXP_REPLACE(\"Name\", '[^a-zA-Z0-9 ]', '', 'g')) LIKE '%%" + road_name_clean.replace(' ', '%%') + "%%'\n"
+            "ORDER BY score ASC\n"
+            "LIMIT 10"
         )
         results = roads_pipe.instance_connector.exec(query).fetchall()
-        buttons = [
-            dbc.Button(
+        if not results:
+            return None, False
+
+        items = [
+            dbc.ListGroupItem(
                 row[0],
-                color='link',
+                action=True,
+                style={'font-size': 'small'},
                 id={
                     'type': 'wotr-search-suggest-button',
                     'ix': json.dumps(
@@ -338,20 +412,20 @@ def init_dash(dash_app):
                         sort_keys=True,
                     ),
                 },
-                size='sm',
-                style={'text-decoration': 'none'},
             )
             for row in results
         ]
-        return buttons, False
+        return dbc.ListGroup(items, flush=True), False
 
     @dash_app.callback(
         Output('wotr-results-table', 'children'),
         Output('wotr-lines-group', 'children'),
         Output('wotr-map-div', 'style'),
+        Output('wotr-search-suggestions', 'children', allow_duplicate=True),
         Input('wotr-submit-button', 'n_clicks'),
         Input('wotr-road-name-input', 'n_submit'),
         State('wotr-road-name-input', 'value'),
+        prevent_initial_call=True,
     )
     def submit_click(n_clicks, n_submit, road_name):
         if not road_name or len(road_name) < 3:
@@ -415,7 +489,7 @@ def init_dash(dash_app):
             build_cards_grid(cards, 3),
         ]
 
-        return table_children, list(road_types_geojson.values()), {'visibility': 'visible'}
+        return table_children, list(road_types_geojson.values()), {'visibility': 'visible'}, None
 
     @dash_app.callback(
         Output({'type': 'wotr-tooltip', 'ix': MATCH}, 'children', allow_duplicate=True),
@@ -437,7 +511,12 @@ def init_dash(dash_app):
     def drop_marker_on_click(lines_click_data, map_click_data):
         if not callback_context.inputs:
             raise PreventUpdate
-        line_click_data = callback_context.args_grouping[0][0]['value']
+
+        line_click_data = None
+        for line_input in callback_context.args_grouping[0]:
+            if (value := line_input.get('value')):
+                line_click_data = value
+                break
         if not line_click_data or not map_click_data:
             raise PreventUpdate
 
@@ -467,7 +546,7 @@ def init_dash(dash_app):
                     html.Td(
                         (
                             val
-                            if (link_prefix := link_prefixes.get(prop)) is None
+                            if (link_prefix := LINK_PREFIXES.get(prop)) is None
                             else html.A(
                                 (val if prop != 'Online Form' else 'Report an Issue'),
                                 href=(link_prefix + (re.sub(r'\D', '', val) if prop == 'Phone' else val)),
@@ -499,7 +578,7 @@ def init_dash(dash_app):
         return dl.Map(
             children=[
                 dl.TileLayer(
-                    url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+                    url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
                     attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
                 )] + ([dl.GestureHandling()] if iframe_scroll else []) + [
                 dl.GeoJSON(
@@ -515,7 +594,7 @@ def init_dash(dash_app):
                 dl.GeoJSON(
                     url='https://meerschaum.io/files/bwg/output/geojson/Boundaries/boundaries_simpsonville.geojson',
                     id='wotr-boundaries-simpsonville',
-                    style={'color': '#c6c6c6', 'fillColor': '#c6c6c6', 'weight': 2, 'opacity': 0.8, 'fillOpacity': 0.3},
+                    style={'color': '#c6c6c6', 'fillColor': '#c6c6c6', 'weight': 2, 'opacity': boundary_opacity, 'fillOpacity': fill_opacity},
                 ),
                 dl.GeoJSON(
                     url='https://meerschaum.io/files/bwg/output/geojson/Boundaries/boundaries_travelers_rest.geojson',
