@@ -10,7 +10,7 @@ import meerschaum as mrsm
 from meerschaum.config import get_plugin_config, write_plugin_config
 from meerschaum.plugins import web_page, dash_plugin
 
-__version__ = '0.3.0'
+__version__ = '0.3.1'
 
 required: list[str] = ['dash-leaflet']
 
@@ -72,6 +72,7 @@ ALIASES: dict[str, str] = {
     'avenue': 'ave',
     'court': 'ct',
     'drive': 'dr',
+    'lane': 'ln',
     'east': 'e',
     'west': 'w',
     'north': 'n',
@@ -328,11 +329,13 @@ def init_dash(dash_app):
         Return the cleaned, normalized road name from the input string.
         """
         road_name_clean = re.sub(r'[^a-zA-Z0-9]', ' ', input_value)
-        road_name_clean = re.sub(r'\s+', ' ', road_name_clean).lower()
+        road_name_clean = re.sub(r'\s+', ' ', road_name_clean).lower().strip()
         name_parts = road_name_clean.split(' ')
         skip_aliases = []
         if road_name_clean.startswith('e north'):
             skip_aliases.append('north')
+        if not road_name_clean.rstrip(' ').endswith('lane'):
+            skip_aliases.append('lane')
         return ' '.join([
             (ALIASES.get(part, part) if part not in skip_aliases else part)
             for part in name_parts
