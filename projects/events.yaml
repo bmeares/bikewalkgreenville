@@ -1,0 +1,47 @@
+project_name: events
+
+root_dir: ../root
+
+plugins_dir:
+- ../.installed_plugins
+- ../plugins
+
+sync:
+  schedule: "daily"
+
+pipes:
+
+- connector: "plugin:civicclerk"
+  metric: "events"
+  location: "city_of_greenville"
+  parameters:
+    schema: "Events"
+    target: "events_greenville"
+    columns:
+      primary: "id"
+      datetime: "id"
+    dtypes:
+      id: "int"
+      createdByUserId: "uuid"
+      eventLocation: "json"
+      agendaFile: "json"
+      minutesFile: "json"
+      eventSocialMediaModel: "json"
+      publishedFiles: "json"
+    indices:
+      startDateTime: "startDateTime"
+      categoryName: "categoryName"
+    fetch:
+      backtrack_minutes: 100
+
+config:
+  meerschaum:
+    instance: sql:bwg
+    connectors:
+      sql:
+        bwg: MRSM{meerschaum:connectors:sql:bwg}
+  plugins:
+    bwg:
+      data_path: '{MRSM_ROOT_DIR}/../data'
+
+environment: {}
