@@ -10,7 +10,7 @@ import meerschaum as mrsm
 from meerschaum.config import get_plugin_config, write_plugin_config
 from meerschaum.plugins import web_page, dash_plugin
 
-__version__ = '0.3.1'
+__version__ = '0.3.2'
 
 required: list[str] = ['dash-leaflet']
 
@@ -88,6 +88,30 @@ LINK_PREFIXES = {
     'Phone': 'tel:',
     'Online Form': '',
 }
+LOG_PIPE: mrsm.Pipe = mrsm.Pipe(
+    'dash', 'usage', 'Roads',
+    instance='sql:bwg',
+    parameters={
+        'autotime': True,
+        'schema': 'Roads',
+        'target': 'dash_usage',
+        'columns': {
+            'datetime': 'ts',
+            'ip': 'ip',
+        },
+        'dtypes': {
+            'ts': 'datetime',
+            'ip': 'string',
+            'user_agent': 'string',
+            'query': 'string',
+            'road_name_clean': 'string',
+            'is_embed': 'bool',
+        },
+        'verify': {
+            'chunk_minutes': (1440 * 365.25),
+        },
+    },
+)
 
 
 @dash_plugin
@@ -104,6 +128,7 @@ def init_dash(dash_app):
     from dash import Input, Output, State, no_update, MATCH, ALL, callback_context, clientside_callback
     from dash.exceptions import PreventUpdate
     import dash_bootstrap_components as dbc
+    from flask import request
 
     dl = mrsm.attempt_import('dash_leaflet', venv='who-owns-the-roads', lazy=False)
     gpd = mrsm.attempt_import('geopandas', lazy=False)
@@ -127,6 +152,23 @@ def init_dash(dash_app):
             html.Div(id='who-owns-the-roads-output-div'),
         ]
 
+    def get_url_params(search: str) -> dict[str, str]:
+        """
+        Return the URL params dict from the search string.
+        """
+        return {
+            param: val[0]
+            for param, val in parse_qs(search.lstrip('?')).items()
+            if val
+        }
+
+    def get_embed_status(search: str) -> bool:
+        """
+        Return whether the app is in embed mode.
+        """
+        url_params = get_url_params(search)
+        return url_params.get('embed') in ('true', 'True', '1')
+
     @dash_app.callback(
         Output('who-owns-the-roads-output-div', 'children'),
         Input('who-owns-the-roads-location', 'pathname'),
@@ -135,12 +177,8 @@ def init_dash(dash_app):
     )
     def render_page_on_url_change(pathname: str, search: str, href: str):
         """Reload page contents when the URL path changes.""" 
-        url_params = {
-            param: val[0]
-            for param, val in parse_qs(search.lstrip('?')).items()
-            if val
-        }
-        is_embed = url_params.get('embed') in ('true', 'True', '1')
+        url_params = get_url_params(search)
+        is_embed = get_embed_status(search)
         non_embed_params = {
             k: v
             for k, v in url_params.items()
@@ -428,13 +466,25 @@ def init_dash(dash_app):
         Input('wotr-submit-button', 'n_clicks'),
         Input('wotr-road-name-input', 'n_submit'),
         State('wotr-road-name-input', 'value'),
+        State('who-owns-the-roads-location', 'search'),
         prevent_initial_call=True,
     )
-    def submit_click(n_clicks, n_submit, road_name):
+    def submit_click(n_clicks, n_submit, road_name, search):
         if not road_name or len(road_name) < 3:
             raise PreventUpdate
 
         road_name_clean = get_road_name_clean(road_name)
+        is_embed = get_embed_status(search)
+        LOG_PIPE.sync(
+            [{
+                'ip': request.remote_addr,
+                'user_agent': request.user_agent,
+                'query': road_name,
+                'road_name_clean': road_name_clean,
+                'is_embed': is_embed,
+            }],
+            blocking=False,
+        )
         query = (
             "SELECT\n"
             "  \"Name\",\n"
