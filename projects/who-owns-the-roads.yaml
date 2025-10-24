@@ -1,6 +1,6 @@
 ### See https://meerschaum.io/reference/compose/ for the compose schema.
 
-project_name: who-owns-what-roads
+project_name: who-owns-the-roads
 
 root_dir: ../root
 
@@ -94,19 +94,20 @@ pipes:
     schema: Roads
     target: roads
     columns:
-      global_id: GlobalID
+      primary: "Facility ID"
       type: "Type"
       name: "Name"
     dtypes:
-      GlobalID: uuid
       geometry: geometry[LINESTRING, 6570]
     indices:
       geometry: geometry
     sql: |-
       SELECT
+        "created_da" AS "Created",
+        "last_edi_1" AS "Last Edited",
         r.road_type AS "Type",
         SMART_CAPITALIZE("LABEL") AS "Name",
-        "GlobalID",
+        "FACILITYID" AS "Facility ID",
         "geometry",
         ST_Length("geometry") AS "Length (ft)",
         c.owner AS "Owner",
@@ -137,16 +138,28 @@ pipes:
         END
 
 - connector: "sql:bwg"
+  metric: "roads_deltas"
+  location: "Roads"
+  parameters:
+    schema: "Roads"
+    target: roads_deltas
+    columns:
+      datetime: "Last Edited"
+      facility_id: "Facility ID"
+    sql: |-
+      SELECT *
+      FROM "Roads".roads
+
+- connector: "sql:bwg"
   metric: "roads_clip"
   location: "Roads"
   parameters:
     schema: Roads
     target: roads_clip
     columns:
-      global_id: GlobalID
+      primary: "Facility ID"
       road_type: "Type"
     dtypes:
-      GlobalID: uuid
       geometry: geometry[LINESTRING, 6570]
     indices:
       geometry: geometry
@@ -155,7 +168,7 @@ pipes:
       SELECT
         r."Type",
         r."Name",
-        r."GlobalID",
+        r."Facility ID",
         ST_Intersection(r."geometry", b."geometry") AS "geometry",
         ST_Length(ST_Intersection(r."geometry", b."geometry")) AS "Length (ft)",
         "Owner",
@@ -176,9 +189,7 @@ pipes:
     schema: Roads
     target: roads_interstate_highway
     columns:
-      primary: GlobalID
-    dtypes:
-      GlobalID: uuid
+      primary: "Facility ID"
     indices:
       geometry: geometry
       name: "Name"
@@ -187,7 +198,7 @@ pipes:
       SELECT
           "Name",
           "Type",
-          "GlobalID",
+          "Facility ID",
           "geometry",
           "Length (ft)",
           "Owner",
@@ -204,9 +215,7 @@ pipes:
     schema: Roads
     target: roads_us_highway
     columns:
-      primary: GlobalID
-    dtypes:
-      GlobalID: uuid
+      primary: "Facility ID"
     indices:
       geometry: geometry
       name: "Name"
@@ -215,7 +224,7 @@ pipes:
       SELECT
           "Name",
           "Type",
-          "GlobalID",
+          "Facility ID",
           "geometry",
           "Length (ft)",
           "Owner",
@@ -232,14 +241,12 @@ pipes:
     schema: Roads
     target: roads_state_road
     columns:
-      primary: GlobalID
-    dtypes:
-      GlobalID: uuid
+      primary: "Facility ID"
     sql: |-
       SELECT
           "Name",
           "Type",
-          "GlobalID",
+          "Facility ID",
           "geometry",
           "Length (ft)",
           "Owner",
@@ -256,14 +263,12 @@ pipes:
     schema: Roads
     target: roads_interstate_us_state
     columns:
-      primary: GlobalID
-    dtypes:
-      GlobalID: uuid
+      primary: "Facility ID"
     sql: |-
       SELECT
           "Name",
           "Type",
-          "GlobalID",
+          "Facility ID",
           "geometry",
           "Length (ft)",
           "Owner",
@@ -280,12 +285,10 @@ pipes:
     schema: Roads
     target: roads_county_road
     columns:
-      primary: GlobalID
-    dtypes:
-      GlobalID: uuid
+      primary: "Facility ID"
     sql: |-
       SELECT
-          r."GlobalID",
+          r."Facility ID",
           r."Name",
           r."Type",
           r."geometry",
@@ -302,7 +305,7 @@ pipes:
       WHERE
           "Type" IN ('County Road')
       GROUP BY
-          r."GlobalID",
+          r."Facility ID",
           r."Name",
           r."Type",
           r."geometry",
@@ -319,14 +322,12 @@ pipes:
     schema: Roads
     target: roads_municipal_road
     columns:
-      primary: GlobalID
-    dtypes:
-      GlobalID: uuid
+      primary: "Facility ID"
     sql: |-
       SELECT
           "Name",
           "Type",
-          "GlobalID",
+          "Facility ID",
           "geometry",
           "Length (ft)",
           "Owner",
@@ -343,14 +344,12 @@ pipes:
     schema: Roads
     target: roads_subdivision
     columns:
-      primary: GlobalID
-    dtypes:
-      GlobalID: uuid
+      primary: "Facility ID"
     sql: |-
       SELECT
           "Name",
           "Type",
-          "GlobalID",
+          "Facility ID",
           "geometry",
           "Length (ft)",
           "Owner",
@@ -367,14 +366,12 @@ pipes:
     schema: Roads
     target: roads_private_drive
     columns:
-      primary: GlobalID
-    dtypes:
-      GlobalID: uuid
+      primary: "Facility ID"
     sql: |-
       SELECT
           "Name",
           "Type",
-          "GlobalID",
+          "Facility ID",
           "geometry",
           "Length (ft)",
           "Owner",
@@ -507,13 +504,6 @@ config:
         boundaries:
           flavor: geopackage
           database: '{MRSM_ROOT_DIR}/../data/output/boundaries.gpkg'
-        felt: MRSM{meerschaum:connectors:sql:felt}
-      felt:
-        roads:
-          token: ${FELT_API_TOKEN}
-          map_id: "uyICtyogTtuqrQs1Z19AtXC"
-          project_id: "6W9B2V3v9ARKSQ9AV9BH2gLOhA"
-          instance_keys: "sql:felt"
   plugins:
     bwg:
       data_path: '{MRSM_ROOT_DIR}/../data'

@@ -10,7 +10,7 @@ import meerschaum as mrsm
 from meerschaum.config import get_plugin_config, write_plugin_config
 from meerschaum.plugins import web_page, dash_plugin
 
-__version__ = '0.3.2'
+__version__ = '0.3.3'
 
 required: list[str] = ['dash-leaflet']
 
@@ -351,7 +351,6 @@ def init_dash(dash_app):
             "  \"Name\",\n"
             "  \"Type\",\n"
             "  \"Owner\",\n"
-            "  \"Contact\",\n"
             "  \"Phone\",\n"
             "  \"Email\",\n"
             "  \"Online Form\"\n"
@@ -501,7 +500,6 @@ def init_dash(dash_app):
             "  \"Name\",\n"
             "  \"Type\",\n"
             "  \"Owner\",\n"
-            "  \"Contact\",\n"
             "  \"Phone\",\n"
             "  \"Email\",\n"
             "  \"Online Form\"\n"
