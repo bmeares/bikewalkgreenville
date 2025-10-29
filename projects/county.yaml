@@ -579,7 +579,15 @@ pipes:
     schema: "county"
     target: "TRA_STREETCL"
     columns:
-      datetime: "created_da"
+      primary: "FACILITYID"
+    dtypes:
+      "created_da": "string"
+      "last_edi_1": "date"
+      "ZIPL": "string"
+      "ZIPR": "string"
+    indices:
+      geometry: "geometry"
+      last_edi_1: "last_edi_1"
       feat_code: "FEAT_CODE"
       label: "LABEL"
       name: "NAME"
@@ -589,17 +597,8 @@ pipes:
       comml: "COMML"
       commr: "COMMR"
       jcode: "JCODE"
-      primary: "FACILITYID"
       lcitycode: "LCITYCODE"
       rcitycode: "RCITYCODE"
-    dtypes:
-      "created_da": "date"
-      "last_edi_1": "date"
-      "ZIPL": "string"
-      "ZIPR": "string"
-    indices:
-      geometry: "geometry"
-      "last_edi_1": "last_edi_1"
     tags: ["TRA"]
     greenville-county:
       layer: "Street Centerline In"
