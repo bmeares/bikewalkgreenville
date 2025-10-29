@@ -8,11 +8,15 @@ Parse the Greenville County data and shapefiles.
 import os
 import time
 import pathlib
+import shutil
 import zipfile
 from urllib.parse import urljoin
 
 import meerschaum as mrsm
 from meerschaum.utils.warnings import info
+from meerschaum.plugins import make_action
+
+__version__ = '0.1.0'
 
 bwg = mrsm.Plugin('bwg')
 
@@ -41,11 +45,12 @@ def fetch(pipe: mrsm.Pipe, **kwargs):
 
     greenville_county_params = pipe.parameters.get('greenville-county', {})
     filetype = greenville_county_params.get('filetype', 'shp')
+    layer = greenville_county_params.get('layer', None)
 
     file_path = (
         (metric_path / (pipe.target + '.' + filetype))
-        if not (layer := greenville_county_params.get('layer', None))
-        else fetch_layer(layer)
+        if not layer
+        else fetch_layer([layer])
     )
     if not file_path.exists():
         raise FileNotFoundError(f"Path does not exist:\n{file_path}")
@@ -54,26 +59,43 @@ def fetch(pipe: mrsm.Pipe, **kwargs):
     return df
 
 
-def fetch_layer(layer: str) -> pathlib.Path:
+@make_action
+def fetch_layer(action: list[str], force: bool = False) -> pathlib.Path:
     """
     Scrape the county GIS website.
     """
+    if not action:
+        raise ValueError("Provide a layer to fetch.")
+
+    layer = action[0]
+    data_path = bwg.module.get_data_path()
+    gcgis_path = data_path / 'gcgis'
+    gcgis_path.mkdir(parents=True, exist_ok=True)
+    layer_path = gcgis_path / layer
+
+    if layer_path.exists():
+        if force:
+            shutil.rmtree(layer_path)
+        else:
+            return layer_path
+
     job_id = submit_job(layer)
     job_path = download_job_output(job_id)
-    job_dir_path = job_path.parent / job_id
 
     with zipfile.ZipFile(job_path, 'r') as zip_ref:
-        zip_ref.extractall(job_dir_path)
+        zip_ref.extractall(layer_path)
+
+    job_path.unlink()
 
     shapefiles = [
-        (job_dir_path / filename)
-        for filename in os.listdir(job_dir_path)
+        (layer_path / filename)
+        for filename in os.listdir(layer_path)
         if filename.endswith('.shp')
     ]
     if not shapefiles:
         raise FileNotFoundError(f"Could not find a shapefile for layer '{layer}'.")
 
-    return shapefiles[0]
+    return layer_path
    
 
 def submit_job(layer: str) -> str:
@@ -92,7 +114,6 @@ def submit_job(layer: str) -> str:
             'formatType': 'Shapefile',
             'layerNames': layer,
             'clip': 'False',
-            #  'clipExtent': '1573370,1095411,1581953,1103186',
         },
         headers={'Referer': 'https://www.gcgis.org/apps/greenvillejs/'},
     )
@@ -122,6 +143,8 @@ def download_job_output(job_id: str, timeout: float | int = 30) -> pathlib.Path:
         wget(download_url, job_path)
         if not job_path.exists():
             raise FileNotFoundError(f"Failed to download job '{job_id}'.")
+
+        info("Downloaded job.")
 
         return job_path
 
