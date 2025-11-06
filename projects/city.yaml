@@ -167,6 +167,7 @@ pipes:
     parameters:
       schema: "city"
       target: "EdgeOfPavement"
+      autoincrement: true
       columns:
         primary: 'id'
       dtypes:
@@ -288,9 +289,12 @@ pipes:
     parameters:
       schema: "city"
       target: "SpecialEmphasisNeighborhoods"
+      autoincrement: true
       columns:
-        primary: "NAME"
+        primary: "id"
+        name: 'NAME'
       dtypes:
+        id: 'int'
         geometry: "geometry[Polygon,3361]"
       indices:
         geometry: "geometry"
@@ -300,9 +304,12 @@ pipes:
     parameters:
       schema: "city"
       target: "Streets"
+      autoincrement: true
       columns:
-        primary: "FACILITYID"
+        primary: "id"
+        facility_id: "FACILITYID"
       dtypes:
+        id: "int"
         geometry: "geometry[LineString,3361]"
       indices:
         geometry: "geometry"
