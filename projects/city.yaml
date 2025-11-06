@@ -1,5 +1,3 @@
-### See https://meerschaum.io/reference/compose/ for the compose schema.
-
 project_name: city
 
 root_dir: ../root
@@ -22,33 +20,336 @@ pipes:
         "metric_key": "string"
       schema: "city"
       target: "feature_codes"
+ 
+  - connector: "plugin:city-gis"
+    metric: "Addresses"
+    parameters:
+      schema: "city"
+      target: "Addresses"
+      columns:
+        feat_code: "FEAT_CODE"
+        zip_code: "ZIPCODE"
+        unit: "UNIT"
+        building: "BUILDING"
+        full_address: "FULLADDRESS"
+      dtypes:
+        geometry: "geometry[Point,3361]"
+      indices:
+        geometry: 'geometry'
+
+  - connector: "plugin:city-gis"
+    metric: "BicycleInfrastructure"
+    parameters:
+      schema: "city"
+      target: "BicycleInfrastructure"
+      autoincrement: true
+      columns:
+        bike_type: "BIKE_TYPE"
+        street_name: "STREET_NAM"
+        primary: "id"
+      dtypes:
+        geometry: "geometry[3361]"
+      indices:
+        geometry: 'geometry'
+      dtypes:
+        id: int
+
+  - connector: "plugin:city-gis"
+    metric: "BicycleRoutes"
+    parameters:
+      schema: "city"
+      target: "BicycleRoutes"
+      autoincrement: true
+      columns:
+        street_name: "STREET_NAM"
+        primary: "id"
+      dtypes:
+        id: "int"
+        geometry: "geometry[3361]"
+      indices: 
+        geometry: "geometry"
+
+  - connector: "plugin:city-gis"
+    metric: "BuildingFootprints"
+    parameters:
+      schema: "city"
+      target: "BuildingFootprints"
+      autoincrement: true
+      columns:
+        feat_code: "FEATCODE"
+        primary: "id"
+      dtypes:
+        id: "int"
+        geometry: "geometry[3361]"
+      indices:
+        geometry: "geometry"
+
+  - connector: "plugin:city-gis"
+    metric: "BusRoutes"
+    parameters:
+      schema: "city"
+      target: "BusRoutes"
+      autoincrement: true
+      columns:
+        primary: "dir_id"
+      dtypes:
+        dir_id: "int"
+        geometry: "geometry[LineString,6570]"
+      indices:
+        geometry: "geometry"
+
+  - connector: "plugin:city-gis"
+    metric: "BusStops"
+    parameters:
+      schema: "city"
+      target: "BusStops"
+      autoincrement: true
+      columns:
+        primary: 'id'
+      dtypes:
+        id: 'int'
+        geometry: "geometry[Point, 6570]"
+      indices:
+        geometry: 'geometry'
+
+  - connector: "plugin:city-gis"
+    metric: "CityCouncilDistricts"
+    parameters:
+      schema: "city"
+      target: "CityCouncilDistricts"
+      columns:
+        primary: "DISTRICT"
+      dtypes:
+        DISTRICT: "int"
+        geometry: "geometry[3361]"
+      indices:
+        geometry: "geometry"
+
+  - connector: "plugin:city-gis"
+    metric: "CityLimits"
+    parameters:
+      schema: "city"
+      target: "CityLimits"
+      columns:
+        primary: 'int'
+      dtypes:
+        id: "int"
+        geometry: "geometry[MultiPolygon,3361]"
+      indices:
+        geometry: "geometry"
+
+  - connector: "plugin:city-gis"
+    metric: "CollegesandUniversities"
+    parameters:
+      schema: "city"
+      target: "CollegesandUniversities"
+      columns:
+        primary: "NAME"
+      dtypes:
+        geometry: "geometry[Polygon,3361]"
+      indices:
+        geometry: "geometry"
+
+  - connector: "plugin:city-gis"
+    metric: "CommunityandRecreationCenters"
+    parameters:
+      schema: "city"
+      target: "CommunityandRecreationCenters"
+      columns:
+        primary: "NAME"
+      dtypes:
+        geometry: "geometry[Polygon,3361]"
+      indices:
+        geometry: "geometry"
+
+  - connector: "plugin:city-gis"
+    metric: "EdgeOfPavement"
+    parameters:
+      schema: "city"
+      target: "EdgeOfPavement"
+      columns:
+        primary: 'id'
+      dtypes:
+        id: "int"
+        geometry: "geometry[MultiPolygon,3361]"
+      indices:
+        geometry: "geometry"
+
+  - connector: "plugin:city-gis"
+    metric: "FEMAFloodZones"
+    parameters:
+      schema: "city"
+      target: "FEMAFloodZones"
+      columns:
+        dfirm_id: "DFIRM_ID"
+        fld_ar_id: "FLD_AR_ID"
+        source_cit: "SOURCE_CIT"
+      dtypes:
+        geometry: "geometry[3361]"
+
+  - connector: "plugin:city-gis"
+    metric: "Parcels"
+    parameters:
+      schema: "city"
+      target: "Parcels"
+      columns:
+        primary: "PIN"
+      dtypes:
+        geometry: "geometry[3361]"
 
   - connector: "plugin:city-gis"
     metric: "Parking"
     parameters:
+      autoincrement: true
       columns:
+        primary: "id"
         feat_code: "FEAT_CODE"
       dtypes:
+        id: 'int'
         "FEAT_CODE": "int"
         geometry: "geometry[3361]"
       indices:
         geometry: "geometry"
       target: "Parking"
       schema: "city"
-
+ 
   - connector: "plugin:city-gis"
-    metric: "MajorWaterBodies"
+    metric: "Parks"
     parameters:
+      schema: "city"
+      target: "Parks"
       columns:
-        feat_code: "FEAT_CODE"
+        primary: "NAME"
       dtypes:
-        "FEAT_CODE": "string"
         geometry: "geometry[3361]"
       indices:
         geometry: "geometry"
-      target: "MajorWaterBodies"
+
+  - connector: "plugin:city-gis"
+    metric: "Railroads"
+    parameters:
       schema: "city"
-      
+      target: "Railroads"
+      autoincrement: true
+      columns:
+        primary: "id"
+      dtypes:
+        id: "int"
+        geometry: "geometry[LineString,3361]"
+      indices:
+        geometry: "geometry"
+
+  - connector: "plugin:city-gis"
+    metric: "RiversandStreams"
+    parameters:
+      schema: "city"
+      target: "RiversandStreams"
+      autoincrement: true
+      columns:
+        primary: "id"
+      dtypes:
+        id: 'int'
+        geometry: "geometry[3361]"
+      indices:
+        geometry: "geometry"
+
+  - connector: "plugin:city-gis"
+    metric: "Schools"
+    parameters:
+      schema: "city"
+      target: "Schools"
+      columns:
+        primary: "NAME"
+        fcode: "FCODE"
+      dtypes:
+        geometry: "geometry[3361]"
+      indices:
+        geometry: "geometry"
+
+  - connector: "plugin:city-gis"
+    metric: "Sidewalks"
+    parameters:
+      schema: "city"
+      target: "Sidewalks"
+      autoincrement: true
+      columns:
+        primary: "id"
+      dtypes:
+        id: "int"
+        geometry: "geometry[3361]"
+      indices:
+        material: "MATERIAL"
+        side_of_street: "SIDE_OF_ST"
+        street_name: "STREET_NAM"
+        geometry: "geometry"
+
+  - connector: "plugin:city-gis"
+    metric: "SpecialEmphasisNeighborhoods"
+    parameters:
+      schema: "city"
+      target: "SpecialEmphasisNeighborhoods"
+      columns:
+        primary: "NAME"
+      dtypes:
+        geometry: "geometry[Polygon,3361]"
+      indices:
+        geometry: "geometry"
+
+  - connector: "plugin:city-gis"
+    metric: "Streets"
+    parameters:
+      schema: "city"
+      target: "Streets"
+      columns:
+        primary: "FACILITYID"
+      dtypes:
+        geometry: "geometry[LineString,3361]"
+      indices:
+        geometry: "geometry"
+
+  - connector: "plugin:city-gis"
+    metric: "Trails"
+    parameters:
+      schema: "city"
+      target: "Trails"
+      autoincrement: true
+      columns:
+        primary: "id"
+        system_name: "SYSTEM_NAM"
+        trail_name: "TRAIL_NAME"
+        trail_type: "TRAIL_TYPE"
+      dtypes:
+        id: "int"
+        geometry: "geometry[3361]"
+      indices:
+        status: "STATUS"
+        geometry: "geometry"
+
+  - connector: "plugin:city-gis"
+    metric: "TrailsMileMarkers"
+    parameters:
+      schema: "city"
+      target: "TrailsMileMarkers"
+      columns:
+        primary: "LABEL"
+      dtypes:
+        geometry: "geometry[Point,6570]"
+      indices:
+        geometry: "geometry"
+
+  - connector: "plugin:city-gis"
+    metric: "Zoning"
+    parameters:
+      schema: "city"
+      target: "Zoning"
+      autoincrement: true
+      columns:
+        primary: "id"
+      dtypes:
+        geometry: "geometry[3361]"
+      indices:
+        geometry: "geometry"
+    
 config:
   meerschaum:
     instance: sql:bwg
