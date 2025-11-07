@@ -7,25 +7,27 @@ plugins_dir:
 - ../plugins
 
 pipes:
+
 - connector: "sql:bwg"
   metric: "trails"
   location: "approved"
   instance: "sql:trails"
-    parameters:
-      columns:
-        datetime: "id"
-        primary: "id"
-      dtypes:
-        id: "int"
-      sql: |-
-        SELECT
-          "id",
-          "STATUS" AS "status",
-          "TRAIL_NAM" AS "trail_name",
-          "TRAIL_TYPE" AS "trail_type",
-          "notes",
-          "geometry"
-        FROM "city"."ApprovedTrails"
+  parameters:
+    columns:
+      datetime: "id"
+      primary: "id"
+    dtypes:
+      id: "int"
+      geometry: "geometry[LineString,3361]"
+    sql: |-
+      SELECT
+        "id",
+        "STATUS" AS "status",
+        "TRAIL_NAM" AS "trail_name",
+        "TRAIL_TYPE" AS "trail_type",
+        "notes",
+        "geometry"
+      FROM "city"."ApprovedTrails"
 
 config:
   meerschaum:
