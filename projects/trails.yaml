@@ -10,10 +10,10 @@ pipes:
 
 - connector: "sql:bwg"
   metric: "trails"
-  location: "approved"
+  location: "proposed"
   instance: "sql:trails"
   parameters:
-    target: "ApprovedTrails"
+    target: "ProposedTrails"
     columns:
       datetime: "id"
       primary: "id"
@@ -21,14 +21,33 @@ pipes:
       id: "int"
       geometry: "geometry[LineString,3361]"
     sql: |-
-      SELECT
-        "id",
-        "STATUS" AS "status",
-        "TRAIL_NAM" AS "trail_name",
-        "TRAIL_TYPE" AS "trail_type",
-        "notes",
-        "geometry"
-      FROM "city"."ApprovedTrails"
+      WITH city_proposed_trails AS (
+          SELECT
+            "STATUS",
+            "SYSTEM_NAM",
+            "TRAIL_NAME",
+            "TRAIL_TYPE",
+            NULL::TEXT AS "notes",
+            ST_Length("geometry") AS "Shape_Leng",
+            "geometry"
+          FROM city."Trails"
+          WHERE "STATUS" = 'PROPOSED'
+      ), new_proposed_trails AS (
+          SELECT
+            "STATUS",
+            "SYSTEM_NAM",
+            "TRAIL_NAM" AS "TRAIL_NAME",
+            "TRAIL_TYPE",
+            "notes",
+            ST_Length("geometry") AS "Shape_Leng",
+            "geometry"
+          FROM city."ApprovedTrails"
+      )
+      SELECT *
+      FROM new_proposed_trails
+      UNION ALL
+      SELECT *
+      FROM city_proposed_trails
 
 config:
   meerschaum:

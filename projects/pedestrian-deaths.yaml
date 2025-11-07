@@ -392,7 +392,7 @@ pipes:
         ON cyclist.crash_number = pedestrian.crash_number
       WHERE pedestrian.crash_number IS NULL
 
-### Felt layers
+### Output layers
 
 - connector: "plugin:clone"
   metric: "fatalities"
@@ -455,6 +455,54 @@ pipes:
         connector: "sql:bwg"
         metric: "injuries"
         location: "pedalcycle"
+      chunk_minutes: 5259600
+      skip_pipe_keys: true
+
+- connector: "plugin:clone"
+  metric: "noninjuries"
+  location: "pedestrian"
+  instance: "sql:pedestrian"
+  parameters:
+    target: "{{ Pipe('sql:bwg', 'noninjuries', 'pedestrian', instance='sql:bwg').target }}"
+    columns: "{{ Pipe('sql:bwg', 'noninjuries', 'pedestrian', instance='sql:bwg').columns }}"
+    dtypes: "{{ Pipe('sql:bwg', 'noninjuries', 'pedestrian', instance='sql:bwg').dtypes }}"
+    source:
+      pipe:
+        connector: "sql:bwg"
+        metric: "noninjuries"
+        location: "pedestrian"
+      chunk_minutes: 5259600
+      skip_pipe_keys: true
+
+- connector: "plugin:clone"
+  metric: "noninjuries"
+  location: "pedalcycle"
+  instance: "sql:pedestrian"
+  parameters:
+    target: "{{ Pipe('sql:bwg', 'noninjuries', 'pedalcycle', instance='sql:bwg').target }}"
+    columns: "{{ Pipe('sql:bwg', 'noninjuries', 'pedalcycle', instance='sql:bwg').columns }}"
+    dtypes: "{{ Pipe('sql:bwg', 'noninjuries', 'pedalcycle', instance='sql:bwg').dtypes }}"
+    source:
+      pipe:
+        connector: "sql:bwg"
+        metric: "noninjuries"
+        location: "pedalcycle"
+      chunk_minutes: 5259600
+      skip_pipe_keys: true
+
+- connector: "plugin:clone"
+  metric: "crashes_occupant"
+  location: "pedestrian"
+  instance: "sql:pedestrian"
+  parameters:
+    target: "{{ Pipe('sql:bwg', 'crashes_occupant', 'pedestrian', instance='sql:bwg').target }}"
+    columns: "{{ Pipe('sql:bwg', 'crashes_occupant', 'pedestrian', instance='sql:bwg').columns }}"
+    dtypes: "{{ Pipe('sql:bwg', 'crashes_occupant', 'pedestrian', instance='sql:bwg').dtypes }}"
+    source:
+      pipe:
+        connector: "sql:bwg"
+        metric: "crashes_occupant"
+        location: "pedestrian"
       chunk_minutes: 5259600
       skip_pipe_keys: true
 
