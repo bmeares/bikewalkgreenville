@@ -75,7 +75,7 @@ pipes:
       primary_contributing_factor: primary_contributing_factor
     sql: |-
       SELECT
-        (TO_TIMESTAMP(date || ' ' || time, 'MM/DD/YY HH24MI') AT TIME ZONE 'US/Eastern') AT TIME ZONE 'UTC' AS "timestamp",
+        ((TO_TIMESTAMP(date || ' ' || time, 'MM/DD/YY HH24MI')::TIMESTAMP) AT TIME ZONE 'America/New_York') AS "timestamp",
         l.crash_number,
         l.collision_type,
         l.persons_killed::INT AS persons_killed,
@@ -475,12 +475,6 @@ config:
         pedestrian:
           flavor: sqlite
           database: '{MRSM_ROOT_DIR}/../data/output/pedestrian.sqlite'
-      felt:
-        pedestrian:
-          token: $FELT_API_TOKEN
-          map_id: m9B2snG3gTnSryijc3IW9AVC
-          project_id: 6W9B2V3v9ARKSQ9AV9BH2gLOhA
-          instance_keys: sql:felt
   plugins:
     bwg:
       data_path: '{MRSM_ROOT_DIR}/../data'

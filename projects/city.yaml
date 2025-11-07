@@ -333,6 +333,24 @@ pipes:
         geometry: "geometry"
 
   - connector: "plugin:city-gis"
+    metric: "ApprovedTrails"
+    parameters:
+      schema: "city"
+      target: "ApprovedTrails"
+      autoincrement: true
+      columns:
+        primary: "id"
+        system_name: "SYSTEM_NAM"
+        trail_name: "TRAIL_NAME"
+        trail_type: "TRAIL_TYPE"
+      dtypes:
+        id: "int"
+        geometry: "geometry[3361]"
+      indices:
+        status: "STATUS"
+        geometry: "geometry"
+
+  - connector: "plugin:city-gis"
     metric: "TrailsMileMarkers"
     parameters:
       schema: "city"
