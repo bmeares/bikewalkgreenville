@@ -21,33 +21,26 @@ pipes:
       id: "int"
       geometry: "geometry[LineString,3361]"
     sql: |-
-      WITH city_proposed_trails AS (
-          SELECT
-            "STATUS",
-            "SYSTEM_NAM",
-            "TRAIL_NAME",
-            "TRAIL_TYPE",
-            NULL::TEXT AS "notes",
-            ST_Length("geometry") AS "Shape_Leng",
-            "geometry"
-          FROM city."Trails"
-          WHERE "STATUS" = 'PROPOSED'
-      ), new_proposed_trails AS (
-          SELECT
-            "STATUS",
-            "SYSTEM_NAM",
-            "TRAIL_NAM" AS "TRAIL_NAME",
-            "TRAIL_TYPE",
-            "notes",
-            ST_Length("geometry") AS "Shape_Leng",
-            "geometry"
-          FROM city."ApprovedTrails"
-      )
-      SELECT *
-      FROM new_proposed_trails
+      SELECT
+        "STATUS",
+        "SYSTEM_NAM",
+        "TRAIL_NAME",
+        "TRAIL_TYPE",
+        NULL::TEXT AS "notes",
+        ST_Length("geometry") AS "Shape_Leng",
+        "geometry"
+      FROM city."Trails"
+      WHERE "STATUS" = 'PROPOSED'
       UNION ALL
-      SELECT *
-      FROM city_proposed_trails
+      SELECT
+        "STATUS",
+        "SYSTEM_NAM",
+        "TRAIL_NAM" AS "TRAIL_NAME",
+        "TRAIL_TYPE",
+        "notes",
+        ST_Length("geometry") AS "Shape_Leng",
+        "geometry"
+      FROM city."ApprovedTrails"
 
 config:
   meerschaum:
