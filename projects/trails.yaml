@@ -13,6 +13,7 @@ pipes:
   location: "approved"
   instance: "sql:trails"
   parameters:
+    target: "ApprovedTrails"
     columns:
       datetime: "id"
       primary: "id"

@@ -473,8 +473,8 @@ config:
           flavor: MRSM{meerschaum:connectors:sql:bwg:flavor}
           schema: felt
         pedestrian:
-          flavor: sqlite
-          database: '{MRSM_ROOT_DIR}/../data/output/pedestrian.sqlite'
+          flavor: geopackage
+          database: '{MRSM_ROOT_DIR}/../data/output/pedestrian.gpkg'
   plugins:
     bwg:
       data_path: '{MRSM_ROOT_DIR}/../data'
