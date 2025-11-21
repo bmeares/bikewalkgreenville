@@ -1,0 +1,37 @@
+project_name: duke
+
+root_dir: ../root
+
+plugins_dir:
+- ../.installed_plugins
+- ../plugins
+
+pipes:
+
+- connector: "plugin:duke"   
+  metric: "lighting"
+  location: "greenville"
+  parameters:
+    schema: "duke"
+    target: "lighting"
+    columns:
+      pole_location_id: "Pole_Location_Id"
+      street_light_id: "Street_Light_Id"
+    dtypes:
+      "Longitude": "numeric"
+      "Latitude": "numeric"
+    duke:
+      bounds: [[34.780275, -82.466929], [34.888396, -82.361216]]
+      step_deg: 0.01
+
+config:
+  meerschaum:
+    instance: sql:bwg
+    connectors:
+      sql:
+        bwg: MRSM{meerschaum:connectors:sql:bwg}
+  plugins:
+    bwg:
+      data_path: '{MRSM_ROOT_DIR}/../data'
+
+environment: {}

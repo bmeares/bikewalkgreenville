@@ -57,6 +57,24 @@ pipes:
 
 - connector: "sql:bwg"
   metric: "boundaries"
+  location: "county_4326"
+  parameters:
+    schema: Boundaries
+    target: boundaries_county_4326
+    columns:
+      name: "Name"
+    dtypes:
+      geometry: "geometry[Polygon, 4326]"
+    indices:
+      geometry: "geometry"
+    sql: |-
+      SELECT
+        'Greenville County' AS "Name",
+        ST_Transform("geometry", 4326) AS "geometry"
+      FROM county."BND_GVCNTY"
+
+- connector: "sql:bwg"
+  metric: "boundaries"
   location: "greenville"
   parameters:
     schema: Boundaries

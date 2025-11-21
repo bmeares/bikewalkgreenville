@@ -59,6 +59,34 @@ pipes:
       collision_type: collision_type
       primary_contributing_factor: primary_contributing_factor
 
+- connector: "sql:bwg"
+  metric: "lighting"
+  location: "greenville"
+  parameters:
+    schema: "Ped"
+    target: "lighting"
+    columns: "{{ Pipe('plugin:duke', 'lighting', 'greenville', instance='sql:bwg').columns }}"
+    dtypes:
+      geometry: "geometry[Point, 4326]"
+    indices:
+      geometry: "geometry"
+    sql: |-
+      SELECT
+        "Pole_Location_Id",
+        "Street_Light_Id",
+        "Lighting_Type",
+        CASE
+          WHEN "Duke_Owned" = '1' THEN TRUE
+          ELSE FALSE
+        END AS "Duke_Owned",
+        "WO_Status",
+        "Status",
+        "Adhoc",
+        ST_Point("Longitude", "Latitude", 4326) AS "geometry"
+      FROM duke.lighting AS l
+      JOIN "Boundaries"."boundaries_county_4326" AS b
+        ON ST_Within(ST_Point("Longitude", "Latitude", 4326), ST_Transform(b.geometry, 4326))
+
 - connector: sql:bwg
   metric: crashes
   location: greenville
