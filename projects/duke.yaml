@@ -17,6 +17,12 @@ pipes:
     columns:
       pole_location_id: "Pole_Location_Id"
       street_light_id: "Street_Light_Id"
+    dtypes:
+      "Longitude": "numeric"
+      "Latitude": "numeric"
+    duke:
+      bounds: [[34.780275, -82.466929], [34.888396, -82.361216]]
+      step_deg: 0.01
 
 config:
   meerschaum:
