@@ -1,0 +1,46 @@
+project_name: adi
+
+root_dir: ../root
+
+plugins_dir:
+- ../.installed_plugins
+- ../plugins
+
+pipes:
+
+- connector: "plugin:adi"
+  metric: "adi"
+  location: "sc"
+  parameters:
+    schema: "ADI"
+    target: "adi_sc"
+    columns:
+      year: "year"
+      fips: "FIPS"
+      gisjoin: "GISJOIN"
+    dtypes:
+      "FIPS": "str"
+
+- connector: "plugin:adi"
+  metric: "nhgis"
+  parameters:
+    schema: "ADI"
+    target: "nhghis"
+    columns:
+      year: "year"
+      gisjoin: "GISJOIN"
+      geoid: "GEOID"
+      countyfp: "COUNTYFP"
+      statefp: "STATEFP"
+    indices:
+      geometry: "geometry"
+
+config:
+  meerschaum:
+    instance: sql:bwg
+    connectors:
+      sql:
+        bwg: MRSM{meerschaum:connectors:sql:bwg}
+  plugins:
+    bwg:
+      data_path: '{MRSM_ROOT_DIR}/../data'
