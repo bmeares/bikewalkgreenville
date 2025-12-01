@@ -534,6 +534,21 @@ pipes:
       chunk_minutes: 5259600
       skip_pipe_keys: true
 
+- connector: "plugin:clone"
+  metric: "lighting"
+  location: "greenville"
+  instance: "sql:pedestrian"
+  parameters:
+    target: "{{ Pipe('sql:bwg', 'lighting', 'greenville', instance='sql:bwg').target }}"
+    columns: "{{ Pipe('sql:bwg', 'lighting', 'greenville', instance='sql:bwg').columns }}"
+    dtypes: "{{ Pipe('sql:bwg', 'lighting', 'greenville', instance='sql:bwg').dtypes }}"
+    source:
+      pipe:
+        connector: "sql:bwg"
+        metric: "lighting"
+        location: "greenville"
+      skip_pipe_keys: true
+
 config:
   meerschaum:
     instance: sql:bwg

@@ -24,6 +24,22 @@ pipes:
       bounds: [[34.780275, -82.466929], [34.888396, -82.361216]]
       step_deg: 0.01
 
+- connector: "plugin:duke"   
+  metric: "lighting"
+  location: "county"
+  parameters:
+    schema: "duke"
+    target: "lighting"
+    columns:
+      pole_location_id: "Pole_Location_Id"
+      street_light_id: "Street_Light_Id"
+    dtypes:
+      "Longitude": "numeric"
+      "Latitude": "numeric"
+    duke:
+      bounds: [[34.484337813842046, -82.76415771006502], [35.21548588615223, -82.14558853156991]]
+      step_deg: 0.1
+
 config:
   meerschaum:
     instance: sql:bwg
