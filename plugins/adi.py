@@ -18,7 +18,10 @@ def fetch(pipe: mrsm.Pipe, **kwargs):
     Ingest the ADI files.
     """
     if pipe.metric_key == 'nhgis':
-        return parse_nhgis_files()
+        return (
+            chunk
+            for chunk in parse_nhgis_files()
+        )
 
     return parse_adi_files()
 
@@ -62,11 +65,10 @@ def parse_nhgis_files():
         with zipfile.ZipFile(zip_path, 'r') as zf:
             zf.extractall(dir_path)
 
-    gdfs = []
     for dir_name in dir_names:
         dir_path = adi_path / dir_name
         info(f"Reading '{dir_path}'...")
-        year = int(dir_name[-4])
+        year = int(dir_name[-4:])
         gdf = gpd.read_file(dir_path)
         cols_to_rename = [col for col in gdf.columns if col.endswith('10')]
         for col in cols_to_rename:
@@ -75,6 +77,4 @@ def parse_nhgis_files():
             col for col in gdf.columns if col.lower().startswith('shape_')
         ]
         gdf['year'] = year
-        gdfs.append(gdf[[col for col in gdf.columns if col not in cols_to_skip]])
-
-    return pd.concat(gdfs)
+        yield gdf[[col for col in gdf.columns if col not in cols_to_skip]]

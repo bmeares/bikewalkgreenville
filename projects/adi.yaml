@@ -32,6 +32,8 @@ pipes:
       geoid: "GEOID"
       countyfp: "COUNTYFP"
       statefp: "STATEFP"
+    dtypes:
+      geometry: "geometry[MultiPolygon, 4269]"
     indices:
       geometry: "geometry"
 
