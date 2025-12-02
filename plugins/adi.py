@@ -12,6 +12,8 @@ from meerschaum.utils.warnings import info
 
 bwg = mrsm.Plugin('bwg')
 
+__version__ = '0.1.0'
+
 
 def fetch(pipe: mrsm.Pipe, **kwargs):
     """
