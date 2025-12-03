@@ -22,7 +22,7 @@ pipes:
       "FIPS": "str"
 
 - connector: "plugin:adi"
-  metric: "nhgis"
+  metric: "nhghis"
   parameters:
     schema: "ADI"
     target: "nhghis"
@@ -33,9 +33,37 @@ pipes:
       countyfp: "COUNTYFP"
       statefp: "STATEFP"
     dtypes:
-      geometry: "geometry[MultiPolygon, 4269]"
+      geometry: "geometry[MultiPolygon]"
     indices:
       geometry: "geometry"
+
+- connector: "sql:bwg"
+  metric: "adi"
+  location: "sc"
+  parameters:
+    schema: "ADI"
+    target: "adi_sc_geom"
+    columns:
+      year: "year"
+      gisjoin: "GISJOIN"
+    dtypes:
+      "FIPS": "string"
+      geometry: "geometry[MultiPolygon]"
+    indices:
+      fips: "FIPS"
+      geometry: "geometry"
+    sql: |-
+      SELECT
+        a."year",
+        a."GISJOIN",
+        a."FIPS",
+        a."ADI_STATERNK",
+        a."ADI_NATRANK",
+        ST_Transform(n."geometry", 4326) AS "geometry"
+      FROM "ADI".adi_sc AS a
+      INNER JOIN "ADI".nhghis AS n
+        ON n."year" = a."year"
+        AND n."GISJOIN" = SUBSTRING(a."GISJOIN", 1, 14)
 
 config:
   meerschaum:

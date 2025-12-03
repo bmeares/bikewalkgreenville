@@ -19,7 +19,7 @@ def fetch(pipe: mrsm.Pipe, **kwargs):
     """
     Ingest the ADI files.
     """
-    if pipe.metric_key == 'nhgis':
+    if pipe.metric_key == 'nhghis':
         return (
             chunk
             for chunk in parse_nhgis_files()
@@ -34,7 +34,7 @@ def parse_adi_files():
     adi_path = data_path / 'ADI'
     
     dfs = []
-    columns = ['year', 'GISJOIN', 'FIPS', 'ADI_NATRNK', 'ADI_STATERNK']
+    columns = ['year', 'GISJOIN', 'FIPS', 'ADI_NATRANK', 'ADI_STATERNK']
     for filename in os.listdir(adi_path):
         if not filename.endswith('.csv'):
             continue
