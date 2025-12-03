@@ -33,9 +33,16 @@ pipes:
       countyfp: "COUNTYFP"
       statefp: "STATEFP"
     dtypes:
-      geometry: "geometry[MultiPolygon]"
+      geometry: "geometry[MultiPolygon, 5070]"
+      ALAND: "int"
+      AWATER: "int"
+      INTPTLAT: "numeric"
+      INTPTLON: "numeric"
+      year: "int"
     indices:
       geometry: "geometry"
+    fetch:
+      backtrack_minutes: 0
 
 - connector: "sql:bwg"
   metric: "adi"
