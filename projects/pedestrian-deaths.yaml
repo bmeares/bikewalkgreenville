@@ -242,6 +242,33 @@ pipes:
       WHERE pedestrian.crash_number IS NULL
 
 - connector: "sql:bwg"
+  metric: "crashes_trail"
+  location: "vulnerable"
+  parameters:
+    schema: "Ped"
+    target: "crashes_trail_vulnerable"
+    columns:
+      datetime: "timestamp"
+      primary: "crash_number"
+    dtypes:
+      geometry: "geometry[Point, 4326]"
+    srt:
+      distance: 1000
+    sql: |-
+      WITH srt AS (
+        SELECT ST_Collect("geometry") AS "geometry"
+        FROM gcgis."PRISMA Health Swamp Rabbit Trail"
+      )
+      SELECT c.*
+      FROM "Ped".crashes_vulnerable AS c
+      CROSS JOIN srt
+      WHERE ST_DWithin(
+        ST_Transform(c."geometry", 6570),
+        srt."geometry",
+        {{ self.parameters['srt']['distance'] }}
+      )
+
+- connector: "sql:bwg"
   metric: "crashes_occupant"
   location: "pedestrian"
   parameters:
@@ -547,6 +574,21 @@ pipes:
         connector: "sql:bwg"
         metric: "lighting"
         location: "greenville"
+      skip_pipe_keys: true
+
+- connector: "plugin:clone"
+  metric: "crashes_trail"
+  location: "vulnerable"
+  instance: "sql:pedestrian"
+  parameters:
+    target: "{{ Pipe('sql:bwg', 'crashes_trail', 'vulnerable', instance='sql:bwg').target }}"
+    columns: "{{ Pipe('sql:bwg', 'crashes_trail', 'vulnerable', instance='sql:bwg').columns }}"
+    dtypes: "{{ Pipe('sql:bwg', 'crashes_trail', 'vulnerable', instance='sql:bwg').dtypes }}"
+    source:
+      pipe:
+        connector: "sql:bwg"
+        metric: "crashes_trail"
+        location: "vulnerable"
       skip_pipe_keys: true
 
 config:
