@@ -574,6 +574,7 @@ pipes:
         connector: "sql:bwg"
         metric: "lighting"
         location: "greenville"
+      chunk_minutes: 5259600
       skip_pipe_keys: true
 
 - connector: "plugin:clone"
