@@ -1,0 +1,69 @@
+project_name: deflock
+
+root_dir: ../root
+
+plugins_dir:
+- ../.installed_plugins
+- ../plugins
+
+pipes:
+
+- connector: "plugin:deflock"
+  metric: "cameras"
+  parameters:
+    schema: "deflock"
+    target: "cameras_raw"
+    columns:
+      primary: "id"
+    dtypes:
+      tags: "json"
+      lat: "numeric"
+      lon: "numeric"
+
+- connector: "sql:bwg"
+  metric: "cameras"
+  parameters:
+    schema: "deflock"
+    target: "cameras_all"
+    columns:
+      primary: "id"
+    dtypes:
+      tags: "json"
+      geometry: "geometry[Point, 4326]"
+    indices:
+      geometry: "geometry"
+    sql: |-
+      SELECT "id", ST_SetSRID(ST_MakePoint("lon", "lat"), 4326) AS "geometry", "tags"
+      FROM {{ Pipe('plugin:deflock', 'cameras', instance='sql:bwg') }}
+
+- connector: "sql:bwg"
+  metric: "cameras"
+  location: "greenville"
+  parameters:
+    schema: "deflock"
+    target: "cameras_greenville"
+    columns:
+      primary: "id"
+    dtypes:
+      tags: "json"
+      geometry: "geometry[Point, 4326]"
+    indices:
+      geometry: "geometry"
+    sql: |-
+      SELECT c.*
+      FROM {{ Pipe('sql:bwg', 'cameras', instance='sql:bwg') }} AS c
+      JOIN "Boundaries".boundaries_county_4326 AS b
+        ON ST_Contains(b."geometry", c."geometry")
+      WHERE b."Name" = 'Greenville County'    
+
+config:
+  meerschaum:
+    instance: sql:bwg
+    connectors:
+      sql:
+        bwg: MRSM{meerschaum:connectors:sql:bwg}
+  plugins:
+    bwg:
+      data_path: '{MRSM_ROOT_DIR}/../data'
+
+environment: {}
