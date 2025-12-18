@@ -15,10 +15,10 @@ pipes:
 
 - connector: "sql:bwg"
   metric: "parking"
-  location: "greenville"
+  location: "county"
   parameters:
     schema: "Parking"
-    target: "parking"
+    target: "parking_county"
     columns:
       primary: "GlobalID"
     sql: |-
@@ -34,6 +34,28 @@ pipes:
         "geometry"
       FROM county."PLN_PARKING"
       WHERE "FEAT_CODE" != 882
+
+- connector: "sql:bwg"
+  metric: "parking"
+  location: "city"
+  parameters:
+    schema: "Parking"
+    target: parking_city
+    columns:
+      primary: "id"
+    dtypes:
+      geometry: "geometry[3361]"
+    sql: |-
+      SELECT *,
+        CASE 
+          WHEN "FEAT_CODE" = 121 THEN 'Paved'
+          WHEN "FEAT_CODE" = 122 THEN 'Unpaved'
+          WHEN "FEAT_CODE" = 123 THEN 'Background'
+          WHEN "FEAT_CODE" = 124 THEN 'Residential Driveway'
+          WHEN "FEAT_CODE" = 127 THEN 'Under Construction'
+          ELSE 'Unknown'
+        END AS "type"
+      FROM city."Parking"
 
 config:
   meerschaum:
