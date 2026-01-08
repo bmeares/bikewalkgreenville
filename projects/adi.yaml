@@ -22,10 +22,10 @@ pipes:
       "FIPS": "str"
 
 - connector: "plugin:adi"
-  metric: "nhghis"
+  metric: "nhgis"
   parameters:
     schema: "ADI"
-    target: "nhghis"
+    target: "nhgis"
     columns:
       year: "year"
       gisjoin: "GISJOIN"
@@ -33,7 +33,7 @@ pipes:
       countyfp: "COUNTYFP"
       statefp: "STATEFP"
     dtypes:
-      geometry: "geometry[MultiPolygon, 5070]"
+      geometry: "geometry[MultiPolygon, ESRI:102003]"
       ALAND: "int"
       AWATER: "int"
       INTPTLAT: "numeric"
@@ -55,7 +55,7 @@ pipes:
       gisjoin: "GISJOIN"
     dtypes:
       "FIPS": "string"
-      geometry: "geometry[MultiPolygon]"
+      geometry: "geometry[MultiPolygon,EPSG:4326]"
     indices:
       fips: "FIPS"
       geometry: "geometry"
@@ -68,7 +68,7 @@ pipes:
         a."ADI_NATRANK",
         ST_Transform(n."geometry", 4326) AS "geometry"
       FROM "ADI".adi_sc AS a
-      INNER JOIN "ADI".nhghis AS n
+      INNER JOIN "ADI".nhgis AS n
         ON n."year" = a."year"
         AND n."GISJOIN" = SUBSTRING(a."GISJOIN", 1, 14)
 

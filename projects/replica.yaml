@@ -1,0 +1,46 @@
+project_name: replica
+
+root_dir: ../root
+
+plugins_dir:
+- ../.installed_plugins
+- ../plugins
+
+sync:
+  schedule: "daily"
+
+pipes:
+
+- connector: "plugin:replica"   
+  metric: "network-link-volumes"
+  location: "greenville"
+  parameters:
+    schema: "replica"
+    target: "network-link-volumes"
+    columns:
+      network_link_id: "networkLinkId"
+      filename: "filename"
+      osm_id: "osmId"
+    dtypes:
+      networkLinkId: "string"
+      osmId: "int"
+      trip_count: "int"
+      startLat: "numeric"
+      startLon: "numeric"
+      endLat: "numeric"
+      endLon: "numeric"
+      distance: "float"
+    indices:
+      highway: "highway"
+
+config:
+  meerschaum:
+    instance: sql:bwg
+    connectors:
+      sql:
+        bwg: MRSM{meerschaum:connectors:sql:bwg}
+  plugins:
+    bwg:
+      data_path: '{MRSM_ROOT_DIR}/../data'
+
+environment: {}

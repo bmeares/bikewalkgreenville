@@ -19,7 +19,7 @@ def fetch(pipe: mrsm.Pipe, **kwargs):
     """
     Ingest the ADI files.
     """
-    if pipe.metric_key == 'nhghis':
+    if pipe.metric_key == 'nhgis':
         return (
             chunk
             for chunk in parse_nhgis_files()
