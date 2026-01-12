@@ -17,6 +17,7 @@ pipes:
   parameters:
     schema: "replica"
     target: "network-link-volumes"
+    upsert: true
     columns:
       network_link_id: "networkLinkId"
       filename: "filename"
@@ -25,13 +26,156 @@ pipes:
       networkLinkId: "string"
       osmId: "int"
       trip_count: "int"
-      startLat: "numeric"
-      startLon: "numeric"
-      endLat: "numeric"
-      endLon: "numeric"
       distance: "float"
     indices:
       highway: "highway"
+
+- connector: "plugin:replica"
+  metric: "aadt"
+  location: "greenville"
+  parameters: 
+    schema: "replica"
+    target: "{{ self.metric }}"
+    upsert: true
+    columns:
+      primary: "id"
+      osm_id: "osm_id"
+      filename: "filename"
+      comp_stable_edge_id: "comp_stable_edge_id"
+    dtypes:
+      length: "float"
+      heading: "int"
+      aadt: "int"
+      aadt_single_unit: "int"
+      aadt_combination: "int"
+      geometry: "geometry[LINESTRING, 4326]"
+      bidirectional: "bool"
+    indices:
+      highway: "highway"
+      geometry: "geometry"
+
+- connector: "plugin:replica"
+  metric: "annual-speeds"
+  location: "greenville"
+  parameters:
+    schema: "replica"
+    target: "{{ self.metric }}"
+    columns:
+      id: "id"
+      osm_id: "osm_id"
+      filename: "filename"
+    dtypes:
+      id: "string"
+      osm_id: "int"
+      flow_speed_mph: "int"
+      geometry: "geometry[LINESTRING, 4326]"
+      lat: "numeric"
+      lng: "numeric"
+      length: "float"
+      heading: "int"
+      average_speed_mph: "int"
+      speed_p50_mph: "int"
+      speed_p85_mph: "int"
+      speed_p95_mph: "int"
+    indices:
+      street_name: "street_name"
+      geometry: "geometry"
+      highway: "highway"
+
+- connector: "plugin:replica"
+  metric: "hourly-volumes"
+  location: "greenville"
+  parameters:
+    schema: "replica"
+    target: "{{ self.metric }}"
+    upsert: true
+    columns:
+      id: "id"
+      osm_id: "osm_id"
+      stable_edge_id: "stable_edge_id"
+      filename: "filename"
+    dtypes:
+      bidirectional: "bool"
+      length: "float"
+      heading: "int"
+      aadt: "int"
+      geometry: "geometry[LINESTRING, 4326]"
+      wkdy_0: "float"
+      wkdy_1: "float"
+      wkdy_2: "float"
+      wkdy_3: "float"
+      wkdy_4: "float"
+      wkdy_5: "float"
+      wkdy_6: "float"
+      wkdy_7: "float"
+      wkdy_8: "float"
+      wkdy_9: "float"
+      wkdy_10: "float"
+      wkdy_11: "float"
+      wkdy_12: "float"
+      wkdy_13: "float"
+      wkdy_14: "float"
+      wkdy_15: "float"
+      wkdy_16: "float"
+      wkdy_17: "float"
+      wkdy_18: "float"
+      wkdy_19: "float"
+      wkdy_20: "float"
+      wkdy_21: "float"
+      wkdy_22: "float"
+      wkdy_23: "float"
+    indices:
+      highway: "highway"
+
+- connector: "plugin:replica"
+  metric: "qtr-hourly-volumes"
+  location: "greenville"
+  parameters:
+    reference:
+      connector: "replica"
+      metric: "params"
+
+- connector: "plugin:replica"
+  metric: "trends-residential-vmt-v2"
+  location: "greenville"
+  parameters:
+    schema: "replica"
+    target: "{{ self.metric }}"
+    columns:
+      datetime: "week_starting"
+      geo_id: "geo_id"
+    dtypes:
+      week_starting: "date"
+      population: "int"
+      vmt: "int"
+
+- connector: "plugin:replica"
+  metric: "trends-trip-count-destination-v2"
+  location: "greenville"
+  parameters:
+    schema: "replica"
+    target: "{{ self.metric }}"
+
+- connector: "plugin:replica"
+  metric: "trends-trip-count-intra-geo-v2"
+  location: "greenville"
+  parameters:
+    schema: "replica"
+    target: "{{ self.metric }}"
+
+- connector: "plugin:replica"
+  metric: "trends-trip-count-od-destination-v2"
+  location: "greenville"
+  parameters:
+    schema: "replica"
+    target: "{{ self.metric }}"
+
+- connector: "plugin:replica"
+  metric: "trends-trip-count-od-origin-v2"
+  location: "greenville"
+  parameters:
+    schema: "replica"
+    target: "{{ self.metric }}"
 
 config:
   meerschaum:
