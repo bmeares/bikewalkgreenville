@@ -55,4 +55,7 @@ def fetch(
         df['filename'] = path.name
         dfs.append(df)
 
+    if not dfs:
+        return []
+
     return pd.concat(dfs)

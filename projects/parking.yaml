@@ -57,6 +57,26 @@ pipes:
         END AS "type"
       FROM city."Parking"
 
+- connector: "sql:bwg"
+  metric: "parking"
+  location: "dtmp"
+  parameters:
+    schema: "Parking"
+    target: "dtmp_parking"
+    columns:
+      primary: "id"
+    dtypes:
+      geometry: "geometry[polygon, 3361]"
+      id: "int"
+    indices:
+      geometry: "geometry"
+      feat_code: "FEAT_CODE"
+    sql: |-
+      SELECT p.*
+      FROM "Boundaries"."DTMP_STUDYAREA_2019_POLY" AS dt
+      JOIN "city"."Parking" AS p
+        ON ST_Intersects(ST_MakeValid(dt.geom), ST_MakeValid(p.geometry))
+
 config:
   meerschaum:
     instance: sql:bwg

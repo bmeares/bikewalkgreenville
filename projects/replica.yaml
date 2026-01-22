@@ -155,6 +155,23 @@ pipes:
   parameters:
     schema: "replica"
     target: "{{ self.metric }}"
+    upsert: false
+    static: true
+    columns:
+      datetime: "week_starting"
+      destination_geo_id: "destination_geo_id"
+    dtypes:
+      week_starting: "date"
+      trip_count: "int"
+      start_hour: "int"
+      destination_population: "int"
+      other_travel_mode_trip_count: "int"
+      walking_trip_count: "int"
+      biking_trip_count: "int"
+      public_transit_trip_count: "int"
+      private_auto_trip_count: "int"
+      on_demand_auto_trip_count: "int"
+      auto_passenger_trip_count: "int"
 
 - connector: "plugin:replica"
   metric: "trends-trip-count-intra-geo-v2"
