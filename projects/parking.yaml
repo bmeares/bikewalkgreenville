@@ -77,6 +77,29 @@ pipes:
       JOIN "city"."Parking" AS p
         ON ST_Intersects(ST_MakeValid(dt.geom), ST_MakeValid(p.geometry))
 
+- connector: "sql:bwg"
+  metric: "pavement"
+  location: "dtmp"
+  parameters:
+    schema: "Parking"
+    target: "dtmp_pavement"
+    autoincrement: true
+    columns:
+      primary: "id"
+    dtypes:
+      geometry: "geometry[multipolygon, 3361]"
+      id: "int"
+    indices:
+      geometry: "geometry"
+    sql: |-
+      SELECT p.*, row_number() OVER (ORDER BY p.* DESC) AS id
+      FROM "Boundaries"."DTMP_STUDYAREA_2019_POLY" AS dt
+      JOIN (
+        SELECT ST_Subdivide(ST_MakeValid(geometry)) AS geometry
+        FROM "city"."EdgeOfPavement"
+      ) AS p
+      ON ST_Intersects(dt.geom, p.geometry)
+
 config:
   meerschaum:
     instance: sql:bwg
