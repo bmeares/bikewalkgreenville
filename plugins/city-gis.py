@@ -8,7 +8,7 @@ See the Writing Plugins guide for more information:
 https://meerschaum.io/reference/plugins/writing-plugins/
 """
 
-import os
+import re
 import shutil
 import zipfile
 from datetime import datetime
@@ -23,6 +23,7 @@ required = ['geopandas', 'pyogrio', 'pandas[pyarrow]']
 bwg = mrsm.Plugin('bwg')
 
 SHAPEFILES_URL: str = "https://citygis.greenvillesc.gov/GISDataDownload/Data_Shapefiles.zip"
+PARKING_URL: str = "https://s-car-counter.nwave.io/greenville-parking-table-widget"
 FEAT_CODES: dict[str, dict[str, str]] = {
     'Parking': {
         '121': 'Paved',
@@ -68,6 +69,9 @@ def fetch(
 
         return docs
 
+    if pipe.metric_key == 'parking':
+        return fetch_parking(pipe, **kwargs)
+
     data_path = bwg.module.get_data_path()
     city_path = data_path / 'city of greenville'
     shapefiles_path = (city_path / 'Data_Shapefiles')
@@ -110,3 +114,17 @@ def fetch_city_gis(force: bool = False, **kwargs) -> mrsm.SuccessTuple:
 
     zip_path.unlink()
     return True, "Success"
+
+
+def fetch_parking(pipe: mrsm.Pipe, **kwargs):
+    """
+    Fetch the current parking data.
+    """
+    requests = mrsm.attempt_import('requests')
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36"
+    })
+    response_html = session.get(PARKING_URL)
+    response_html.raise_for_status()
+    return response_html

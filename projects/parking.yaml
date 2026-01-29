@@ -100,6 +100,17 @@ pipes:
       ) AS p
       ON ST_Intersects(dt.geom, p.geometry)
 
+- connector: "plugin:city-gis"
+  metric: "parking"
+  location: "garages"
+  parameters:
+    schema: "Parking"
+    target: "parking_garages"
+    columns:
+      datetime: "ts"
+    autotime: true
+
+
 config:
   meerschaum:
     instance: sql:bwg
