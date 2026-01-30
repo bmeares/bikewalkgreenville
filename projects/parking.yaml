@@ -92,13 +92,16 @@ pipes:
     indices:
       geometry: "geometry"
     sql: |-
-      SELECT p.*, row_number() OVER (ORDER BY p.* DESC) AS id
+      SELECT 
+          ST_Intersection(p.geometry, ST_MakeValid(dt.geom)) AS geometry,
+          row_number() OVER () AS id
       FROM "Boundaries"."DTMP_STUDYAREA_2019_POLY" AS dt
       JOIN (
         SELECT ST_Subdivide(ST_MakeValid(geometry)) AS geometry
         FROM "city"."EdgeOfPavement"
       ) AS p
-      ON ST_Intersects(dt.geom, p.geometry)
+      ON ST_Intersects(ST_Buffer(ST_MakeValid(dt.geom), 20), p.geometry)
+      WHERE NOT ST_IsEmpty(ST_Intersection(p.geometry, dt.geom))
 
 - connector: "plugin:city-gis"
   metric: "parking"
@@ -110,7 +113,31 @@ pipes:
       datetime: "ts"
     autotime: true
 
-
+- connector: "sql:bwg"
+  metric: "roads"
+  location: "dtmp"
+  parameters:
+    schema: "Parking"
+    target: "dtmp_roads"
+    columns:
+      primary: "Facility ID"
+    dtypes:
+      geometry: "geometry[LINESTRING,3361]"
+    indices:
+      geometry: geometry
+    sql: |-
+      SELECT 
+          r."Facility ID",
+          ST_Intersection(
+              ST_Transform(ST_MakeValid(r.geometry), 3361), 
+              ST_Buffer(ST_MakeValid(dt.geom), 20)
+          ) AS geometry
+      FROM "Boundaries"."DTMP_STUDYAREA_2019_POLY" AS dt
+      JOIN "Roads"."roads" AS r
+        ON ST_Intersects(
+            ST_Transform(r.geometry, 3361), 
+            ST_Buffer(dt.geom, 20)
+        )
 config:
   meerschaum:
     instance: sql:bwg
