@@ -8,7 +8,7 @@ See the Writing Plugins guide for more information:
 https://meerschaum.io/reference/plugins/writing-plugins/
 """
 
-import os
+import re
 import shutil
 import zipfile
 from datetime import datetime
@@ -23,6 +23,7 @@ required = ['geopandas', 'pyogrio', 'pandas[pyarrow]']
 bwg = mrsm.Plugin('bwg')
 
 SHAPEFILES_URL: str = "https://citygis.greenvillesc.gov/GISDataDownload/Data_Shapefiles.zip"
+PARKING_URL: str = "https://s-car-counter.nwave.io/greenville-parking-table-widget"
 FEAT_CODES: dict[str, dict[str, str]] = {
     'Parking': {
         '121': 'Paved',
@@ -68,6 +69,9 @@ def fetch(
 
         return docs
 
+    if pipe.metric_key == 'parking':
+        return fetch_parking(pipe, **kwargs)
+
     data_path = bwg.module.get_data_path()
     city_path = data_path / 'city of greenville'
     shapefiles_path = (city_path / 'Data_Shapefiles')
@@ -110,3 +114,31 @@ def fetch_city_gis(force: bool = False, **kwargs) -> mrsm.SuccessTuple:
 
     zip_path.unlink()
     return True, "Success"
+
+
+def fetch_parking(pipe: mrsm.Pipe, **kwargs):
+    """
+    Fetch the current parking data.
+    """
+    requests = mrsm.attempt_import('requests')
+    url = "https://api.nwave.io/analytics/v1/car_counters/realtime/occupancy_summary"
+
+    params = {
+        "group_by": "zone",
+        "zone_id": [882, 780, 883, 884, 885, 886, 887, 888, 861, 889]
+    }
+
+    headers = {
+        "x-auth-token": "H6iP8id7qCNHneuOXhx89mSrjXVNSK",
+        "origin": "https://s-car-counter.nwave.io",
+        "referer": "https://s-car-counter.nwave.io/",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
+    }
+
+    response = requests.get(url, params=params, headers=headers, timeout=10)
+    response.raise_for_status()
+
+    data = response.json()
+    docs = [{'capacity': doc['zone']['capacity'], 'id': doc['zone']['id'], 'name': doc['zone']['name'], 'occupied': doc['occupied']} for doc in data['data']['data']]
+
+    return docs
