@@ -111,7 +111,9 @@ pipes:
     target: "parking_garages"
     columns:
       datetime: "ts"
+      id: "id"
     autotime: true
+    precision: "minute"
 
 - connector: "sql:bwg"
   metric: "roads"

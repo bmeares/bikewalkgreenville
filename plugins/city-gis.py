@@ -121,10 +121,24 @@ def fetch_parking(pipe: mrsm.Pipe, **kwargs):
     Fetch the current parking data.
     """
     requests = mrsm.attempt_import('requests')
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36"
-    })
-    response_html = session.get(PARKING_URL)
-    response_html.raise_for_status()
-    return response_html
+    url = "https://api.nwave.io/analytics/v1/car_counters/realtime/occupancy_summary"
+
+    params = {
+        "group_by": "zone",
+        "zone_id": [882, 780, 883, 884, 885, 886, 887, 888, 861, 889]
+    }
+
+    headers = {
+        "x-auth-token": "H6iP8id7qCNHneuOXhx89mSrjXVNSK",
+        "origin": "https://s-car-counter.nwave.io",
+        "referer": "https://s-car-counter.nwave.io/",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
+    }
+
+    response = requests.get(url, params=params, headers=headers, timeout=10)
+    response.raise_for_status()
+
+    data = response.json()
+    docs = [{'capacity': doc['zone']['capacity'], 'id': doc['zone']['id'], 'name': doc['zone']['name'], 'occupied': doc['occupied']} for doc in data['data']['data']]
+
+    return docs
