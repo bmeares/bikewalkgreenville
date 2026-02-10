@@ -10,7 +10,7 @@ import meerschaum as mrsm
 from meerschaum.config import get_plugin_config, write_plugin_config
 from meerschaum.plugins import web_page, dash_plugin
 
-__version__ = '0.3.3'
+__version__ = '0.3.4'
 
 required: list[str] = ['dash-leaflet']
 
@@ -600,7 +600,7 @@ def init_dash(dash_app):
                             if (link_prefix := LINK_PREFIXES.get(prop)) is None
                             else html.A(
                                 (val if prop != 'Online Form' else 'Report an Issue'),
-                                href=(link_prefix + (re.sub(r'\D', '', val) if prop == 'Phone' else val)),
+                                href=(str(link_prefix) + (str(re.sub(r'\D', '', str(val))) if prop == 'Phone' else str(val))),
                                 target="_blank",
                                 style={'color': TYPES_COLORS[road_type]['hex']}
                             )
