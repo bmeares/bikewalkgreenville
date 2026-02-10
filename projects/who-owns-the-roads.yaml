@@ -23,6 +23,7 @@ pipes:
     columns:
       jcode: "JCODE"
       feat_code: "FEAT_CODE"
+      owner: "owner"
     schema: "Roads"
     sql: |-
       SELECT *
@@ -44,7 +45,10 @@ pipes:
         (45115, 1374, 'City of Mauldin', 'mauldinpublicworks@mauldincitysc.com', 'https://cityofmauldin.org/service-request-form/', '(864) 289-8904'),
         (27070, 1374, 'City of Fountain Inn', 'fred.wilson@fountaininn.org', 'https://simpsonvillesc.mycusthelp.com/WEBAPP/_rs/(S(kv5landczq0lgxpr1apw4zis))/Requestselect.aspx?sSessionID=', '(864) 531-0644'),
         (66580, 1374, 'City of Simpsonville', 'info@simpsonville.com', 'https://www.simpsonville.com/contact/', '(864) 967-9531'),
-        (72430, 1374, 'City of Travelers Rest', 'tate@travelersrestsc.com', 'https://travelersrestsc.com/businesses/departments/public-works/report-a-problem/', '(864) 834-8740')
+        (72430, 1374, 'City of Travelers Rest', 'tate@travelersrestsc.com', 'https://travelersrestsc.com/businesses/departments/public-works/report-a-problem/', '(864) 834-8740'),
+        (NULL, 1373, 'Greenville County & ReWa', 'N/A', 'https://www.greenvillecounty.org/apps/servicerequest/Request.aspx', '(864) 467-7016'),
+        (NULL, NULL, 'Conestee Nature Preserve', 'info@conesteepreserve.org', 'https://www.conesteepreserve.org/', '(864) 277-2004'),
+        (NULL, 1373, 'Laurens County', 'ahoward@laurenscountysc.gov', 'https://www.laurenscountysc.gov/departments/parks_recreation_and_tourism/index.php', '(864) 984-5484')
       ) AS t ("JCODE", "FEAT_CODE", "owner", "email", "url", "phone")
 
 - connector: "sql:bwg"
@@ -88,6 +92,37 @@ pipes:
         ON r."FEAT_CODE" = cl."FEAT_CODE"
 
 - connector: "sql:bwg"
+  metric: "srt"
+  location: "Roads"
+  parameters:
+    schema: "Roads"
+    target: "srt_roads"
+    columns:
+      primary: "Facility ID"
+      type: "Type"
+      name: "Name"
+    dtypes:
+      geometry: geometry[MULTIPOLYGON, 6570]
+    indices:
+      geometry: "geometry"
+    sql: |-
+      SELECT
+        NULL::DATE AS "Last Edited",
+        NULL::TEXT AS "Created",
+        t."road_type" AS "Type",
+        s."Segment" || ' | PRISMA Health Swamp Rabbit Trail' AS "Name",
+        'SRT-' || s."Segment" || '-' || s."Owner" AS "Facility ID",
+        ST_Transform(ST_Force2D(s.geometry), 6570) AS "geometry",
+        ST_Length(ST_Transform(ST_Force2D(s.geometry), 6570)) AS "Length (ft)",
+        s."Owner",
+        s."Online Form",
+        s."Email",
+        s."Phone"
+      FROM "SRT".segments_owners AS s
+      INNER JOIN "Roads".road_types AS t
+        ON t."FEAT_CODE" = s."FEAT_CODE"
+
+- connector: "sql:bwg"
   metric: "roads"
   location: "Roads"
   parameters:
@@ -98,13 +133,13 @@ pipes:
       type: "Type"
       name: "Name"
     dtypes:
-      geometry: geometry[LINESTRING, 6570]
+      geometry: geometry[MULTILINESTRING, 6570]
     indices:
       geometry: geometry
     sql: |-
       SELECT
-        "created_da" AS "Created",
-        "last_edi_1" AS "Last Edited",
+        "created_da"::TEXT AS "Created",
+        "last_edi_1"::DATE AS "Last Edited",
         r.road_type AS "Type",
         SMART_CAPITALIZE("LABEL") AS "Name",
         "FACILITYID" AS "Facility ID",
@@ -136,6 +171,20 @@ pipes:
           WHEN cl."FEAT_CODE" IN (1370, 1371, 1372) THEN 45045 -- For these specific FEAT_CODEs, always use 45045.
           ELSE COALESCE(cl."JCODE"::INT, 0) -- For all other FEAT_CODEs, use JCODE from TRA_STREETCL, defaulting to 0.
         END
+      UNION ALL
+      SELECT
+        "Created"::TEXT,
+        "Last Edited"::DATE,
+        "Type",
+        "Name",
+        "Facility ID",
+        "geometry",
+        "Length (ft)",
+        "Owner",
+        "Online Form",
+        "Email",
+        "Phone"
+      FROM "Roads".srt_roads
 
 - connector: "sql:bwg"
   metric: "roads_deltas"
@@ -160,7 +209,7 @@ pipes:
       primary: "Facility ID"
       road_type: "Type"
     dtypes:
-      geometry: geometry[LINESTRING, 6570]
+      geometry: geometry[MULTILINESTRING, 6570]
     indices:
       geometry: geometry
       name: "Name"
@@ -276,7 +325,7 @@ pipes:
           "Email",
           "Phone"
       FROM "Roads"."roads_clip"
-      WHERE "Type" IN ('Interstate Highway','US Highway', 'State Road')
+      WHERE "Type" IN ('Interstate Highway', 'US Highway', 'State Road')
 
 - connector: "sql:bwg"
   metric: "roads_county_road"

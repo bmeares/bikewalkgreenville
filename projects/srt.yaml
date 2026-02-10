@@ -8,16 +8,116 @@ plugins_dir:
 
 pipes:
 
+- connector: "plugin:gmaps"
+  metric: "srt_segments"
+  location: "srt"
+  parameters:
+    schema: "SRT"
+    target: "segments"
+    dtypes:
+      geometry: "geometry[LINESTRINGZ, 4326]"
+    indices:
+      geometry: "geometry"
+      name: "Name"
+    gmaps:
+      map_id: "1LVsLj6PDSbLGyjk4Gj_eERXWhOjIWYs"
+
 - connector: "sql:bwg"
-  metric: "srt"
-  location: "greenline"
+  metric: "srt_segments"
+  location: "owners"
+  parameters:
+    schema: "SRT"
+    target: "segments_owners"
+    columns:
+      owner: "Owner"
+      segment: "Segment"
+    dtypes:
+      geometry: "geometry[LINESTRINGZ, 4326]"
+    indices:
+      geometry: "geometry"
+    sql: |-
+      WITH segments_owners AS (
+        SELECT 
+            SPLIT_PART(REPLACE("Name", ' I ', ' | '), ' | ', 1) AS "Owner",
+            SPLIT_PART(REPLACE("Name", ' I ', ' | '), ' | ', 2) AS "Segment",
+            ST_Multi(ST_Collect(geometry))::geometry(MultiLineStringZ, 4326) AS geometry
+        FROM "SRT".segments
+        GROUP BY 1, 2
+      ), contact AS (
+        SELECT DISTINCT "owner", "email", "url", "phone", "FEAT_CODE"
+        FROM "Roads".contact_info
+      )
+      SELECT
+        s."Owner",
+        s."Segment",
+        s."geometry",
+        c.email AS "Email",
+        c."url" AS "Online Form",
+        c."phone" AS "Phone",
+        c."FEAT_CODE"
+      FROM segments_owners AS s
+      LEFT JOIN contact AS c
+        ON c."owner" = s."Owner"
+
+- connector: "sql:bwg"
+  metric: "srt_segments"
+  location: "green"
   parameters:
     schema: "SRT"
     target: "Green Line"
+    columns: "{{ Pipe('sql:bwg', 'srt_segments', 'owners').columns }}"
     sql: |-
-      select *
-      from gcgis."PRISMA Health Swamp Rabbit Trail" 
-      where "SECTION" = 'Green Line' 
+      SELECT *
+      FROM "SRT".segments_owners
+      WHERE "Segment" LIKE 'Green %%'
+
+- connector: "sql:bwg"
+  metric: "srt_segments"
+  location: "blue"
+  parameters:
+    schema: "SRT"
+    target: "Blue Line"
+    columns: "{{ Pipe('sql:bwg', 'srt_segments', 'owners').columns }}"
+    sql: |-
+      SELECT *
+      FROM "SRT".segments_owners
+      WHERE "Segment" LIKE 'Blue %%'
+
+- connector: "sql:bwg"
+  metric: "srt_segments"
+  location: "orange"
+  parameters:
+    schema: "SRT"
+    target: "Orange Line"
+    columns: "{{ Pipe('sql:bwg', 'srt_segments', 'owners').columns }}"
+    sql: |-
+      SELECT *
+      FROM "SRT".segments_owners
+      WHERE "Segment" LIKE 'Orange %%'
+
+- connector: "sql:bwg"
+  metric: "srt_segments"
+  location: "gold"
+  parameters:
+    schema: "SRT"
+    target: "Gold Line"
+    columns: "{{ Pipe('sql:bwg', 'srt_segments', 'owners').columns }}"
+    sql: |-
+      SELECT *
+      FROM "SRT".segments_owners
+      WHERE "Segment" LIKE 'Gold %%'
+
+- connector: "sql:bwg"
+  metric: "srt_segments"
+  location: "connectors"
+  parameters:
+    schema: "SRT"
+    target: "Connectors"
+    columns: "{{ Pipe('sql:bwg', 'srt_segments', 'owners').columns }}"
+    sql: |-
+      SELECT *
+      FROM "SRT".segments_owners
+      WHERE LOWER("Segment") LIKE '%%connect%%'
 
 config:
   meerschaum:
