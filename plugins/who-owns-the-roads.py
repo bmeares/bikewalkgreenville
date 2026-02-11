@@ -10,7 +10,7 @@ import meerschaum as mrsm
 from meerschaum.config import get_plugin_config, write_plugin_config
 from meerschaum.plugins import web_page, dash_plugin
 
-__version__ = '0.3.4'
+__version__ = '0.3.5'
 
 required: list[str] = ['dash-leaflet']
 
@@ -339,7 +339,7 @@ def init_dash(dash_app):
             "  ST_Union(\"geometry\") AS \"geometry\"\n"
             "FROM \"Roads\".roads\n"
             "WHERE\n"
-            "  LOWER(REGEXP_REPLACE(\"Name\", '[^a-zA-Z0-9 ]', '', 'g')) = '" + road_name_clean + "'\n" + (
+            "  LOWER(REGEXP_REPLACE(\"Name\", '[^a-zA-Z0-9\\| ]', '', 'g')) = '" + road_name_clean + "'\n" + (
                 ("  AND \"Owner\" = '" + owner + "'\n")
                 if owner
                 else ""
@@ -365,7 +365,7 @@ def init_dash(dash_app):
         """
         Return the cleaned, normalized road name from the input string.
         """
-        road_name_clean = re.sub(r'[^a-zA-Z0-9]', ' ', input_value)
+        road_name_clean = re.sub(r'[^a-zA-Z0-9\|]', ' ', input_value)
         road_name_clean = re.sub(r'\s+', ' ', road_name_clean).lower().strip()
         name_parts = road_name_clean.split(' ')
         skip_aliases = []
