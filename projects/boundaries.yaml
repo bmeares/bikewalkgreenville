@@ -94,6 +94,25 @@ pipes:
 
 - connector: "sql:bwg"
   metric: "boundaries"
+  location: "greenville-line"
+  parameters:
+    schema: Boundaries
+    target: boundaries_greenville-line
+    columns:
+      municipality_name: "Municipality Name"
+    dtypes:
+      geometry: "geometry[MULTILINESTRING, 6570]"
+    indices:
+      geometry: geometry
+    sql: |-
+      SELECT
+        "Municipality Name",
+        st_boundary("geometry") AS "geometry"
+      FROM "Boundaries"."boundaries"
+      WHERE "Municipality Name" = 'Greenville'
+
+- connector: "sql:bwg"
+  metric: "boundaries"
   location: "simpsonville"
   parameters:
     schema: Boundaries
