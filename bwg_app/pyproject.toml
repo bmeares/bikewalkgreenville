@@ -1,0 +1,28 @@
+[project]
+name = "bwg-app"
+version = "0.1.0"
+description = "All of Bike Walk Greenville's resources in one place!"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "Bennett Meares", email = "data@bikewalkgreenville.org" }
+]
+dependencies = [
+    "flet>=0.80.5"
+]
+
+[dependency-groups]
+dev = [
+    "flet-cli>=0.80.5",
+    "flet-desktop-light>=0.80.5",
+    "flet-web>=0.80.5",
+]
+
+[tool.flet]
+org = "org.bikewalkgreenville"
+product = "bwg-app"
+company = "Bike Walk Greenville"
+copyright = "Copyright (C) 2026 by Bike Walk Greenville"
+
+[tool.flet.app]
+path = "src"
