@@ -1,4 +1,4 @@
-project_name: gcgis
+project_name: sidewalks
 
 root_dir: ../root
 
@@ -12,24 +12,16 @@ sync:
 pipes:
 
 - connector: "plugin:greenville-county"
-  metric: "PRISMA Health Swamp Rabbit Trail"
+  metric: "sidewalks"
   parameters:
-    schema: "gcgis"
-    target: "PRISMA Health Swamp Rabbit Trail"
+    schema: "Sidewalks"
+    target: "county_sidewalks"
     greenville-county:
-      layer: "PRISMA Health Swamp Rabbit Trail"
-    columns:
-      section: "SECTION"
-      facility_id: "FACILITYID"
-      feat_code: "FEAT_CODE"
+      layer: "Sidewalk"
     dtypes:
       geometry: "geometry[LINESTRING, 6570]"
     indices:
       geometry: "geometry"
-
-- connector: "plugin:greenville-county"
-  metric: "sidewalks"
-  parameters:
 
     
 

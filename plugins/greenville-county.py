@@ -89,7 +89,7 @@ def fetch_layer(
     with zipfile.ZipFile(job_path, 'r') as zip_ref:
         zip_ref.extractall(layer_path)
 
-    job_path.unlink()
+    #  job_path.unlink()
 
     shapefiles = [
         (layer_path / filename)
