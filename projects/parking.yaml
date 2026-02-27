@@ -140,6 +140,17 @@ pipes:
             ST_Transform(r.geometry, 3361), 
             ST_Buffer(dt.geom, 20)
         )
+
+- connector: "plugin:parking"
+  metric: "requirements"
+  location: "greenville"
+  parameters:
+    schema: "Parking"
+    target: "parking_requirements_greenville"
+    columns:
+      category: "category"
+      type: "type"
+  
 config:
   meerschaum:
     instance: sql:bwg
