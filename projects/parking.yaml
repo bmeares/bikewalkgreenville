@@ -151,6 +151,15 @@ pipes:
       category: "category"
       type: "type"
   
+- connector: "plugin:parking"
+  metric: "inventory"
+  location: "greenville"
+  parameters:
+    schema: "Parking"
+    target: "parking_inventory_greenville"
+    columns:
+      year: "year"
+
 config:
   meerschaum:
     instance: sql:bwg
