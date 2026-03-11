@@ -81,11 +81,13 @@ def fetch_layer(action: list[str], force: bool = False) -> pathlib.Path:
 
     job_id = submit_job(layer)
     job_path = download_job_output(job_id)
+    print(f"{job_path=}")
+    print(f"{layer_path=}")
 
     with zipfile.ZipFile(job_path, 'r') as zip_ref:
         zip_ref.extractall(layer_path)
 
-    job_path.unlink()
+    #  job_path.unlink()
 
     shapefiles = [
         (layer_path / filename)
