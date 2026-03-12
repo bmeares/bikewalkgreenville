@@ -16,7 +16,7 @@ import meerschaum as mrsm
 from meerschaum.utils.warnings import info
 from meerschaum.plugins import make_action
 
-__version__ = '0.1.0'
+__version__ = '0.1.1'
 
 bwg = mrsm.Plugin('bwg')
 
@@ -60,7 +60,11 @@ def fetch(pipe: mrsm.Pipe, **kwargs):
 
 
 @make_action
-def fetch_layer(action: list[str], force: bool = False) -> pathlib.Path:
+def fetch_layer(
+    action: list[str],
+    force: bool = False,
+    timeout_seconds: int = 30,
+) -> pathlib.Path:
     """
     Scrape the county GIS website.
     """
@@ -80,7 +84,7 @@ def fetch_layer(action: list[str], force: bool = False) -> pathlib.Path:
             return layer_path
 
     job_id = submit_job(layer)
-    job_path = download_job_output(job_id)
+    job_path = download_job_output(job_id, timeout=timeout_seconds)
 
     with zipfile.ZipFile(job_path, 'r') as zip_ref:
         zip_ref.extractall(layer_path)
