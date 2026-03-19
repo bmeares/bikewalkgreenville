@@ -160,6 +160,111 @@ pipes:
     columns:
       year: "year"
 
+- connector: "sql:bwg"
+  metric: "car_infrastructure_ratios"
+  location: "downtown"
+  parameters:
+    columns:
+      primary: "id"
+    schema: "Parking"
+    target: "{{ self.metric }}"
+    sql: |
+      WITH parking_lots AS (
+        SELECT ST_Union(ST_MakeValid(geometry)) AS geom 
+        FROM "Parking".dtmp_parking
+      ), facilities AS (
+        SELECT ST_Union(ST_MakeValid(geometry)) AS geom 
+        FROM "Parking".parking_facilities_greenville
+      ), pavement_cleaned AS (
+        SELECT ST_Difference(
+          ST_Union(ST_MakeValid(pave.geometry)), 
+          (SELECT geom FROM parking_lots)
+        ) AS geom
+        FROM "Parking".dtmp_pavement pave
+      ), total_infra AS (
+        SELECT ST_Union(ARRAY[
+          (SELECT geom FROM parking_lots),
+          (SELECT geom FROM facilities),
+          (SELECT geom FROM pavement_cleaned)
+        ]) AS geom
+      )
+      SELECT
+        1 AS "id",
+        'Other Downtown' AS "name",
+        ST_Area(dt.geom) - ST_Area(i.geom) AS "total_area"
+      FROM "Boundaries"."DTMP_STUDYAREA_2019_POLY" dt, total_infra i
+      UNION ALL
+      SELECT
+        2 AS "id",
+        'Parking Lots' AS "name",
+        ST_Area(geom) AS "total_area"
+      FROM parking_lots
+      UNION ALL
+      SELECT
+        3 AS "id",
+        'Roadway Pavement' AS "name",
+        ST_Area(geom) AS "total_area"
+      FROM pavement_cleaned
+      UNION ALL
+      SELECT
+        4 AS "id",
+        'Parking Facilities' AS "name",
+        ST_Area(geom) AS "total_area"
+      FROM facilities
+
+- connector: "plugin:parking"
+  metric: "inventory"
+  location: "greenville"
+  parameters:
+    schema: "Parking"
+    target: "parking_inventory_greenville"
+    columns:
+      year: "year"
+
+- connector: "sql:bwg"
+  metric: "parking_facilities"
+  location: "greenville"
+  parameters:
+    schema: "Parking"
+    target: "parking_facilities_greenville"
+    columns:
+      primary: "id"
+    dtypes:
+      id: "int8"
+      height: "int8"
+      geometry: "geometry[POLYGON, 3361]"
+    indices:
+      geometry: "geometry"
+    sql: |-
+      SELECT b.*
+      FROM "city"."BuildingFootprints" AS b
+      JOIN "Boundaries"."DTMP_STUDYAREA_2019_POLY" AS d
+        ON ST_Intersects(ST_MakeValid(d."geom"), ST_MakeValid(b."geometry"))
+      WHERE "FEATCODE" = 25
+
+- connector: "sql:bwg"
+  metric: "public_garages"
+  location: "downtown"
+  parameters:
+    schema: "Parking"
+    target: "public_garages_downtown"
+    columns:
+      primary: "id"
+    dtypes:
+      id: "int8"
+      height: "int8"
+      geometry: "geometry[POLYGON, 3361]"
+    indices:
+      geometry: "geometry"
+    sql: |-
+      SELECT b.*
+      FROM "city"."BuildingFootprints" AS b
+      WHERE "id" IN (
+        12707, 4589, 21099, 4150, 4004,
+        7759, 2969, 2693, 2841, 2906
+      )
+
+
 config:
   meerschaum:
     instance: sql:bwg
