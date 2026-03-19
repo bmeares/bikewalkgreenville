@@ -226,15 +226,10 @@ pipes:
   location: "greenville"
   parameters:
     schema: "Parking"
-    target: "parking_facilities_greenville"
-    columns:
-      primary: "id"
-    dtypes:
-      id: "int8"
-      height: "int8"
-      geometry: "geometry[POLYGON, 3361]"
-    indices:
-      geometry: "geometry"
+    reference:
+      connector: "plugin:city-gis"
+      metric: "BuildingFootprints"
+    target: "{{ self.metric }}_{{ self.location }}"
     sql: |-
       SELECT b.*
       FROM "city"."BuildingFootprints" AS b
@@ -246,16 +241,11 @@ pipes:
   metric: "public_garages"
   location: "downtown"
   parameters:
-    schema: "Parking"
-    target: "public_garages_downtown"
-    columns:
-      primary: "id"
-    dtypes:
-      id: "int8"
-      height: "int8"
-      geometry: "geometry[POLYGON, 3361]"
-    indices:
-      geometry: "geometry"
+    reference:
+      connector: "sql:bwg"
+      metric: "parking_facilities"
+      location: "greenville"
+    target: "{{ self.metric }}_{{ self.location }}"
     sql: |-
       SELECT b.*
       FROM "city"."BuildingFootprints" AS b
@@ -264,6 +254,47 @@ pipes:
         7759, 2969, 2693, 2841, 2906
       )
 
+- connector: "sql:bwg"
+  metric: "private_garages"
+  location: "downtown"
+  parameters:
+    reference:
+      connector: "sql:bwg"
+      metric: "parking_facilities"
+      location: "greenville"
+    target: "{{ self.metric }}_{{ self.location }}"
+    sql: |-
+      SELECT *
+      FROM {{ Pipe('sql:bwg', 'parking_facilities', 'greenville') }}
+      WHERE "id" NOT IN (SELECT "id" FROM {{ Pipe('sql:bwg', 'public_garages', 'downtown') }})
+
+- connector: "sql:bwg"
+  metric: "parking_types"
+  location: "counts"
+  parameters:
+    schema: "Parking"
+    target: "parking_types_counts"
+    columns:
+      primary: "id"
+    sql: |-
+      WITH parking_spaces AS (
+        SELECT public_parking_spaces
+        FROM "Parking".parking_inventory_greenville
+        WHERE "year" = 2025
+      ), garage_capacity AS (
+        SELECT SUM(capacity) AS garage_spaces
+        FROM "Parking".parking_garages
+        WHERE ts = (
+          SELECT MAX(ts) FROM "Parking".parking_garages
+        )
+      )
+      SELECT
+        1 AS "id",
+        garage_spaces AS "Garage",
+        ((public_parking_spaces - garage_spaces) - 800) AS "Surface",
+        800 AS "Street"
+      FROM garage_capacity
+      INNER JOIN parking_spaces ON 1 = 1
 
 config:
   meerschaum:

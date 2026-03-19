@@ -73,14 +73,14 @@ pipes:
     metric: "BuildingFootprints"
     parameters:
       schema: "city"
-      target: "BuildingFootprints"
+      target: "{{ self.metric }}"
       autoincrement: true
       columns:
         feat_code: "FEATCODE"
         primary: "id"
       dtypes:
         id: "int"
-        geometry: "geometry[3361]"
+        geometry: "geometry[POLYGON, 3361]"
       indices:
         geometry: "geometry"
 
