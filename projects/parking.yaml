@@ -296,6 +296,28 @@ pipes:
       FROM garage_capacity
       INNER JOIN parking_spaces ON 1 = 1
 
+- connector: "sql:bwg"
+  metric: "cross_reference"
+  location: "identifiers"
+  parameters:
+    schema: "Parking"
+    target: "parking_garages_cross_reference"
+    columns:
+      db_id: "db_id"
+      api_id: "api_id"
+    sql: |-
+      SELECT *
+      FROM (
+        VALUES
+        (2693, 884),
+        (2841, 883),
+        (2906, 780),
+        (2969, 887),
+        (4004, 889),
+        (4150, 886),
+        (4589, 888)
+      ) AS t ("db_id", "api_id")
+
 config:
   meerschaum:
     instance: sql:bwg
