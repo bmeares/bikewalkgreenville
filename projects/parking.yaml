@@ -318,6 +318,55 @@ pipes:
         (4589, 888)
       ) AS t ("db_id", "api_id")
 
+- connector: "sql:bwg"
+  metric: "garages_counts"
+  location: "map"
+  parameters:
+    schema: "Parking"
+    target: "garages_counts_map"
+    columns:
+      datetime: "ts"
+      api_id: "api_id"
+      db_id: "db_id"
+    dtypes:
+      geometry: "geometry[POLYGON, 3361]"
+    indices:
+      name: "name"
+      label: "label"
+      geometry: "geometry"
+    upsert: true
+    null_indices: false
+    mixed_numerics: false
+    static: true
+    fetch:
+      backtrack_minutes: 0
+      definition: |-
+        SELECT
+          g."capacity",
+          g."occupied",
+          (
+            CASE
+              WHEN g."occupied" < g."capacity" THEN g."occupied"
+              WHEN g."occupied" >= g."capacity" THEN g."capacity"
+            END
+          )::FLOAT / g."capacity" AS "Percent Occupied",
+          CASE
+            WHEN g."occupied" < g."capacity" THEN g."occupied"
+            WHEN g."occupied" >= g."capacity" THEN g."capacity"
+          END AS "Spaces Occupied",
+          g."name",
+          g."ts",
+          x.db_id,
+          x.api_id,
+          SMART_CAPITALIZE(f."FAC_LABEL") AS "label",
+          f."HEIGHT" AS "height",
+          f."geometry"
+        FROM "Parking".parking_garages AS g
+        INNER JOIN "Parking".parking_garages_cross_reference AS x
+          ON x.api_id = g.id
+        INNER JOIN "Parking".parking_facilities_greenville AS f
+          ON f.id = x.db_id
+
 config:
   meerschaum:
     instance: sql:bwg
