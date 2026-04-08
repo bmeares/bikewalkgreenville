@@ -112,6 +112,8 @@ pipes:
     columns:
       datetime: "ts"
       id: "id"
+    indices:
+      id_ts: ["id", "ts"]
     autotime: true
     precision: "minute"
 
@@ -305,6 +307,11 @@ pipes:
     columns:
       db_id: "db_id"
       api_id: "api_id"
+    null_indices: false
+    static: true
+    upsert: true
+    indices:
+      unique: ["db_id", "api_id"]
     sql: |-
       SELECT *
       FROM (
@@ -325,7 +332,6 @@ pipes:
     schema: "Parking"
     target: "garages_counts_map"
     columns:
-      datetime: "ts"
       api_id: "api_id"
       db_id: "db_id"
     dtypes:
@@ -341,27 +347,25 @@ pipes:
     fetch:
       backtrack_minutes: 0
       definition: |-
+        WITH latest_garages AS MATERIALIZED (
+          SELECT DISTINCT ON (id) * FROM "Parking".parking_garages 
+          ORDER BY id, ts DESC
+        )
         SELECT
           g."capacity",
           g."occupied",
-          (
-            CASE
-              WHEN g."occupied" < g."capacity" THEN g."occupied"
-              WHEN g."occupied" >= g."capacity" THEN g."capacity"
-            END
-          )::FLOAT / g."capacity" AS "Percent Occupied",
-          CASE
-            WHEN g."occupied" < g."capacity" THEN g."occupied"
-            WHEN g."occupied" >= g."capacity" THEN g."capacity"
-          END AS "Spaces Occupied",
+          (LEAST(g."occupied", g."capacity")::FLOAT / g."capacity") AS "Percent Occupied",
+          LEAST(g."occupied", g."capacity") AS "Spaces Occupied",
           g."name",
           g."ts",
           x.db_id,
           x.api_id,
           SMART_CAPITALIZE(f."FAC_LABEL") AS "label",
           f."HEIGHT" AS "height",
-          f."geometry"
-        FROM "Parking".parking_garages AS g
+          f."geometry",
+          ST_X(ST_Centroid(ST_Transform(f."geometry", 4326))) AS longitude,
+          ST_Y(ST_Centroid(ST_Transform(f."geometry", 4326))) AS latitude
+        FROM latest_garages AS g
         INNER JOIN "Parking".parking_garages_cross_reference AS x
           ON x.api_id = g.id
         INNER JOIN "Parking".parking_facilities_greenville AS f
