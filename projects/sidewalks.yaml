@@ -13,9 +13,35 @@ sync:
 
 pipes:
 
-- connector: "sql:main"
+- connector: "sql:bwg"
   metric: "city_financial_report"
   location: "sidewalks_vs_streets"
+  parameters:
+    schema: "Sidewalks"
+    target: "{{self.location}}"
+    columns:
+      primary: "year"
+    dtypes:
+      year: "int"
+    sql: |-
+      SELECT "year", "miles_of_streets", "miles_of_sidewalks"
+      FROM "Parking".parking_inventory_greenville
+
+- connector: "sql:bwg"
+  metric: "sidewalks"
+  location: "greenville"
+  parameters:
+    schema: "Sidewalks"
+    target: "{{self.metric}}"
+    columns:
+      primary: "id"
+    dtypes:
+      id: "int"
+      geometry: "geometry[polygon,3361]"
+    sql: |-
+      SELECT id, "MATERIAL", "WIDTH", "SIDE_OF_ST", "STREET_NAM", ST_Buffer(geometry, "WIDTH"::FLOAT/2.0) as "geometry"
+      FROM "city"."Sidewalks"
+
 
 config:
   meerschaum:
