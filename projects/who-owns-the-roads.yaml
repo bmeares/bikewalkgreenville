@@ -72,8 +72,8 @@ pipes:
         (1372, 'State Road'),
         (1373, 'County Road'),
         (1374, 'Municipal Road'),
-        (1375, 'Subdivision'),
-        (1376, 'Private Drive')
+        (1375, 'Private'),
+        (1376, 'Private')
       ) AS t ("FEAT_CODE", "road_type")
 
 - connector: "sql:bwg"
@@ -109,7 +109,7 @@ pipes:
       SELECT
         NULL::DATE AS "Last Edited",
         NULL::TEXT AS "Created",
-        COALESCE(t."road_type", 'Trail') AS "Type",
+        COALESCE(t."road_type", 'Private') AS "Type",
         s."Segment" || ' | PRISMA Health Swamp Rabbit Trail' AS "Name",
         'SRT-' || s."Segment" || '-' || s."Owner" AS "Facility ID",
         ST_Transform(ST_Force2D(s.geometry), 6570) AS "geometry",
@@ -387,11 +387,11 @@ pipes:
       WHERE "Type" IN ('Municipal Road')
 
 - connector: "sql:bwg"
-  metric: "roads_subdivision"
+  metric: "roads_private"
   location: "Roads"
   parameters:
     schema: Roads
-    target: roads_subdivision
+    target: roads_private
     columns:
       primary: "Facility ID"
     sql: |-
@@ -406,29 +406,7 @@ pipes:
           "Email",
           "Phone"
       FROM "Roads"."roads_clip"
-      WHERE "Type" IN ('Subdivision')
-
-- connector: "sql:bwg"
-  metric: "roads_private_drive"
-  location: "Roads"
-  parameters:
-    schema: Roads
-    target: roads_private_drive
-    columns:
-      primary: "Facility ID"
-    sql: |-
-      SELECT
-          "Name",
-          "Type",
-          "Facility ID",
-          "geometry",
-          "Length (ft)",
-          "Owner",
-          "Online Form",
-          "Email",
-          "Phone"
-      FROM "Roads"."roads_clip"
-      WHERE "Type" IN ('Private Drive')
+      WHERE "Type" IN ('Private')
 
 - connector: "sql:bwg"
   metric: "road_total_lengths"

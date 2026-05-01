@@ -8,7 +8,7 @@ Add the "Who Owns the Roads" search application.
 import meerschaum as mrsm
 from meerschaum.plugins import web_page, dash_plugin
 
-__version__ = '0.4.2'
+__version__ = '0.4.3'
 
 required: list[str] = ['dash-leaflet']
 
@@ -48,21 +48,7 @@ TYPES_COLORS = {
             'outline': True,
         },
     },
-    'Private Drive': {
-        'hex': '#577DAB',
-        'button': {
-            'color': 'info',
-            'outline': True,
-        },
-    },
-    'Subdivision': {
-        'hex': '#577DAB',
-        'button': {
-            'color': 'info',
-            'outline': True,
-        },
-    },
-    'Trail': {
+    'Private': {
         'hex': '#577DAB',
         'button': {
             'color': 'info',
