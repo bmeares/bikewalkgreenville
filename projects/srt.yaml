@@ -37,8 +37,12 @@ pipes:
       geometry: "geometry"
     sql: |-
       WITH segments_owners AS (
-        SELECT 
-            SPLIT_PART(REPLACE("Name", ' I ', ' | '), ' | ', 1) AS "Owner",
+        SELECT
+            CASE SPLIT_PART(REPLACE("Name", ' I ', ' | '), ' | ', 1)
+              WHEN 'Greenville County' THEN 'Greenville County Parks, Recreation & Tourism'
+              WHEN 'Greenville County & ReWa' THEN 'Greenville County Parks, Recreation & Tourism'
+              ELSE SPLIT_PART(REPLACE("Name", ' I ', ' | '), ' | ', 1)
+            END AS "Owner",
             SPLIT_PART(REPLACE("Name", ' I ', ' | '), ' | ', 2) AS "Segment",
             ST_Multi(ST_Collect(geometry))::geometry(MultiLineStringZ, 4326) AS geometry
         FROM "SRT".segments

@@ -46,7 +46,7 @@ pipes:
         (27070, 1374, 'City of Fountain Inn', 'fred.wilson@fountaininn.org', 'https://portal.iworq.net/FOUNTAININN/new-case/400/2473', '(864) 531-0644'),
         (66580, 1374, 'City of Simpsonville', 'info@simpsonville.com', 'https://simpsonvillesc.mycusthelp.com/WEBAPP/_rs/(S(kv5landczq0lgxpr1apw4zis))/Requestselect.aspx?sSessionID=', '(864) 967-9531'),
         (72430, 1374, 'City of Travelers Rest', 'tate@travelersrestsc.com', 'https://travelersrestsc.com/businesses/departments/public-works/report-a-problem/', '(864) 834-8740'),
-        (NULL, 1373, 'Greenville County & ReWa', 'N/A', 'https://www.greenvillecounty.org/apps/servicerequest/Request.aspx', '(864) 467-7016'),
+        (NULL, 1373, 'Greenville County Parks, Recreation & Tourism', 'THouck@greenvillecounty.org', 'N/A', '(864) 331-9631'),
         (NULL, NULL, 'Conestee Nature Preserve', 'info@conesteepreserve.org', 'https://www.conesteepreserve.org/', '(864) 277-2004'),
         (NULL, 1373, 'Laurens County', 'ahoward@laurenscountysc.gov', 'https://www.laurenscountysc.gov/departments/parks_recreation_and_tourism/index.php', '(864) 984-5484')
       ) AS t ("JCODE", "FEAT_CODE", "owner", "email", "url", "phone")
@@ -109,7 +109,7 @@ pipes:
       SELECT
         NULL::DATE AS "Last Edited",
         NULL::TEXT AS "Created",
-        t."road_type" AS "Type",
+        COALESCE(t."road_type", 'Trail') AS "Type",
         s."Segment" || ' | PRISMA Health Swamp Rabbit Trail' AS "Name",
         'SRT-' || s."Segment" || '-' || s."Owner" AS "Facility ID",
         ST_Transform(ST_Force2D(s.geometry), 6570) AS "geometry",
@@ -119,7 +119,7 @@ pipes:
         s."Email",
         s."Phone"
       FROM "SRT".segments_owners AS s
-      INNER JOIN "Roads".road_types AS t
+      LEFT JOIN "Roads".road_types AS t
         ON t."FEAT_CODE" = s."FEAT_CODE"
 
 - connector: "sql:bwg"

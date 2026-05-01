@@ -5,12 +5,10 @@
 Add the "Who Owns the Roads" search application.
 """
 
-from datetime import datetime, timedelta, timezone
 import meerschaum as mrsm
-from meerschaum.config import get_plugin_config, write_plugin_config
 from meerschaum.plugins import web_page, dash_plugin
 
-__version__ = '0.3.5'
+__version__ = '0.4.2'
 
 required: list[str] = ['dash-leaflet']
 
@@ -58,6 +56,13 @@ TYPES_COLORS = {
         },
     },
     'Subdivision': {
+        'hex': '#577DAB',
+        'button': {
+            'color': 'info',
+            'outline': True,
+        },
+    },
+    'Trail': {
         'hex': '#577DAB',
         'button': {
             'color': 'info',
@@ -339,7 +344,7 @@ def init_dash(dash_app):
             "  ST_Union(\"geometry\") AS \"geometry\"\n"
             "FROM \"Roads\".roads\n"
             "WHERE\n"
-            "  LOWER(REGEXP_REPLACE(\"Name\", '[^a-zA-Z0-9\\| ]', '', 'g')) = '" + road_name_clean + "'\n" + (
+            "  LOWER(TRIM(REGEXP_REPLACE(REGEXP_REPLACE(\"Name\", '[^a-zA-Z0-9\\| ]', ' ', 'g'), '\\s+', ' ', 'g'))) = '" + road_name_clean + "'\n" + (
                 ("  AND \"Owner\" = '" + owner + "'\n")
                 if owner
                 else ""
@@ -428,10 +433,10 @@ def init_dash(dash_app):
             return None, True
 
         query = (
-            "SELECT DISTINCT \"Name\", LEVENSHTEIN(LOWER(REGEXP_REPLACE(\"Name\", '[^a-zA-Z0-9]', '', 'g')), '" + road_name_clean.replace(' ', '') + "') AS score\n"
+            "SELECT DISTINCT \"Name\", LEVENSHTEIN(LOWER(REGEXP_REPLACE(\"Name\", '[^a-zA-Z0-9\\|]', '', 'g')), '" + road_name_clean.replace(' ', '') + "') AS score\n"
             "FROM \"Roads\".roads_clip\n"
             "WHERE\n"
-            "  LOWER(REGEXP_REPLACE(\"Name\", '[^a-zA-Z0-9 ]', '', 'g')) LIKE '%%" + road_name_clean.replace(' ', '%%') + "%%'\n"
+            "  LOWER(REGEXP_REPLACE(\"Name\", '[^a-zA-Z0-9\\| ]', '', 'g')) LIKE '%%" + road_name_clean.replace(' ', '%%') + "%%'\n"
             "ORDER BY score ASC\n"
             "LIMIT 10"
         )
@@ -495,7 +500,7 @@ def init_dash(dash_app):
             "  ST_Union(\"geometry\") AS \"geometry\"\n"
             "FROM \"Roads\".roads\n"
             "WHERE\n"
-            "  LOWER(REGEXP_REPLACE(\"Name\", '[^a-zA-Z0-9 ]', '', 'g')) LIKE '%%" + road_name_clean.replace(' ', '%%') + "%%'\n"
+            "  LOWER(REGEXP_REPLACE(\"Name\", '[^a-zA-Z0-9\\| ]', '', 'g')) LIKE '%%" + road_name_clean.replace(' ', '%%') + "%%'\n"
             "GROUP BY\n"
             "  \"Name\",\n"
             "  \"Type\",\n"
