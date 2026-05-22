@@ -8,7 +8,8 @@ authors = [
     { name = "Bennett Meares", email = "data@bikewalkgreenville.org" }
 ]
 dependencies = [
-    "flet>=0.80.5"
+    "flet==0.80.5",
+    "flet-webview==0.80.5",
 ]
 
 [dependency-groups]
@@ -20,7 +21,7 @@ dev = [
 
 [tool.flet]
 org = "org.bikewalkgreenville"
-product = "bwg-app"
+product = "Bike Walk Greenville"
 company = "Bike Walk Greenville"
 copyright = "Copyright (C) 2026 by Bike Walk Greenville"
 

@@ -1,0 +1,49 @@
+project_name: census
+
+root_dir: ../root
+
+plugins_dir:
+- ../.installed_plugins
+- ../plugins
+
+sync:
+  schedule: "daily"
+
+pipes:
+
+- connector: "plugin:census"
+  metric: "population"
+  location: "greenville-city"
+  parameters:
+    schema: "Census"
+    target: "population_city"
+    census:
+      type: "cities"
+      state: "45"
+      state_abbr: "sc"
+      fips: "30850"
+      name: "Greenville city"
+
+- connector: "plugin:census"
+  metric: "population"
+  location: "greenville-county"
+  parameters:
+    schema: "Census"
+    target: "population_county"
+    census:
+      type: "counties"
+      state: "45"
+      fips: "045"
+      name: "Greenville County"
+
+config:
+  meerschaum:
+    instance: sql:bwg
+    connectors:
+      sql:
+        bwg: MRSM{meerschaum:connectors:sql:bwg}
+  plugins:
+    bwg:
+      data_path: '{MRSM_ROOT_DIR}/../data'
+
+environment: {}

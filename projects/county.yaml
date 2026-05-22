@@ -604,6 +604,19 @@ pipes:
       layer: "Street Centerline In"
 
 - connector: "plugin:greenville-county"
+  metric: "sidewalks"
+  parameters:
+    schema: "county"
+    target: "sidewalks"
+    greenville-county:
+      mapserver: "https://www.gcgis.org/arcgis3/rest/services/GreenvilleNJ/Transportation/MapServer"
+      layer: "Sidewalk"
+    dtypes:
+      geometry: "geometry[MULTILINESTRING, 6570]"
+    indices:
+      geometry: "geometry"
+
+- connector: "plugin:greenville-county"
   metric: "Utility"
   location: "UTL_TOWER"
   parameters:

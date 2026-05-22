@@ -9,21 +9,7 @@ plugins_dir:
 sync:
   schedule: "daily"
 
-pipes:
-
-- connector: "plugin:greenville-county"
-  metric: "sidewalks"
-  parameters:
-    schema: "Sidewalks"
-    target: "county_sidewalks"
-    greenville-county:
-      layer: "Sidewalk"
-    dtypes:
-      geometry: "geometry[LINESTRING, 6570]"
-    indices:
-      geometry: "geometry"
-
-    
+pipes: []
 
 config:
   meerschaum:

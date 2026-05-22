@@ -65,6 +65,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "flet" },
+    { name = "flet-webview" },
 ]
 
 [package.dev-dependencies]
@@ -75,7 +76,10 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "flet", specifier = ">=0.80.5" }]
+requires-dist = [
+    { name = "flet", specifier = "==0.80.5" },
+    { name = "flet-webview", specifier = "==0.80.5" },
+]
 
 [package.metadata.requires-dev]
 dev = [
@@ -325,6 +329,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/09/9e/fdfcbb2241774c329cd2d19036953cae4ff867a4c118558b51965f45cf97/flet_web-0.80.5.tar.gz", hash = "sha256:6e1ca0d2b533bf8a8478788bad0cf5c01ae3d64f2e3c6144800779009ac52dd0", size = 14494, upload-time = "2026-01-30T00:44:45.354Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ed/e2/ff96c6e05436a2f2d5287681a3a164db2466e62a61e05e4caa0739c6730b/flet_web-0.80.5-py3-none-any.whl", hash = "sha256:789dd9010e93885a947e9967484f890d33e10807826dd3db215ae8b16ff17716", size = 22045162, upload-time = "2026-01-30T00:44:46.798Z" },
+]
+
+[[package]]
+name = "flet-webview"
+version = "0.80.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "flet" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d0/6b/7ca5ab43755b7120f7252d41920e8167fd3a9422ef34d4e6de3026720d87/flet_webview-0.80.5.tar.gz", hash = "sha256:42dc9aa51c4bb674aa051ac0b95613e5a911cf931a98c6d45c0e51d710e244d3", size = 21287, upload-time = "2026-01-30T00:45:21.4Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b0/1f/823734b7dfac6651326df7a733c2e67063d55f022c399e6844a270283f51/flet_webview-0.80.5-py3-none-any.whl", hash = "sha256:71c2be4fc214b1d17955f465ef2229db5beab85e5e8519605c6ccf77f3252b33", size = 24199, upload-time = "2026-01-30T00:45:18.956Z" },
 ]
 
 [[package]]
