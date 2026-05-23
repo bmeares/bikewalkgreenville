@@ -524,12 +524,14 @@ pipes:
 
 config:
   meerschaum:
-    instance: sql:bwg
+    instance: "sql:bwg"
     connectors:
+      api:
+        bwg: "{api:bwg}"
       sql:
-        bwg: MRSM{meerschaum:connectors:sql:bwg}
+        bwg: "{sql:bwg}"
         boundaries:
-          flavor: geopackage
+          flavor: "geopackage"
           database: '{MRSM_ROOT_DIR}/../data/output/boundaries.gpkg'
   plugins:
     bwg:

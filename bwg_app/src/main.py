@@ -5,7 +5,7 @@ import flet_webview as fwv
 TOOLS = [
     {
         "id": "wotr",
-        "label": "Who Owns The Roads",
+        "label": "Who Owns The Roads?",
         "subtitle": "Find who maintains a road and how to report issues.",
         "icon": ft.Icons.SEARCH,
         "children": [
@@ -19,6 +19,7 @@ TOOLS = [
                 "id": "wotr-map",
                 "label": "Map",
                 "icon": ft.Icons.MAP_OUTLINED,
+                "external": True,
                 "url": (
                     "https://felt.com/embed/map/"
                     "Who-Owns-Our-Roads-uyICtyogTtuqrQs1Z19AtXC"
@@ -62,14 +63,26 @@ async def main(page: ft.Page):
     page.padding = 0
     page.bgcolor = ft.Colors.GREY_100
 
+    url_launcher = ft.UrlLauncher()
+    page.services.append(url_launcher)
+
     def open_tool(tool_id: str):
+        tool = ALL_TOOLS_BY_ID.get(tool_id, {})
+        if tool.get("external"):
+            return lambda e: page.run_task(
+                url_launcher.launch_url,
+                tool["url"],
+            )
         return lambda e: page.run_task(page.push_route, f"/webview/{tool_id}")
 
     def leaf_tile(item, indent: bool = False):
+        trailing_icon = (
+            ft.Icons.OPEN_IN_NEW if item.get("external") else ft.Icons.CHEVRON_RIGHT
+        )
         return ft.ListTile(
             leading=ft.Icon(item["icon"], size=28, color=BRAND_GREEN),
             title=ft.Text(item["label"], size=16, weight=ft.FontWeight.W_500),
-            trailing=ft.Icon(ft.Icons.CHEVRON_RIGHT, size=24),
+            trailing=ft.Icon(trailing_icon, size=24),
             content_padding=ft.Padding.only(
                 left=(32 if indent else 16), right=16,
             ),

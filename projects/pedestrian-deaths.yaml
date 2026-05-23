@@ -101,6 +101,8 @@ pipes:
     indices:
       first_harmful_event: first_harmful_event
       primary_contributing_factor: primary_contributing_factor
+    verify:
+      chunk_minutes: 5256000
     sql: |-
       SELECT
         ((TO_TIMESTAMP(date || ' ' || time, 'MM/DD/YY HH24MI')::TIMESTAMP) AT TIME ZONE 'America/New_York') AS "timestamp",
@@ -197,6 +199,8 @@ pipes:
       primary: crash_number
     dtypes:
       geometry: geometry[Point, 4326]
+    verify:
+      chunk_minutes: 5256000
     sql: |-
       SELECT c.*
       FROM {{ Pipe('sql:bwg', 'crashes', 'greenville', instance='sql:bwg') }} AS c
@@ -214,6 +218,8 @@ pipes:
       primary: crash_number
     dtypes:
       geometry: geometry[Point, 4326]
+    verify:
+      chunk_minutes: 5256000
     sql: |-
       SELECT c.*
       FROM {{ Pipe('sql:bwg', 'crashes', 'greenville', instance='sql:bwg') }} AS c
@@ -231,6 +237,8 @@ pipes:
       primary: crash_number
     dtypes:
       geometry: geometry[Point, 4326]
+    verify:
+      chunk_minutes: 5256000
     sql: |-
       SELECT *
       FROM {{ Pipe('sql:bwg', 'crashes', 'pedestrian', instance='sql:bwg') }}
@@ -254,6 +262,8 @@ pipes:
       geometry: "geometry[Point, 4326]"
     srt:
       distance: 1000
+    verify:
+      chunk_minutes: 5256000
     sql: |-
       WITH srt AS (
         SELECT ST_Collect("geometry") AS "geometry"
@@ -279,6 +289,8 @@ pipes:
       crash_number: crash_number
       unit_number: unit_number
     dtypes: geometry[Point, 4326]
+    verify:
+      chunk_minutes: 5256000
     sql: |-
       SELECT *
       FROM "SCDPS"."OCCUPANT" AS o
@@ -297,6 +309,8 @@ pipes:
       primary: crash_number
     dtype:
       geometry: geometry[Point, 4326]
+    verify:
+      chunk_minutes: 5256000
     sql: |-
       SELECT *
       FROM {{ Pipe('sql:bwg', 'crashes', 'pedestrian', instance='sql:bwg') }}
@@ -313,6 +327,8 @@ pipes:
       primary: crash_number
     dtype:
       geometry: geometry[point, 4326]
+    verify:
+      chunk_minutes: 5256000
     sql: |-
       SELECT *
       FROM {{ Pipe('sql:bwg', 'crashes', 'pedalcycle', instance='sql:bwg') }}
@@ -329,6 +345,8 @@ pipes:
       primary: crash_number
     dtypes:
       geometry: geometry[Point, 4326]
+    verify:
+      chunk_minutes: 5256000
     sql: |-
       SELECT *
       FROM {{ Pipe('sql:bwg', 'fatalities', 'pedestrian', instance='sql:bwg') }}
@@ -350,6 +368,8 @@ pipes:
       primary: crash_number
     dtype:
       geometry: geometry[Point, 4326]
+    verify:
+      chunk_minutes: 5256000
     sql: |-
       SELECT *
       FROM {{ Pipe('sql:bwg', 'crashes', 'pedestrian', instance='sql:bwg') }}
@@ -366,6 +386,8 @@ pipes:
       primary: crash_number
     dtype:
       geometry: geometry[Point, 4326]
+    verify:
+      chunk_minutes: 5256000
     sql: |-
       SELECT *
       FROM {{ Pipe('sql:bwg', 'crashes', 'pedalcycle', instance='sql:bwg') }}
@@ -382,6 +404,8 @@ pipes:
       primary: crash_number
     dtypes:
       geometry: geometry[Point, 4326]
+    verify:
+      chunk_minutes: 5256000
     sql: |-
       SELECT *
       FROM {{ Pipe('sql:bwg', 'injuries', 'pedestrian', instance='sql:bwg') }}
@@ -403,6 +427,8 @@ pipes:
       primary: crash_number
     dtype:
       geometry: geometry[Point, 4326]
+    verify:
+      chunk_minutes: 5256000
     sql: |-
       SELECT *
       FROM {{ Pipe('sql:bwg', 'crashes', 'pedestrian', instance='sql:bwg') }}
@@ -420,6 +446,8 @@ pipes:
       primary: crash_number
     dtype:
       geometry: geometry[Point, 4326]
+    verify:
+      chunk_minutes: 5256000
     sql: |-
       SELECT *
       FROM {{ Pipe('sql:bwg', 'crashes', 'pedalcycle', instance='sql:bwg') }}
@@ -437,6 +465,8 @@ pipes:
       primary: crash_number
     dtypes:
       geometry: geometry[Point, 4326]
+    verify:
+      chunk_minutes: 5256000
     sql: |-
       SELECT *
       FROM {{ Pipe('sql:bwg', 'noninjuries', 'pedestrian', instance='sql:bwg') }}

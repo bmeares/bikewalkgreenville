@@ -8,7 +8,7 @@ Add the "Who Owns the Roads" search application.
 import meerschaum as mrsm
 from meerschaum.plugins import web_page, dash_plugin
 
-__version__ = '0.4.3'
+__version__ = '0.5.0'
 
 required: list[str] = ['dash-leaflet']
 
@@ -268,6 +268,17 @@ def init_dash(dash_app):
             if (params.get('embed') === 'true') {
                 document.body.style.overflowX = 'hidden';
             }
+            if (params.get('search')) {
+                const tryClick = (attempt) => {
+                    const btn = document.getElementById('wotr-submit-button');
+                    if (btn) {
+                        btn.click();
+                    } else if (attempt < 20) {
+                        setTimeout(() => tryClick(attempt + 1), 100);
+                    }
+                };
+                setTimeout(() => tryClick(0), 100);
+            }
             return '';
         }
         """,
@@ -302,8 +313,9 @@ def init_dash(dash_app):
 
     @dash_app.callback(
         Output('wotr-lines-group', 'children'),
+        Output('wotr-map', 'viewport', allow_duplicate=True),
         Input({'type': 'wotr-card-name-button', 'ix': ALL}, 'n_clicks'),
-        prevent_initial_call=False,
+        prevent_initial_call=True,
     )
     def card_name_click(card_names_n_clicks):
         if not any(card_names_n_clicks):
@@ -318,7 +330,6 @@ def init_dash(dash_app):
         road_name = road_dict['Name']
         owner = road_dict.get('Owner', None)
         road_type = road_dict.get('Type', None)
-        road_name_clean = get_road_name_clean(road_name)
         query = (
             "SELECT\n"
             "  \"Name\",\n"
@@ -330,13 +341,13 @@ def init_dash(dash_app):
             "  ST_Union(\"geometry\") AS \"geometry\"\n"
             "FROM \"Roads\".roads\n"
             "WHERE\n"
-            "  LOWER(TRIM(REGEXP_REPLACE(REGEXP_REPLACE(\"Name\", '[^a-zA-Z0-9\\| ]', ' ', 'g'), '\\s+', ' ', 'g'))) = '" + road_name_clean + "'\n" + (
-                ("  AND \"Owner\" = '" + owner + "'\n")
-                if owner
+            "  \"Name\" = '" + road_name.replace("'", "''") + "'\n" + (
+                ("  AND \"Owner\" = '" + owner.replace("'", "''") + "'\n")
+                if isinstance(owner, str) and owner
                 else ""
             ) + (
-                ("  AND \"Type\" = '" + road_type + "'\n")
-                if road_type
+                ("  AND \"Type\" = '" + road_type.replace("'", "''") + "'\n")
+                if isinstance(road_type, str) and road_type
                 else ""
             ) + "GROUP BY\n"
             "  \"Name\",\n"
@@ -350,7 +361,13 @@ def init_dash(dash_app):
         )
         df = gpd.read_postgis(query, roads_pipe.instance_connector.engine, geom_col='geometry')
         road_types_geojson = get_road_types_geojson(df)
-        return list(road_types_geojson.values())
+        bounds = get_df_bounds(df)
+        viewport = (
+            {'bounds': bounds, 'transition': 'flyToBounds', 'options': {'duration': 0.5, 'easeLinearity': 0.5}}
+            if bounds is not None
+            else no_update
+        )
+        return list(road_types_geojson.values()), viewport
 
     def get_road_name_clean(input_value: str) -> str:
         """
@@ -368,6 +385,18 @@ def init_dash(dash_app):
             (ALIASES.get(part, part) if part not in skip_aliases else part)
             for part in name_parts
         ])
+
+    def get_df_bounds(df):
+        """Return leaflet bounds [[s, w], [n, e]] in WGS84, or None if empty."""
+        if df is None or df.empty or 'geometry' not in df.columns:
+            return None
+        try:
+            minx, miny, maxx, maxy = df.to_crs(4326).total_bounds
+        except Exception:
+            return None
+        if any(v != v for v in (minx, miny, maxx, maxy)):
+            return None
+        return [[miny, minx], [maxy, maxx]]
 
     def get_road_types_geojson(df, layer_type: str = 'wotr-lines'):
         """
@@ -387,7 +416,6 @@ def init_dash(dash_app):
             road_type: dl.GeoJSON(
                 data=geojson_data,
                 id={'type': layer_type, 'ix': road_type},
-                zoomToBounds=True,
                 interactive=True,
                 hoverStyle={'color': TYPES_COLORS[road_type]['hex'], 'weight': 8},
                 style={'color': TYPES_COLORS[road_type]['hex'], 'weight': 4},
@@ -450,9 +478,10 @@ def init_dash(dash_app):
 
     @dash_app.callback(
         Output('wotr-results-table', 'children'),
-        Output('wotr-lines-group', 'children'),
+        Output('wotr-lines-group', 'children', allow_duplicate=True),
         Output('wotr-map-div', 'style'),
         Output('wotr-search-suggestions', 'children', allow_duplicate=True),
+        Output('wotr-map', 'viewport', allow_duplicate=True),
         Input('wotr-submit-button', 'n_clicks'),
         Input('wotr-road-name-input', 'n_submit'),
         State('wotr-road-name-input', 'value'),
@@ -531,7 +560,19 @@ def init_dash(dash_app):
             build_cards_grid(cards, 3),
         ]
 
-        return table_children, list(road_types_geojson.values()), {'visibility': 'visible'}, None
+        bounds = get_df_bounds(df)
+        viewport = (
+            {'bounds': bounds, 'transition': 'flyToBounds', 'options': {'duration': 0.5, 'easeLinearity': 0.5}}
+            if bounds is not None
+            else no_update
+        )
+        return (
+            table_children,
+            list(road_types_geojson.values()),
+            {'visibility': 'visible'},
+            None,
+            viewport,
+        )
 
     @dash_app.callback(
         Output({'type': 'wotr-tooltip', 'ix': MATCH}, 'children', allow_duplicate=True),
@@ -546,8 +587,9 @@ def init_dash(dash_app):
 
     @dash_app.callback(
         Output('wotr-click-marker-container', 'children'),
+        Output('wotr-map', 'viewport', allow_duplicate=True),
         Input({'type': 'wotr-lines', 'ix': ALL}, 'clickData'),
-        State('wotr-map', 'clickData'), 
+        State('wotr-map', 'clickData'),
         prevent_initial_call=True,
     )
     def drop_marker_on_click(lines_click_data, map_click_data):
@@ -564,8 +606,9 @@ def init_dash(dash_app):
 
         props = line_click_data['properties']
         latlng = map_click_data.get('latlng')
-       
-        return dl.Popup(
+        bounds = get_feature_bounds(line_click_data)
+
+        popup = dl.Popup(
             build_tooltip_contents(props),
             keepInView=False,
             position=latlng,
@@ -573,6 +616,34 @@ def init_dash(dash_app):
             autoClose=False,
             closeOnClick=False,
         )
+        viewport = (
+            {'bounds': bounds, 'transition': 'flyToBounds', 'options': {'duration': 0.5, 'easeLinearity': 0.5}}
+            if bounds is not None
+            else no_update
+        )
+        return popup, viewport
+
+    def get_feature_bounds(feature):
+        """Return leaflet bounds [[s, w], [n, e]] for a GeoJSON feature (WGS84)."""
+        geom = (feature or {}).get('geometry') or {}
+        coords = geom.get('coordinates')
+        if not coords:
+            return None
+        xs, ys = [], []
+
+        def walk(c):
+            if isinstance(c, (list, tuple)):
+                if c and isinstance(c[0], (int, float)):
+                    xs.append(c[0])
+                    ys.append(c[1])
+                else:
+                    for sub in c:
+                        walk(sub)
+
+        walk(coords)
+        if not xs:
+            return None
+        return [[min(ys), min(xs)], [max(ys), max(xs)]]
 
     def build_tooltip_contents(props, include_name: bool = True):
         content = []
@@ -671,7 +742,7 @@ def init_dash(dash_app):
                 )
             ],
             zoom=10,
-            style={'height': '30vh'},
+            style={'height': '45vh'},
             center=[34.843739, -82.393905],
             id='wotr-map',
         )

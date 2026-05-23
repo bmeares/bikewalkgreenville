@@ -24,6 +24,7 @@ org = "org.bikewalkgreenville"
 product = "Bike Walk Greenville"
 company = "Bike Walk Greenville"
 copyright = "Copyright (C) 2026 by Bike Walk Greenville"
+permissions = ["location"]
 
 [tool.flet.app]
 path = "src"
