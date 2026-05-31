@@ -81,9 +81,47 @@ uv run flet build apk
 # → build/apk/app-release.apk
 ```
 
+### Bump the version EVERY release (or in-place updates silently no-op)
+
+Android compares `versionCode` to decide whether an installed APK gets replaced. Flet derives:
+- `versionName` ← `[project] version` in `pyproject.toml`
+- `versionCode` ← `--build-number` (default `1`)
+
+If neither changes between builds, sideloading/`adb install -r` over an existing install is a **no-op** — Android keeps the old `libapp.so`, so new code/deps never land and you're forced to uninstall + reinstall (this is exactly what bit the `flet_map` fix). Always increase BOTH each release:
+
+```bash
+cd bwg_app
+# bump [project] version in pyproject.toml first (e.g. 0.1.1 → 0.1.2), then:
+uv run flet build apk --build-number 3 --build-version 0.1.2
+```
+
+`--build-number` must strictly increase every release; it is the integer Android actually compares.
+
+### Defensive extension imports (graceful degradation)
+
+`src/main.py` imports `flet_webview` / `flet_map` / `flet_geolocator` via a `_try_import()` helper (mirrors the degrade-don't-crash half of `mrsm.attempt_import`) into `HAS_WEBVIEW` / `HAS_MAP` / `HAS_GEO` flags. A missing native extension now disables just that one tool (shows an "unavailable" dialog) instead of crashing the whole app to a traceback on line 3. This does **not** install or fix the extension — deps must still be in `pyproject.toml` + a clean rebuild (see below); it only prevents a hard crash. When adding a new extension, import it through `_try_import()` and gate its entry point on the flag.
+
+### Flet extension dependencies (avoid the dependency traps)
+
+Native controls beyond core Flet ship as **separate extension packages** that bundle both a Python module and a Flutter plugin: `flet-webview` (webview), `flet-map` (native `flutter_map`), `flet-geolocator` (GPS). Rules learned the hard way:
+
+- **Pin every extension to the exact same version as `flet`.** They release in lockstep; mismatched versions fail to resolve. Add with `uv add flet-map==<flet-version>` (e.g. `==0.80.5`).
+- **Only `import` an extension that is in `[project] dependencies`.** Importing one that isn't bundled (it lives only in your dev venv) tracebacks on device as `No module named flet_map` / `flet_webview` / etc. Adding the import and the dep must happen together.
+- **After adding/changing any extension dep, do a CLEAN rebuild.** Stale `build/` artifacts cause `version solving failed ... <pkg> from path which doesn't exist (build/flutter-packages/<pkg>)`:
+
+  ```bash
+  cd bwg_app
+  rm -rf build          # full clean — regenerates build/flutter-packages from scratch
+  uv run flet build apk
+  ```
+
+  Do **not** rely on `flet build apk --clear-cache` for this — it can empty `build/flutter-packages/` without repopulating it, deadlocking the next resolve. `rm -rf build` is the reliable fix.
+- **`No module named <ext>` on device** almost always means the APK was built before the dep was added (stale apk) → `rm -rf build` and rebuild.
+- A build that prints `Building .apk for Android...` has already passed Python packaging/resolution — extension deps are fine at that point; any later failure is Flutter/Gradle, not deps.
+
 ### App structure
 
-- `src/main.py` — Flet entry. Currently a launcher: `ft.UrlLauncher.launch_url(..., mode=IN_APP_WEB_VIEW)` opens dashboards (e.g. `https://bwg.mrsm.io/dash/who-owns-the-roads`) inside a system webview. Do **not** `import flet_webview` unless added to `pyproject.toml` deps — it is not bundled and will traceback on device.
+- `src/main.py` — Flet entry. Route-based: a launcher home view, `/webview/<id>` (system webview over `bwg.mrsm.io/dash/...` dashboards via `flet_webview`), and `/map/<id>` (native `flet_map` — e.g. the Bike Parking map, with `flet_geolocator` for current location and a photo+feedback report that POSTs to `plugins/bike-parking.py`). All three extensions are in `pyproject.toml` deps; see "Flet extension dependencies" above before adding more.
 - `src/assets/` — `icon.png`, `splash_android.png` (Flet picks these up automatically).
 - `pyproject.toml` `[tool.flet]` table — org/product/copyright. Bumping the version requires editing here.
 

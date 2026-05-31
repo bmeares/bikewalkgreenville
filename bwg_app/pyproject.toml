@@ -1,6 +1,6 @@
 [project]
 name = "bwg-app"
-version = "0.1.0"
+version = "0.1.1"
 description = "All of Bike Walk Greenville's resources in one place!"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -9,6 +9,8 @@ authors = [
 ]
 dependencies = [
     "flet==0.80.5",
+    "flet-geolocator==0.80.5",
+    "flet-map==0.80.5",
     "flet-webview==0.80.5",
 ]
 
