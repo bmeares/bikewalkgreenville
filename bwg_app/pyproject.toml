@@ -1,9 +1,10 @@
 [project]
 name = "bwg-app"
-version = "0.1.1"
+version = "0.2.2"
 description = "All of Bike Walk Greenville's resources in one place!"
 readme = "README.md"
-requires-python = ">=3.10"
+# Match the on-device runtime: serious_python (flet 0.80.x) embeds CPython 3.12.
+requires-python = ">=3.12,<3.13"
 authors = [
     { name = "Bennett Meares", email = "data@bikewalkgreenville.org" }
 ]
@@ -12,6 +13,7 @@ dependencies = [
     "flet-geolocator==0.80.5",
     "flet-map==0.80.5",
     "flet-webview==0.80.5",
+    "httpx>=0.28.1",
 ]
 
 [dependency-groups]
@@ -30,3 +32,4 @@ permissions = ["location"]
 
 [tool.flet.app]
 path = "src"
+exclude = ["__pycache__"]

@@ -81,6 +81,8 @@ uv run flet build apk
 # → build/apk/app-release.apk
 ```
 
+**Always build through `uv run`** — never bare `flet build` (system Python). The project is pinned to 3.12 (`.python-version` + `requires-python = ">=3.12,<3.13"`) to match the CPython 3.12 that serious_python embeds on-device. Running anything in `src/` with another Python leaves a mismatched `src/__pycache__/` that used to get packaged into the APK; `[tool.flet.app] exclude = ["__pycache__"]` in `pyproject.toml` now keeps it out of `app.zip` regardless.
+
 ### Bump the version EVERY release (or in-place updates silently no-op)
 
 Android compares `versionCode` to decide whether an installed APK gets replaced. Flet derives:
