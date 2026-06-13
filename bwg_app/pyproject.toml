@@ -1,6 +1,6 @@
 [project]
 name = "bwg-app"
-version = "0.2.2"
+version = "0.3.0"
 description = "All of Bike Walk Greenville's resources in one place!"
 readme = "README.md"
 # Match the on-device runtime: serious_python (flet 0.80.x) embeds CPython 3.12.

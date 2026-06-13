@@ -19,26 +19,18 @@ Submissions land in the `app/feedback/BikeParking` pipe (schema
 import meerschaum as mrsm
 from meerschaum.plugins import api_plugin
 
-__version__ = '0.1.0'
+__version__ = '0.2.0'
 
-# Curated/imported parking points. Sync rows into this pipe from any source
-# (OSM `amenity=bicycle_parking`, a city export, manual entry, etc.).
+#: Greenville County-ish bbox (south, west, north, east) for the OSM fetch.
+OSM_BBOX = (34.58, -82.65, 35.10, -82.10)
+OVERPASS_URL = 'https://overpass-api.de/api/interpreter'
+
+# Parking points, synced via this plugin's `fetch()` (OSM Overpass).
+# Registered + synced through projects/bike-parking.yaml:
+#   mrsm compose sync pipes --file projects/bike-parking.yaml
 LOCATIONS_PIPE: mrsm.Pipe = mrsm.Pipe(
-    'app', 'locations', 'BikeParking',
+    'plugin:bike-parking', 'locations', 'greenville',
     instance='sql:bwg',
-    parameters={
-        'schema': 'BikeParking',
-        'target': 'parking_locations',
-        'columns': {'id': 'id'},
-        'dtypes': {
-            'id': 'string',
-            'name': 'string',
-            'lat': 'float',
-            'lon': 'float',
-            'capacity': 'int',
-            'address': 'string',
-        },
-    },
 )
 
 # User-submitted photos + feedback.
@@ -66,6 +58,61 @@ FEEDBACK_PIPE: mrsm.Pipe = mrsm.Pipe(
         },
     },
 )
+
+
+def fetch(pipe: mrsm.Pipe, debug: bool = False, **kwargs):
+    """Fetch OSM `amenity=bicycle_parking` points for greater Greenville
+    (Overpass API). Returns docs for the locations pipe."""
+    requests = mrsm.attempt_import('requests')
+
+    south, west, north, east = OSM_BBOX
+    query = f"""
+    [out:json][timeout:60];
+    nwr["amenity"="bicycle_parking"]({south},{west},{north},{east});
+    out center tags;
+    """
+    resp = requests.post(
+        OVERPASS_URL,
+        data={'data': query},
+        headers={'User-Agent': f'bwg-bike-parking/{__version__} (data@bikewalkgreenville.org)'},
+        timeout=90,
+    )
+    resp.raise_for_status()
+    elements = resp.json().get('elements', [])
+
+    docs = []
+    for el in elements:
+        lat = el.get('lat') or (el.get('center') or {}).get('lat')
+        lon = el.get('lon') or (el.get('center') or {}).get('lon')
+        if lat is None or lon is None:
+            continue
+        tags = el.get('tags', {})
+        try:
+            capacity = int(tags['capacity'])
+        except (KeyError, ValueError, TypeError):
+            capacity = None
+        name = tags.get('name') or tags.get('description') or (
+            f"Bike rack ({capacity} spaces)" if capacity else "Bike rack"
+        )
+        address = ', '.join(
+            part for part in (
+                ' '.join(
+                    p for p in (tags.get('addr:housenumber'), tags.get('addr:street'))
+                    if p
+                ),
+                tags.get('addr:city'),
+            ) if part
+        )
+        docs.append({
+            'id': f"osm-{el.get('type')}-{el.get('id')}",
+            'name': name,
+            'lat': float(lat),
+            'lon': float(lon),
+            'capacity': capacity,
+            'address': address,
+        })
+
+    return docs
 
 
 def _photos_dir():

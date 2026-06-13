@@ -43,7 +43,7 @@ Pipes are addressed by `(connector, metric, location)`. They reference each othe
 mrsm compose up --dry
 
 # Run a specific compose file (per-project)
-mrsm compose -f projects/who-owns-the-roads.yaml up --dry
+mrsm compose up --dry --file projects/who-owns-the-roads.yaml
 
 # Sync (ingest + transform) by tag or pipe key
 mrsm compose sync pipes -t streetlights

@@ -23,7 +23,40 @@ pipes:
     indices:
       geometry: "geometry"
 
-    
+- connector: "sql:bwg"
+  metric: "streets"
+  location: "with-sidewalks"
+  parameters:
+    schema: "Sidewalks"
+    target: "streets_with_sidewalks"
+    columns:
+      primary: "id"
+      street_name: "ST_LABEL"
+    dtypes:
+      id: "int"
+      geometry: "geometry[MULTILINESTRING, 3361]"
+    indices:
+      geometry: "geometry"
+    sql: |-
+      WITH greenville AS (
+        SELECT ST_Transform("geometry", 3361) AS "geometry"
+        FROM "Boundaries"."boundaries_greenville"
+      )
+      SELECT
+        streets."id",
+        streets."ST_LABEL",
+        ST_CollectionExtract(
+          ST_Intersection(ST_Multi(streets."geometry"), greenville."geometry"),
+          2
+        )::geometry(MULTILINESTRING, 3361) AS "geometry"
+      FROM city."Streets" AS streets
+      JOIN greenville
+        ON ST_Intersects(streets."geometry", greenville."geometry")
+      WHERE (
+        SELECT COALESCE(SUM(ST_Length(ST_Intersection(sidewalks."geometry", ST_Buffer(streets."geometry", 50)))), 0)
+        FROM city."Sidewalks" AS sidewalks
+        WHERE ST_DWithin(streets."geometry", sidewalks."geometry", 50)
+      ) >= 0.25 * ST_Length(streets."geometry")
 
 config:
   meerschaum:

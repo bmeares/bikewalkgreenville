@@ -1,0 +1,37 @@
+project_name: bike-parking
+
+root_dir: ../root
+
+plugins_dir:
+- ../.installed_plugins
+- ../plugins
+
+pipes:
+
+- connector: "plugin:bike-parking"
+  metric: "locations"
+  location: "greenville"
+  parameters:
+    schema: "BikeParking"
+    target: "parking_locations"
+    columns:
+      primary: "id"
+    dtypes:
+      id: "string"
+      name: "string"
+      lat: "float"
+      lon: "float"
+      capacity: "int"
+      address: "string"
+
+config:
+  meerschaum:
+    instance: sql:bwg
+    connectors:
+      sql:
+        bwg: "{sql:bwg}"
+
+  plugins:
+    bwg:
+      data_path: '{MRSM_ROOT_DIR}/../data'
+

@@ -36,6 +36,8 @@ fg, HAS_GEO = _try_import("flet_geolocator")
 _dbg(f"extensions: webview={HAS_WEBVIEW} map={HAS_MAP} geo={HAS_GEO}")
 
 
+BRAND_GREEN = "#6F9920"
+
 TOOLS = [
     {
         "id": "wotr",
@@ -65,28 +67,40 @@ TOOLS = [
         ],
     },
     {
-        "id": "bike-parking",
-        "label": "Bike Parking Map",
-        "subtitle": "Find bike racks and parking near you.",
-        "icon": ft.Icons.PEDAL_BIKE,
-        "map": True,
-        # Served by plugins/bike-parking.py (@api_plugin) on the Meerschaum API.
-        "data_url": "https://bwg.mrsm.io/bike-parking/data.geojson",
-        "submit_url": "https://bwg.mrsm.io/bike-parking/submit",
-        "center": (34.8526, -82.3940),  # downtown Greenville
-        "zoom": 13.0,
-    },
-    {
         "id": "mobility-map",
         "label": "Greenville Mobility Map",
-        "subtitle": "Bus routes, bike lanes, sidewalks, and bike stress.",
+        "subtitle": "Bike parking, bus routes, bike lanes, sidewalks, and bike stress.",
         "icon": ft.Icons.MAP,
         "map": True,
-        "center": (34.8526, -82.3940),
+        "center": (34.8526, -82.3940),  # downtown Greenville
         "zoom": 13.0,
-        # Served by plugins/map-layers.py (@api_plugin) on the Meerschaum API.
-        "submit_url": "https://bwg.mrsm.io/map-layers/feedback",
+        # Layers served by plugins/map-layers.py and plugins/bike-parking.py
+        # (@api_plugin) on the Meerschaum API.
         "layers": [
+            {
+                "id": "bike-stress",
+                "label": "Bike Stress (PCC)",
+                "kind": "line",
+                "data_url": "https://bwg.mrsm.io/map-layers/bike-stress.geojson",
+                "color": "#fee08b",
+                "color_by": {
+                    "property": "stress_level",
+                    "map": {
+                        "H": "#d73027",
+                        "MH": "#fc8d59",
+                        "M": "#fee08b",
+                        "ML": "#91cf60",
+                        "L": "#1a9850",
+                    },
+                    "legend": [
+                        ("L", "Low"),
+                        ("ML", "Med-low"),
+                        ("M", "Medium"),
+                        ("MH", "Med-high"),
+                        ("H", "High"),
+                    ],
+                },
+            },
             {
                 "id": "bike-lanes",
                 "label": "Bike Lanes",
@@ -132,6 +146,18 @@ TOOLS = [
                 "data_url": "https://bwg.mrsm.io/map-layers/sidewalks-county.geojson",
                 "color": "#0288D1",
             },
+            {
+                "id": "bike-parking",
+                "label": "Bike Parking",
+                "kind": "point",
+                # Served by plugins/bike-parking.py; reports go to its own
+                # submit endpoint so they land in BikeParking.parking_feedback.
+                "data_url": "https://bwg.mrsm.io/bike-parking/data.geojson",
+                "submit_url": "https://bwg.mrsm.io/bike-parking/submit",
+                "color": BRAND_GREEN,
+                "icon": ft.Icons.PEDAL_BIKE,
+                "default_on": True,
+            },
         ],
     },
     {
@@ -157,59 +183,7 @@ for _t in TOOLS:
     for _c in _t.get("children", []):
         ALL_TOOLS_BY_ID[_c["id"]] = _c
 
-BRAND_GREEN = "#6F9920"
-
 OSM_TILES = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-
-# Shown until/if the real endpoint loads. Lets the screen render offline + in dev.
-SAMPLE_BIKE_PARKING = [
-    {"name": "Falls Park Main Entrance", "lat": 34.8443, "lon": -82.4012,
-     "capacity": 8, "address": "Main St & Camperdown Way"},
-    {"name": "NOMA Square", "lat": 34.8536, "lon": -82.3990,
-     "capacity": 6, "address": "N Main St"},
-    {"name": "Swamp Rabbit Trail – Cleveland Park", "lat": 34.8389, "lon": -82.3795,
-     "capacity": 12, "address": "Woodland Way"},
-    {"name": "Greenville County Library", "lat": 34.8505, "lon": -82.3995,
-     "capacity": 10, "address": "25 Heritage Green Pl"},
-]
-
-
-def _parse_geojson(payload) -> list:
-    """Tolerant: accept a FeatureCollection or a bare list of point dicts."""
-    points = []
-    features = payload.get("features", []) if isinstance(payload, dict) else payload
-    for f in features or []:
-        if "geometry" in f:  # GeoJSON Feature
-            coords = (f.get("geometry") or {}).get("coordinates") or []
-            if len(coords) < 2:
-                continue
-            lon, lat = coords[0], coords[1]  # GeoJSON is [lon, lat]
-            props = f.get("properties", {}) or {}
-        else:  # already flat
-            lat, lon, props = f.get("lat"), f.get("lon"), f
-        if lat is None or lon is None:
-            continue
-        points.append({
-            "name": props.get("name", "Bike Parking"),
-            "lat": float(lat),
-            "lon": float(lon),
-            "capacity": props.get("capacity"),
-            "address": props.get("address", ""),
-        })
-    return points
-
-
-async def load_bike_parking(url: str) -> list:
-    """Fetch parking points; fall back to samples on any failure."""
-    import httpx
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            points = _parse_geojson(resp.json())
-            return points or SAMPLE_BIKE_PARKING
-    except Exception:
-        return SAMPLE_BIKE_PARKING
 
 
 def _parse_features(payload) -> list:
@@ -252,21 +226,32 @@ DEV_API_BASE = "http://localhost:8000"
 MAP_FEEDBACK_URL = PROD_API_BASE + "/map-layers/feedback"
 
 
-async def load_geojson_features(url: str) -> list:
-    """Fetch + parse a layer's GeoJSON; empty list on any failure."""
-    import httpx
+def _dev_fallback_urls(url: str) -> list:
     urls = [url]
     if url.startswith(PROD_API_BASE):
         urls.append(DEV_API_BASE + url[len(PROD_API_BASE):])
-    for u in urls:
+    return urls
+
+
+async def load_geojson_features(url: str) -> list | None:
+    """Fetch + parse a layer's GeoJSON. Returns None on failure (distinct from
+    [] for a genuinely empty layer). JSON decode + feature explosion run off the
+    event loop -- multi-MB layers must not block UI handlers."""
+    import asyncio
+    import json
+    import httpx
+    for u in _dev_fallback_urls(url):
         try:
             async with httpx.AsyncClient(timeout=60) as client:
                 resp = await client.get(u)
                 resp.raise_for_status()
-                return _parse_features(resp.json())
+                content = resp.content
+            return await asyncio.to_thread(
+                lambda: _parse_features(json.loads(content))
+            )
         except Exception:
             continue
-    return []
+    return None
 
 
 STRESS_LABELS = {
@@ -275,6 +260,26 @@ STRESS_LABELS = {
     "M": "Medium",
     "ML": "Medium-low",
     "L": "Low",
+}
+
+# Friendly names for the dominant category of a computed route.
+ROUTE_CATEGORY_LABELS = {
+    "srt": "the Swamp Rabbit Trail",
+    "bike-lane": "bike lanes",
+    "L": "low-stress streets",
+    "ML": "low-stress streets",
+    "M": "medium-stress streets",
+    "MH": "busier streets",
+    "H": "busy streets",
+    "connector": "connections",
+}
+
+SEARCH_KIND_ICONS = {
+    "bike-parking": "pedal_bike",
+    "bus-stops": "directions_bus",
+    "address": "home_outlined",
+    "street": "signpost_outlined",
+    "osm": "public",
 }
 
 # Zoom at/above which line layers switch from the dissolved overview to
@@ -315,7 +320,15 @@ def describe_feature(layer_id: str, cfg: dict, props: dict) -> tuple:
     if layer_id == "bus-routes":
         return "Bus Route", "Greenlink bus route"
     if layer_id == "bus-stops":
-        return "Bus Stop", "Greenlink bus stop"
+        name = (props.get("name") or "").strip().title()
+        return name or "Bus Stop", "Greenlink bus stop"
+    if layer_id == "bike-parking":
+        cap = props.get("capacity")
+        parts = [p for p in (
+            props.get("address"),
+            f"{cap} spaces" if cap else None,
+        ) if p]
+        return props.get("name") or "Bike Parking", " · ".join(parts) or "Bike parking"
     return cfg.get("label", "Map feature"), ""
 
 
@@ -508,11 +521,20 @@ async def _app(page: ft.Page):
 
     def build_map_view(tool: dict) -> ft.View:
         center = tool.get("center", (34.8526, -82.3940))
-        marker_layer = fm.MarkerLayer(markers=[])
         user_layer = fm.MarkerLayer(markers=[])
         pin_layer = fm.MarkerLayer(markers=[])  # user-dropped report pin
         selected = {"pt": None}  # currently tapped feature/spot
         user_pos = {"loc": None}  # last GPS fix (lat, lon)
+
+        def _update(*controls):
+            """Subtree updates only -- page.update() diffs the whole tree,
+            which freezes the UI once layers hold tens of thousands of
+            controls. Detached controls (view popped mid-task) are ignored."""
+            for c in controls:
+                try:
+                    c.update()
+                except Exception:
+                    pass
 
         # --- Toggleable overlay layers (Mobility Map) ------------------------
         # Each entry in tool["layers"] becomes a PolylineLayer (lines) or
@@ -543,6 +565,10 @@ async def _app(page: ft.Page):
         highlight_line_layer = fm.PolylineLayer(polylines=[])
         highlight_circle_layer = fm.CircleLayer(circles=[])
 
+        # Computed low-stress route (white casing + blue line).
+        route_layer = fm.PolylineLayer(polylines=[])
+        route_state = {"on": False}
+
         camera_state = {
             "center": (center[0], center[1]),
             "zoom": tool.get("zoom", 13.0),
@@ -559,9 +585,9 @@ async def _app(page: ft.Page):
                 ),
                 highlight_line_layer,
                 *overlay_line_layers,
+                route_layer,
                 *overlay_point_layers,
                 highlight_circle_layer,
-                marker_layer,
                 pin_layer,
                 user_layer,
             ],
@@ -606,46 +632,72 @@ async def _app(page: ft.Page):
                 ),
             )
 
+        # Backstop: cap total coords per layer so a pathological payload can't
+        # drown the renderer. Longest features win (most visible at overview).
+        MAX_LAYER_COORDS = 30000
+
         def _build_polylines(cfg: dict, feats: list) -> list:
-            return [
-                fm.PolylineMarker(
-                    coordinates=[
-                        fm.MapLatitudeLongitude(c[1], c[0])
-                        for c in f["coords"]
-                    ],
-                    color=_layer_color(cfg, f["props"]),
-                    stroke_width=3,
+            lines = sorted(
+                (
+                    f for f in feats
+                    if f["type"] == "line" and len(f["coords"]) >= 2
+                ),
+                key=lambda f: len(f["coords"]),
+                reverse=True,
+            )
+            polylines = []
+            budget = MAX_LAYER_COORDS
+            for f in lines:
+                n = len(f["coords"])
+                if n > budget:
+                    continue
+                budget -= n
+                polylines.append(
+                    fm.PolylineMarker(
+                        coordinates=[
+                            fm.MapLatitudeLongitude(c[1], c[0])
+                            for c in f["coords"]
+                        ],
+                        color=_layer_color(cfg, f["props"]),
+                        stroke_width=3,
+                    )
                 )
-                for f in feats
-                if f["type"] == "line" and len(f["coords"]) >= 2
-            ]
+            return polylines
 
         async def load_layer(layer_id: str):
+            import asyncio
             st = layer_states[layer_id]
             if st["loaded"]:
                 return
             layers_loading.visible = True
-            page.update()
+            _update(layers_loading)
             try:
                 feats = await load_geojson_features(st["cfg"]["data_url"])
                 cfg = st["cfg"]
+                # Building tens of thousands of coordinate/marker objects is
+                # CPU-bound: keep it off the event loop.
                 if cfg["kind"] == "line":
-                    st["overview"] = _build_polylines(cfg, feats)
+                    st["overview"] = await asyncio.to_thread(
+                        _build_polylines, cfg, feats or [],
+                    )
                     st["layer"].polylines = st["overview"]
                     st["feats"] = []
                     st["mode"] = "overview"
                 else:
-                    st["layer"].markers = [
-                        make_layer_marker(cfg, f)
-                        for f in feats
-                        if f["type"] == "point"
-                    ]
-                st["loaded"] = True
-                if not feats:
+                    st["layer"].markers = await asyncio.to_thread(
+                        lambda: [
+                            make_layer_marker(cfg, f)
+                            for f in (feats or [])
+                            if f["type"] == "point"
+                        ]
+                    )
+                st["loaded"] = feats is not None
+                _update(st["layer"])
+                if feats is None:
                     _toast(f"Couldn't load {cfg['label']}.")
             finally:
                 layers_loading.visible = False
-                page.update()
+                _update(layers_loading)
             if st["cfg"]["kind"] == "line":
                 await refresh_viewport()
 
@@ -653,7 +705,7 @@ async def _app(page: ft.Page):
             def handler(e):
                 st = layer_states[layer_id]
                 st["layer"].visible = e.control.value
-                page.update()
+                _update(st["layer"])
                 if e.control.value and not st["loaded"]:
                     page.run_task(load_layer, layer_id)
             return handler
@@ -748,17 +800,15 @@ async def _app(page: ft.Page):
             return f"{lon - half_lon},{lat - half_lat},{lon + half_lon},{lat + half_lat}"
 
         async def refresh_viewport():
+            import asyncio
             zoom = camera_state["zoom"]
             if zoom < DETAIL_ZOOM:
-                changed = False
                 for st in layer_states.values():
                     if st["cfg"]["kind"] == "line" and st.get("mode") == "detail":
                         st["layer"].polylines = st.get("overview") or []
                         st["feats"] = []
                         st["mode"] = "overview"
-                        changed = True
-                if changed:
-                    page.update()
+                        _update(st["layer"])
                 return
             bbox = _viewport_bbox()
             for layer_id, st in layer_states.items():
@@ -771,8 +821,10 @@ async def _app(page: ft.Page):
                     continue
                 st["feats"] = feats
                 st["mode"] = "detail"
-                st["layer"].polylines = _build_polylines(cfg, feats)
-            page.update()
+                st["layer"].polylines = await asyncio.to_thread(
+                    _build_polylines, cfg, feats,
+                )
+                _update(st["layer"])
 
         def on_position_change(e):
             try:
@@ -847,7 +899,7 @@ async def _app(page: ft.Page):
             detail_title.value = title
             detail_body.value = body
             detail_panel.visible = True
-            page.update()
+            _update(highlight_line_layer, highlight_circle_layer, detail_panel)
 
         def on_map_tap(e):
             import math
@@ -878,23 +930,13 @@ async def _app(page: ft.Page):
             else:
                 clear_highlight()
                 detail_panel.visible = False
-                page.update()
+                _update(highlight_line_layer, highlight_circle_layer, detail_panel)
 
-        # --- Drop-a-pin reporting: long-press anywhere, or the "Report here"
-        # button (uses the GPS fix, falling back to the map center). ----------
-        def drop_pin(lat: float, lon: float, open_dialog: bool = False):
-            pt = {
-                "name": "Dropped Pin",
-                "body": f"{lat:.5f}, {lon:.5f}",
-                "lat": lat,
-                "lon": lon,
-                "layer": "dropped-pin",
-                "props": {"coords_label": f"{lat:.5f}, {lon:.5f}"},
-                "icon": ft.Icons.PLACE,
-            }
+        # --- Point selection: dropped pins and search results share this. ----
+        def show_point(pt: dict):
             pin_layer.markers = [
                 fm.Marker(
-                    coordinates=fm.MapLatitudeLongitude(lat, lon),
+                    coordinates=fm.MapLatitudeLongitude(pt["lat"], pt["lon"]),
                     width=44,
                     height=44,
                     content=ft.Icon(
@@ -903,12 +945,26 @@ async def _app(page: ft.Page):
                 )
             ]
             selected["pt"] = pt
-            detail_icon.icon = ft.Icons.PLACE
+            detail_icon.icon = pt.get("icon", ft.Icons.PLACE)
             detail_title.value = pt["name"]
-            detail_body.value = pt["body"]
+            detail_body.value = pt.get("body", "")
             clear_highlight()
             detail_panel.visible = True
-            page.update()
+            _update(
+                pin_layer, highlight_line_layer,
+                highlight_circle_layer, detail_panel,
+            )
+
+        def drop_pin(lat: float, lon: float, open_dialog: bool = False):
+            show_point({
+                "name": "Dropped Pin",
+                "body": f"{lat:.5f}, {lon:.5f}",
+                "lat": lat,
+                "lon": lon,
+                "layer": "dropped-pin",
+                "props": {"coords_label": f"{lat:.5f}, {lon:.5f}"},
+                "icon": ft.Icons.PLACE,
+            })
             if open_dialog:
                 open_report_dialog()
 
@@ -937,6 +993,244 @@ async def _app(page: ft.Page):
                     pass
             drop_pin(lat, lon, open_dialog=True)
 
+        # --- Search bar: local POIs/addresses/streets via /map-layers/search
+        # (Nominatim fallback server-side). -----------------------------------
+        search_token = {"n": 0}
+        search_results_col = ft.Column([], spacing=0, tight=True)
+        search_results_box = ft.Container(
+            content=search_results_col,
+            visible=False,
+            bgcolor=ft.Colors.WHITE,
+            border_radius=8,
+            padding=ft.Padding.symmetric(vertical=4),
+        )
+
+        def select_search_result(res: dict):
+            async def go():
+                search_field.value = res["label"]
+                search_results_box.visible = False
+                _update(search_field, search_results_box)
+                kind = res.get("kind") or ""
+                if kind in layer_states:
+                    st = layer_states[kind]
+                    if not st["layer"].visible:
+                        st["layer"].visible = True
+                        _update(st["layer"])
+                        if not st["loaded"]:
+                            page.run_task(load_layer, kind)
+                show_point({
+                    "name": res["label"],
+                    "body": res.get("sublabel") or "",
+                    "lat": float(res["lat"]),
+                    "lon": float(res["lon"]),
+                    "layer": kind if kind in layer_states else None,
+                    "props": {},
+                    "icon": getattr(
+                        ft.Icons,
+                        SEARCH_KIND_ICONS.get(kind, "place").upper(),
+                        ft.Icons.PLACE,
+                    ),
+                })
+                try:
+                    await the_map.center_on(
+                        fm.MapLatitudeLongitude(
+                            float(res["lat"]), float(res["lon"]),
+                        ),
+                        zoom=16,
+                    )
+                except Exception:
+                    pass
+            return lambda e: page.run_task(go)
+
+        async def do_search(q: str):
+            import asyncio
+            import httpx
+            search_token["n"] += 1
+            token = search_token["n"]
+            await asyncio.sleep(0.4)  # debounce
+            if token != search_token["n"]:
+                return
+            q = (q or "").strip()
+            if len(q) < 2:
+                search_results_box.visible = False
+                _update(search_results_box)
+                return
+            results = None
+            for u in _dev_fallback_urls(PROD_API_BASE + "/map-layers/search"):
+                try:
+                    async with httpx.AsyncClient(timeout=10) as client:
+                        resp = await client.get(u, params={"q": q})
+                        resp.raise_for_status()
+                        results = resp.json().get("results", [])
+                    break
+                except Exception:
+                    continue
+            if token != search_token["n"]:
+                return
+            if results is None:
+                search_results_box.visible = False
+                _update(search_results_box)
+                return
+            if not results:
+                search_results_col.controls = [
+                    ft.Container(
+                        content=ft.Text(
+                            "No results", size=13, color=ft.Colors.GREY_600,
+                        ),
+                        padding=ft.Padding.symmetric(
+                            horizontal=16, vertical=10,
+                        ),
+                    )
+                ]
+            else:
+                search_results_col.controls = [
+                    ft.ListTile(
+                        dense=True,
+                        leading=ft.Icon(
+                            getattr(
+                                ft.Icons,
+                                SEARCH_KIND_ICONS.get(
+                                    r.get("kind") or "", "place",
+                                ).upper(),
+                                ft.Icons.PLACE,
+                            ),
+                            size=20,
+                            color=BRAND_GREEN,
+                        ),
+                        title=ft.Text(r["label"], size=14),
+                        subtitle=(
+                            ft.Text(r["sublabel"], size=12)
+                            if r.get("sublabel") else None
+                        ),
+                        on_click=select_search_result(r),
+                    )
+                    for r in results[:8]
+                ]
+            search_results_box.visible = True
+            _update(search_results_box)
+
+        search_field = ft.TextField(
+            hint_text="Search places, addresses, streets...",
+            prefix_icon=ft.Icons.SEARCH,
+            dense=True,
+            filled=True,
+            fill_color=ft.Colors.WHITE,
+            border_radius=24,
+            border_color=ft.Colors.TRANSPARENT,
+            on_change=lambda e: page.run_task(do_search, e.control.value),
+        )
+
+        # --- Low-stress route to the selected point ---------------------------
+        def clear_route():
+            route_state["on"] = False
+            route_layer.polylines = []
+            clear_route_btn.visible = False
+            _update(route_layer, clear_route_btn)
+
+        async def fetch_route():
+            import math
+            import httpx
+            pt = selected["pt"]
+            if not pt:
+                return
+            origin = user_pos["loc"]
+            if origin is None and geolocator is not None:
+                try:
+                    await geolocator.request_permission()
+                    pos = await geolocator.get_current_position()
+                    if pos:
+                        origin = (pos.latitude, pos.longitude)
+                        user_pos["loc"] = origin
+                except Exception:
+                    pass
+            used_center = False
+            if origin is None:
+                origin = camera_state["center"]
+                used_center = True
+
+            layers_loading.visible = True
+            _update(layers_loading)
+            feature = None
+            error_msg = None
+            try:
+                params = {
+                    "from": f"{origin[0]},{origin[1]}",
+                    "to": f"{pt['lat']},{pt['lon']}",
+                }
+                for u in _dev_fallback_urls(PROD_API_BASE + "/map-layers/route"):
+                    try:
+                        async with httpx.AsyncClient(timeout=60) as client:
+                            resp = await client.get(u, params=params)
+                        if resp.status_code in (400, 422):
+                            try:
+                                error_msg = resp.json().get("error")
+                            except Exception:
+                                error_msg = None
+                            break
+                        resp.raise_for_status()
+                        feature = resp.json()
+                        break
+                    except Exception:
+                        continue
+            finally:
+                layers_loading.visible = False
+                _update(layers_loading)
+
+            if feature is None:
+                _toast(error_msg or "Couldn't get a route right now.")
+                return
+
+            coords = feature.get("geometry", {}).get("coordinates") or []
+            if len(coords) < 2:
+                _toast("Couldn't get a route right now.")
+                return
+            pts = [fm.MapLatitudeLongitude(c[1], c[0]) for c in coords]
+            route_layer.polylines = [
+                fm.PolylineMarker(
+                    coordinates=pts, color=ft.Colors.WHITE, stroke_width=9,
+                ),
+                fm.PolylineMarker(
+                    coordinates=pts, color="#1565C0", stroke_width=5,
+                ),
+            ]
+            route_state["on"] = True
+            clear_route_btn.visible = True
+
+            props = feature.get("properties", {})
+            miles = (props.get("distance_m") or 0) / 1609.34
+            mins = props.get("duration_min") or 0
+            breakdown = props.get("stress_breakdown") or {}
+            parts = [f"{miles:.1f} mi", f"~{round(mins)} min"]
+            if breakdown:
+                top = max(breakdown, key=breakdown.get)
+                label = ROUTE_CATEGORY_LABELS.get(top)
+                if label:
+                    parts.append(f"mostly {label}")
+            if used_center:
+                parts.append("from map center")
+            detail_body.value = " · ".join(parts)
+            _update(route_layer, clear_route_btn, detail_panel)
+
+            # Roughly fit the camera to the route.
+            lats = [c[1] for c in coords]
+            lons = [c[0] for c in coords]
+            span = max(
+                max(lats) - min(lats),
+                (max(lons) - min(lons)) * 0.82,  # cos(34.85 deg)
+                1e-4,
+            )
+            zoom = max(10.0, min(16.0, math.log2(360.0 / span) - 1.0))
+            try:
+                await the_map.center_on(
+                    fm.MapLatitudeLongitude(
+                        (min(lats) + max(lats)) / 2,
+                        (min(lons) + max(lons)) / 2,
+                    ),
+                    zoom=zoom,
+                )
+            except Exception:
+                pass
+
         the_map.on_position_change = on_position_change
         the_map.on_tap = on_map_tap
         the_map.on_long_press = on_map_long_press
@@ -956,7 +1250,10 @@ async def _app(page: ft.Page):
             detail_panel.visible = False
             clear_highlight()
             pin_layer.markers = []
-            page.update()
+            _update(
+                detail_panel, highlight_line_layer,
+                highlight_circle_layer, pin_layer,
+            )
 
         def directions_click(e):
             pt = selected["pt"]
@@ -968,6 +1265,13 @@ async def _app(page: ft.Page):
                 "&travelmode=bicycling"
             )
             page.run_task(url_launcher.launch_url, url)
+
+        clear_route_btn = ft.TextButton(
+            "Clear route",
+            icon=ft.Icons.CLOSE,
+            visible=False,
+            on_click=lambda e: clear_route(),
+        )
 
         detail_panel = ft.Container(
             visible=False,
@@ -991,21 +1295,28 @@ async def _app(page: ft.Page):
                     ft.Row(
                         [
                             ft.FilledButton(
-                                "Directions",
-                                icon=ft.Icons.DIRECTIONS_BIKE,
-                                on_click=directions_click,
+                                "Bike route",
+                                icon=ft.Icons.ROUTE,
+                                tooltip="Low-stress bike route from your location",
+                                on_click=lambda e: page.run_task(fetch_route),
                                 style=ft.ButtonStyle(
                                     bgcolor=BRAND_GREEN, color=ft.Colors.WHITE,
                                 ),
                             ),
                             ft.OutlinedButton(
+                                "Google Maps",
+                                icon=ft.Icons.DIRECTIONS_BIKE,
+                                on_click=directions_click,
+                            ),
+                            ft.OutlinedButton(
                                 "Report / Photo",
                                 icon=ft.Icons.ADD_A_PHOTO_OUTLINED,
                                 on_click=lambda e: open_report_dialog(),
-                                visible=bool(tool.get("submit_url")),
                             ),
+                            clear_route_btn,
                         ],
                         spacing=8,
+                        wrap=True,
                     ),
                 ],
                 spacing=8,
@@ -1038,32 +1349,10 @@ async def _app(page: ft.Page):
                     )
                 ]
                 detail_panel.visible = True
-                page.update()
+                _update(
+                    highlight_line_layer, highlight_circle_layer, detail_panel,
+                )
             return handler
-
-        def make_marker(pt: dict) -> fm.Marker:
-            return fm.Marker(
-                coordinates=fm.MapLatitudeLongitude(pt["lat"], pt["lon"]),
-                width=40,
-                height=40,
-                content=ft.Container(
-                    content=ft.Icon(
-                        ft.Icons.PEDAL_BIKE, color=ft.Colors.WHITE, size=20,
-                    ),
-                    bgcolor=BRAND_GREEN,
-                    border_radius=20,
-                    alignment=ft.Alignment.CENTER,
-                    on_click=select_point(pt),
-                ),
-            )
-
-        async def populate():
-            points = await load_bike_parking(tool["data_url"])
-            marker_layer.markers = [make_marker(p) for p in points]
-            page.update()
-
-        if tool.get("data_url"):
-            page.run_task(populate)
 
         # --- Current location + recenter ------------------------------------
         async def locate_me(silent: bool = False):
@@ -1092,7 +1381,7 @@ async def _app(page: ft.Page):
                     ),
                 )
             ]
-            page.update()
+            _update(user_layer)
             try:
                 await the_map.center_on(loc, zoom=15)
             except Exception:
@@ -1139,43 +1428,42 @@ async def _app(page: ft.Page):
                     name = (files[0].path or "photo").split("/")[-1]
                     photo_status.value = f"Attached: {name}"
                     photo_status.color = BRAND_GREEN
-                    page.update()
+                    _update(photo_status)
 
             async def submit(e):
                 import os
                 import json as _json
                 import httpx
-                if (pt or {}).get("layer"):
-                    # Map-feature feedback -> plugins/map-layers.py
-                    data = {
-                        "layer": pt["layer"],
-                        "name": pt.get("name", ""),
-                        "lat": str(pt.get("lat", "")),
-                        "lon": str(pt.get("lon", "")),
-                        "props": _json.dumps(pt.get("props") or {}),
-                        "feedback": feedback_field.value or "",
-                    }
-                else:
-                    # Bike-parking feedback -> plugins/bike-parking.py
+                layer_id = (pt or {}).get("layer")
+                layer_cfg = (layer_states.get(layer_id) or {}).get("cfg", {})
+                if layer_cfg.get("submit_url"):
+                    # Layer with its own endpoint (bike parking ->
+                    # plugins/bike-parking.py, lands in parking_feedback).
                     data = {
                         "spot_name": (pt or {}).get("name", ""),
                         "lat": str((pt or {}).get("lat", "")),
                         "lon": str((pt or {}).get("lon", "")),
                         "feedback": feedback_field.value or "",
                     }
+                    submit_url = layer_cfg["submit_url"]
+                else:
+                    # Everything else (incl. dropped pins) ->
+                    # plugins/map-layers.py generic feedback pipe.
+                    data = {
+                        "layer": layer_id or "",
+                        "name": (pt or {}).get("name", ""),
+                        "lat": str((pt or {}).get("lat", "")),
+                        "lon": str((pt or {}).get("lon", "")),
+                        "props": _json.dumps((pt or {}).get("props") or {}),
+                        "feedback": feedback_field.value or "",
+                    }
+                    submit_url = MAP_FEEDBACK_URL
                 files = None
                 path = photo_state["path"]
                 if path and os.path.exists(path):
                     with open(path, "rb") as fh:
                         files = {"photo": (os.path.basename(path), fh.read())}
-                submit_url = (
-                    MAP_FEEDBACK_URL
-                    if (pt or {}).get("layer")
-                    else tool["submit_url"]
-                )
-                urls = [submit_url]
-                if submit_url.startswith(PROD_API_BASE):
-                    urls.append(DEV_API_BASE + submit_url[len(PROD_API_BASE):])
+                urls = _dev_fallback_urls(submit_url)
                 last_error = None
                 for u in urls:
                     try:
@@ -1188,7 +1476,7 @@ async def _app(page: ft.Page):
                         last_error = ex
                 if last_error is not None:
                     error_text.value = f"Submit failed: {last_error}"
-                    page.update()
+                    _update(error_text)
                     return
                 page.pop_dialog()
                 _toast("Thanks! Your report was submitted.")
@@ -1305,12 +1593,22 @@ async def _app(page: ft.Page):
                                 ),
                                 ft.Container(
                                     content=layers_loading,
-                                    left=16,
-                                    top=16,
+                                    right=16,
+                                    top=72,
                                 ),
                             ]
                             if layer_states
                             else []
+                        ),
+                        ft.Container(
+                            content=ft.Column(
+                                [search_field, search_results_box],
+                                spacing=6,
+                                tight=True,
+                            ),
+                            top=8,
+                            left=12,
+                            right=12,
                         ),
                         ft.Container(
                             content=detail_panel,
