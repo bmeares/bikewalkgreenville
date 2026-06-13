@@ -32,7 +32,7 @@ from meerschaum.actions import make_action
 from meerschaum.plugins import api_plugin
 from meerschaum.utils.warnings import info, warn
 
-__version__ = '0.1.0'
+__version__ = '0.1.1'
 
 bwg = mrsm.Plugin('bwg')
 
