@@ -14,10 +14,15 @@ Written 2026-07-30 at end of session on Bennett's laptop. Read this + `DATA.md` 
 - **BWG Meerschaum jobs run INSIDE the api container** (`mrsm-api-bwg-1`), alongside `who-owns-the-roads` etc. New projects (`transit.yaml`, walk-audit) are NOT yet registered as prod jobs — that's pending work (below).
 - `sql:bwg` direct connection + prod port mapping: Bennett FIXED both (host connects fine now, no tunnel needed). The SSH-tunnel workaround in memory/wiki is obsolete.
 
-## Secrets — where to get them on omega
+## Secrets — ALREADY PLACED ON OMEGA (2026-07-30)
 
-- **Signing keystore**: `app-native/sra-upload.keystore` + `keystore.properties` — Google Drive folder "Backup" (search `sra-upload`). Store/key password in Drive `keystore.properties`. Shared SRA upload key (trail-counter/anchored), alias `sra-upload`, SHA-1 `537F9A88AAB6623CFA91F0FBABCE6F95E705A843`. Restore both to `app-native/`, chmod 600.
-- **SMTP app password** (data@bikewalkgreenville.org, smtp.gmail.com:587): currently in prod api container: `ssh -p 2269 meerschaum@mrsm.io docker exec mrsm-api-bwg-1 cat /meerschaum/.env`. Also in Bennett's laptop repo `.env` (not pushed). Ask Bennett if unreachable.
+Copied via scp at handoff, all gitignored there, chmod 600:
+- `~/projects/bikewalkgreenville/.env` — `FELT_API_TOKEN`, `MRSM_SMTP_*` (data@bikewalkgreenville.org app password), `MRSM_WALK_AUDIT_TEST_RECIPIENT`, **`MRSM_SQL_BWG`** (full prod DB URI — compose works without host-config setup).
+- `~/projects/bikewalkgreenville/app-native/keystore.properties` + `sra-upload.keystore` — shared SRA upload key (same as trail-counter/anchored, both also cloned on omega), alias `sra-upload`, SHA-1 `537F9A88AAB6623CFA91F0FBABCE6F95E705A843`.
+
+If ever lost: keystore + its passwords in Google Drive folder "Backup" (search `sra-upload`); SMTP password also in prod api container (`ssh -p 2269 meerschaum@mrsm.io docker exec mrsm-api-bwg-1 cat /meerschaum/.env`); otherwise ask Bennett.
+
+Omega must still provide its own toolchain: Flutter 3.38.x, Android SDK 36 + platform-tools, **JDK 21** (update the `org.gradle.java.home` path in `app-native/android/gradle.properties` if omega's JDK 21 lives elsewhere — laptop path was `/usr/lib/jvm/java-21-temurin-jdk`).
 
 ## PENDING WORK (Bennett's last instructions, not yet done)
 
