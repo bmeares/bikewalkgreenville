@@ -52,6 +52,10 @@ class Api {
     return '$base$path';
   }
 
+  /// Same layer, fetched inline — used to refresh a source after a submit.
+  Future<Map<String, dynamic>> layerGeoJson(String path) async =>
+      Map<String, dynamic>.from(await _get(path));
+
   Future<Map<String, dynamic>> roadInfo(double lat, double lon) async =>
       Map<String, dynamic>.from(
           await _get('/map-layers/road-info', {'lat': lat, 'lon': lon}));

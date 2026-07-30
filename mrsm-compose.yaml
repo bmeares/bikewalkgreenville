@@ -84,4 +84,17 @@ config:
     bwg:
       data_path: './data'
 
+    ### Walk-audit staff notifications. THIS REPO IS PUBLIC: values are
+    ### interpolated from the environment (root `.env`), never written here.
+    ### Prod sets the same keys in the API container's config.
+    walk-audit:
+      smtp:
+        host: $MRSM_SMTP_HOST
+        port: $MRSM_SMTP_PORT
+        username: $MRSM_SMTP_USER
+        password: $MRSM_SMTP_PASSWORD
+      notify:
+        enabled: true
+        recipient: $MRSM_WALK_AUDIT_NOTIFY_RECIPIENT
+
 environment: {}

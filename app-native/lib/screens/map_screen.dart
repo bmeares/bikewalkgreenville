@@ -2,13 +2,18 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher_string.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../api.dart';
 import '../app_state.dart';
+import '../map_icons.dart';
+import '../nav.dart';
 import '../theme.dart';
 import 'report_sheet.dart';
 import 'tools_screen.dart';
@@ -30,9 +35,19 @@ class _MapScreenState extends State<MapScreen> {
   Timer? _searchDebounce;
   List<dynamic> _results = [];
 
-  // Route state.
+  // Route + turn-by-turn navigation state.
   bool _routing = false;
-  Map<String, dynamic>? _routeProps;
+  NavRoute? _navRoute;
+  LatLng? _destination;
+  bool _navigating = false;
+  NavProgress? _progress;
+  StreamSubscription<Position>? _posSub;
+  FlutterTts? _tts;
+  bool _voice = true;
+  int _spokenStep = -1;
+  bool _spokenImminent = false;
+  int _offRouteHits = 0;
+  bool _rerouting = false;
 
   AppState get app => context.read<AppState>();
 
@@ -45,6 +60,9 @@ class _MapScreenState extends State<MapScreen> {
   @override
   void dispose() {
     _searchDebounce?.cancel();
+    _posSub?.cancel();
+    _tts?.stop();
+    WakelockPlus.disable();
     super.dispose();
   }
 
@@ -52,46 +70,103 @@ class _MapScreenState extends State<MapScreen> {
 
   Future<void> _onStyleLoaded() async {
     final map = _map!;
+    final ratio = MediaQuery.of(context).devicePixelRatio;
+
     for (final def in layerDefs) {
       final url = await api.layerUrl(def.path);
       await map.addSource(def.id, GeojsonSourceProperties(data: url));
-      if (def.isPoint) {
-        await map.addCircleLayer(
-          def.id,
-          'lyr-${def.id}',
-          CircleLayerProperties(
-            circleColor: def.color,
-            circleRadius: 6.0,
-            circleOpacity: 0.9,
-            circleStrokeColor: '#ffffff',
-            circleStrokeWidth: 1.5,
-          ),
-        );
-      } else {
-        await map.addLineLayer(
-          def.id,
-          'lyr-${def.id}',
-          LineLayerProperties(
-            lineColor: def.colorByStress
-                ? [
-                    'match',
-                    ['get', 'stress_level'],
-                    for (final e in stressColors.entries) ...[e.key, e.value],
-                    '#9e9e9e',
-                  ]
-                // Per-feature color when the layer provides one (GTFS routes).
-                : [
-                    'coalesce',
-                    ['get', 'color'],
-                    def.color,
-                  ],
-            lineWidth: def.width,
-            lineOpacity: 0.85,
-            lineCap: 'round',
-            lineJoin: 'round',
-          ),
-        );
-      }
+    }
+
+    // Lines first: pins, the tap highlight and the route all draw above them.
+    for (final def in layerDefs.where((d) => !d.isPoint)) {
+      await map.addLineLayer(
+        def.id,
+        'lyr-${def.id}',
+        LineLayerProperties(
+          lineColor: def.colorByStress
+              ? [
+                  'match',
+                  ['get', 'stress_level'],
+                  for (final e in stressColors.entries) ...[e.key, e.value],
+                  '#9e9e9e',
+                ]
+              // Per-feature color when the layer provides one (GTFS routes).
+              : [
+                  'coalesce',
+                  ['get', 'color'],
+                  def.color,
+                ],
+          lineWidth: def.width,
+          lineOpacity: 0.85,
+          lineCap: 'round',
+          lineJoin: 'round',
+        ),
+      );
+    }
+
+    // Tap highlight: one source, two layers — the line layer renders when the
+    // tapped feature is a line, the circle layer when it's a point.
+    await map.addSource(
+        'highlight', GeojsonSourceProperties(data: _emptyCollection));
+    await map.addLineLayer(
+      'highlight',
+      'lyr-highlight-line',
+      const LineLayerProperties(
+        lineColor: '#FFC107',
+        lineWidth: 12.0,
+        lineOpacity: 0.55,
+        lineCap: 'round',
+        lineJoin: 'round',
+      ),
+      enableInteraction: false,
+    );
+    await map.addCircleLayer(
+      'highlight',
+      'lyr-highlight-point',
+      const CircleLayerProperties(
+        circleRadius: 20.0,
+        circleColor: '#FFC107',
+        circleOpacity: 0.3,
+        circleStrokeColor: '#FFC107',
+        circleStrokeWidth: 2.5,
+      ),
+      enableInteraction: false,
+    );
+
+    // Point layers render as Material-icon pins (see map_icons.dart) so each
+    // layer is recognizable instead of another teal dot.
+    for (final def in layerDefs.where((d) => d.isPoint)) {
+      await map.addImage(
+        'pin-${def.id}',
+        await renderPin(
+          icon: def.icon,
+          color: hexColor(def.color),
+          devicePixelRatio: ratio,
+          scale: def.pinScale,
+        ),
+      );
+      await map.addSymbolLayer(
+        def.id,
+        'lyr-${def.id}',
+        SymbolLayerProperties(
+          iconImage: 'pin-${def.id}',
+          iconSize: [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            11.0,
+            0.45 * def.pinScale,
+            14.0,
+            0.7 * def.pinScale,
+            17.0,
+            0.95 * def.pinScale,
+          ],
+          iconAnchor: 'bottom',
+          // Reports are the point of the app — never let them get decluttered.
+          iconAllowOverlap: def.id == 'reports',
+        ),
+        minzoom: def.minZoom > 0 ? def.minZoom : null,
+      );
     }
 
     // Route line (casing + fill) and the selection pin, above everything.
@@ -148,6 +223,7 @@ class _MapScreenState extends State<MapScreen> {
   /// properties.
   Future<void> _onFeatureTap(math.Point<double> point, LatLng latLng,
       String id, String layerId, Annotation? annotation) async {
+    HapticFeedback.selectionClick();
     final map = _map!;
     var features = await map.queryRenderedFeaturesInRect(
         Rect.fromCenter(
@@ -168,8 +244,26 @@ class _MapScreenState extends State<MapScreen> {
     if (!mounted || features.isEmpty) return;
     final f = Map<String, dynamic>.from(features.first as Map);
     f['layer'] = {'id': layerId};
-    _showFeatureSheet(f, latLng);
+    await _setHighlight(f, latLng);
+    if (mounted) _showFeatureSheet(f, latLng);
   }
+
+  /// Outlines the tapped feature so it's obvious the tap registered.
+  Future<void> _setHighlight(Map<String, dynamic> feature, LatLng at) async {
+    final geometry = feature['geometry'] ??
+        {
+          'type': 'Point',
+          'coordinates': [at.longitude, at.latitude],
+        };
+    await _map?.setGeoJsonSource('highlight', {
+      'type': 'FeatureCollection',
+      'features': [
+        {'type': 'Feature', 'geometry': geometry, 'properties': {}},
+      ],
+    });
+  }
+
+  void _clearHighlight() => _map?.setGeoJsonSource('highlight', _emptyCollection);
 
   Future<void> _onMapLongClick(math.Point<double> point, LatLng latLng) async {
     await _setPin(latLng);
@@ -313,7 +407,7 @@ class _MapScreenState extends State<MapScreen> {
           ),
         ),
       ),
-    );
+    ).whenComplete(_clearHighlight);
   }
 
   String _prettyKey(String k) =>
@@ -334,7 +428,7 @@ class _MapScreenState extends State<MapScreen> {
 
   // ---------------------------------------------------------------- routing
 
-  Future<void> _routeTo(LatLng dest) async {
+  Future<void> _routeTo(LatLng dest, {bool silent = false}) async {
     final origin = await _bestOrigin();
     if (origin == null) {
       if (mounted) {
@@ -342,30 +436,201 @@ class _MapScreenState extends State<MapScreen> {
       }
       return;
     }
-    setState(() => _routing = true);
+    if (!silent) setState(() => _routing = true);
     try {
       final feature = await api.route(
           origin.latitude, origin.longitude, dest.latitude, dest.longitude);
+      final route = NavRoute.fromFeature(feature);
       await _map?.setGeoJsonSource('route', {
         'type': 'FeatureCollection',
         'features': [feature],
       });
       await _setPin(dest);
-      setState(() =>
-          _routeProps = Map<String, dynamic>.from(feature['properties'] ?? {}));
+      if (!mounted) return;
+      setState(() {
+        _routing = true;
+        _navRoute = route;
+        _destination = dest;
+      });
+      if (!_navigating) await _fitRoute(route);
     } on Exception catch (e) {
-      setState(() => _routing = false);
-      if (mounted) toast(context, e.toString());
+      if (!mounted) return;
+      setState(() => _routing = _navRoute != null);
+      toast(context, e.toString());
     }
   }
 
+  Future<void> _fitRoute(NavRoute route) async {
+    if (route.isEmpty) return;
+    var minLat = 90.0, maxLat = -90.0, minLon = 180.0, maxLon = -180.0;
+    for (final p in route.points) {
+      minLat = math.min(minLat, p.latitude);
+      maxLat = math.max(maxLat, p.latitude);
+      minLon = math.min(minLon, p.longitude);
+      maxLon = math.max(maxLon, p.longitude);
+    }
+    await _map?.animateCamera(
+      CameraUpdate.newLatLngBounds(
+        LatLngBounds(
+          southwest: LatLng(minLat, minLon),
+          northeast: LatLng(maxLat, maxLon),
+        ),
+        left: 40,
+        right: 40,
+        top: 180,
+        bottom: 220,
+      ),
+    );
+  }
+
   Future<void> _clearRoute() async {
+    await _stopNav();
     await _map?.setGeoJsonSource('route', _emptyCollection);
     await _map?.setGeoJsonSource('pin', _emptyCollection);
+    if (!mounted) return;
     setState(() {
       _routing = false;
-      _routeProps = null;
+      _navRoute = null;
+      _destination = null;
+      _progress = null;
     });
+  }
+
+  // ------------------------------------------------------------- navigation
+
+  /// Enter turn-by-turn mode: follow camera, spoken maneuvers, off-route
+  /// recalculation — the ride actually being guided, not just drawn.
+  Future<void> _startNav() async {
+    final route = _navRoute;
+    if (route == null || route.isEmpty) return;
+    final pos = await _currentPosition();
+    if (pos == null) {
+      if (mounted) toast(context, 'Location is required to navigate.');
+      return;
+    }
+    await _initTts();
+    await WakelockPlus.enable();
+    if (!mounted) return;
+    setState(() {
+      _navigating = true;
+      _spokenStep = -1;
+      _spokenImminent = false;
+      _offRouteHits = 0;
+    });
+    await _posSub?.cancel();
+    _posSub = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.bestForNavigation,
+        distanceFilter: 5,
+      ),
+    ).listen(_onNavPosition);
+    _onNavPosition(pos);
+  }
+
+  Future<void> _stopNav({bool arrived = false}) async {
+    await _posSub?.cancel();
+    _posSub = null;
+    await _tts?.stop();
+    await WakelockPlus.disable();
+    if (!mounted || !_navigating) return;
+    setState(() {
+      _navigating = false;
+      _progress = null;
+    });
+    final here = _map?.cameraPosition?.target;
+    if (here != null) {
+      await _map?.animateCamera(CameraUpdate.newCameraPosition(
+        CameraPosition(target: here, zoom: 15.0, bearing: 0, tilt: 0),
+      ));
+    }
+    if (arrived && mounted) toast(context, 'You have arrived.');
+  }
+
+  Future<void> _onNavPosition(Position pos) async {
+    final route = _navRoute;
+    if (!_navigating || route == null) return;
+    final here = LatLng(pos.latitude, pos.longitude);
+    final progress = NavProgress.of(route, here);
+    if (progress == null || !mounted) return;
+    setState(() => _progress = progress);
+
+    // Course-up camera: GPS heading while moving, else the route's own bearing.
+    final bearing =
+        (pos.heading >= 0 && pos.speed > 0.8) ? pos.heading : progress.courseBearing;
+    await _map?.animateCamera(
+      CameraUpdate.newCameraPosition(CameraPosition(
+        target: here,
+        zoom: 17.0,
+        bearing: bearing,
+        tilt: 45.0,
+      )),
+      duration: const Duration(milliseconds: 900),
+    );
+
+    if (progress.remainingM < 25) {
+      await _speak('You have arrived.');
+      await _stopNav(arrived: true);
+      await _clearRoute();
+      return;
+    }
+
+    _announce(route, progress);
+    await _maybeReroute(progress);
+  }
+
+  /// Two prompts per maneuver, the way every nav app does it: a heads-up at
+  /// ~200 m and the bare instruction right before the turn.
+  void _announce(NavRoute route, NavProgress p) {
+    if (route.steps.isEmpty) return;
+    final nextIndex = math.min(p.stepIndex + 1, route.steps.length - 1);
+    final step = route.steps[nextIndex];
+    final d = p.distanceToManeuverM;
+    if (nextIndex != _spokenStep && d < 230) {
+      _spokenStep = nextIndex;
+      _spokenImminent = false;
+      _speak('In ${formatDistance(d)}, ${step.instruction}');
+    } else if (nextIndex == _spokenStep && !_spokenImminent && d < 45) {
+      _spokenImminent = true;
+      _speak(step.instruction);
+    }
+  }
+
+  Future<void> _maybeReroute(NavProgress p) async {
+    if (p.offRouteM > 45) {
+      _offRouteHits++;
+    } else {
+      _offRouteHits = 0;
+    }
+    if (_offRouteHits < 3 || _rerouting || _destination == null) return;
+    _rerouting = true;
+    _offRouteHits = 0;
+    await _speak('Rerouting.');
+    if (mounted) toast(context, 'Off route — recalculating…');
+    await _routeTo(_destination!, silent: true);
+    _spokenStep = -1;
+    _spokenImminent = false;
+    _rerouting = false;
+  }
+
+  Future<void> _initTts() async {
+    if (_tts != null) return;
+    final tts = FlutterTts();
+    try {
+      await tts.setLanguage('en-US');
+      await tts.setSpeechRate(0.5);
+      await tts.setVolume(1.0);
+    } catch (_) {
+      // Voice is a nicety; the banner still guides the ride.
+    }
+    _tts = tts;
+  }
+
+  Future<void> _speak(String text) async {
+    if (!_voice) return;
+    try {
+      await _tts?.stop();
+      await _tts?.speak(text);
+    } catch (_) {}
   }
 
   Future<LatLng?> _bestOrigin() async {
@@ -455,16 +720,30 @@ class _MapScreenState extends State<MapScreen> {
       builder: (_) => ReportSheet(latLng: latLng, spotName: spotName),
     );
     if (submitted != null && mounted) {
-      final owner = submitted['owner'];
       final road = submitted['road_name'];
       toast(
         context,
-        owner != null
-            ? 'Thanks! Your report near $road will be forwarded to $owner.'
-            : 'Thanks! Your report was submitted.',
+        road != null
+            ? 'Thanks! Your report near $road is on the map.'
+            : 'Thanks! Your report is on the map.',
       );
+      await _refreshReports();
     }
     _clearPinIfIdle();
+  }
+
+  /// Re-pull the reports layer (and force it visible) so a just-submitted pin
+  /// shows up without a restart.
+  Future<void> _refreshReports() async {
+    const id = 'reports';
+    final def = layerDefs.firstWhere((d) => d.id == id);
+    if (mounted) context.read<AppState>().toggleLayer(id, true);
+    try {
+      final data = await api.layerGeoJson(def.path);
+      await _map?.setGeoJsonSource(id, data);
+    } catch (_) {
+      // Non-fatal: the pin will appear on the next app start.
+    }
   }
 
   Future<void> _reportAtMyLocation() async {
@@ -503,8 +782,9 @@ class _MapScreenState extends State<MapScreen> {
             attributionButtonPosition: AttributionButtonPosition.bottomLeft,
           ),
 
-          // Top chrome: search + mode switch.
-          SafeArea(
+          // Top chrome: search + mode switch (hidden while navigating).
+          if (!_navigating)
+            SafeArea(
             child: Column(
               children: [
                 Padding(
@@ -583,37 +863,43 @@ class _MapScreenState extends State<MapScreen> {
                     ),
                   ),
                 ),
-                if (_routeProps != null) _routeBanner(),
+                if (_navRoute != null) _routePreview(),
               ],
             ),
           ),
 
-          // FABs.
+          if (_navigating) ..._navChrome(),
+
+          // FABs (trimmed to a recenter button while navigating).
           Positioned(
             right: 12,
-            bottom: 28,
+            bottom: _navigating ? 130 : 28,
             child: Column(
               children: [
-                FloatingActionButton.small(
-                  heroTag: 'layers',
-                  onPressed: _openLayersSheet,
-                  child: const Icon(Icons.layers),
-                ),
-                const SizedBox(height: 10),
+                if (!_navigating) ...[
+                  FloatingActionButton.small(
+                    heroTag: 'layers',
+                    onPressed: _openLayersSheet,
+                    child: const Icon(Icons.layers),
+                  ),
+                  const SizedBox(height: 10),
+                ],
                 FloatingActionButton.small(
                   heroTag: 'locate',
                   onPressed: _locateMe,
                   child: const Icon(Icons.my_location),
                 ),
-                const SizedBox(height: 10),
-                FloatingActionButton.extended(
-                  heroTag: 'report',
-                  backgroundColor: brandGreen,
-                  foregroundColor: Colors.white,
-                  icon: const Icon(Icons.report_problem_outlined),
-                  label: const Text('Report'),
-                  onPressed: _reportAtMyLocation,
-                ),
+                if (!_navigating) ...[
+                  const SizedBox(height: 10),
+                  FloatingActionButton.extended(
+                    heroTag: 'report',
+                    backgroundColor: brandGreen,
+                    foregroundColor: Colors.white,
+                    icon: const Icon(Icons.report_problem_outlined),
+                    label: const Text('Report'),
+                    onPressed: _reportAtMyLocation,
+                  ),
+                ],
               ],
             ),
           ),
@@ -622,28 +908,51 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  Widget _routeBanner() {
-    final props = _routeProps ?? {};
-    final miles = props['distance_mi'] ?? props['miles'];
-    final label = miles != null
-        ? 'Low-stress bike route — $miles mi'
-        : 'Low-stress bike route';
+  /// Route summary before the ride starts: distance, time, Start.
+  Widget _routePreview() {
+    final route = _navRoute!;
     return Padding(
-      padding: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
       child: Material(
-        elevation: 3,
-        borderRadius: BorderRadius.circular(20),
+        elevation: 4,
+        borderRadius: BorderRadius.circular(16),
         color: const Color(0xFF1565C0),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          padding: const EdgeInsets.fromLTRB(14, 8, 6, 8),
           child: Row(
-            mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.directions_bike, color: Colors.white, size: 18),
-              const SizedBox(width: 8),
-              Text(label, style: const TextStyle(color: Colors.white)),
+              const Icon(Icons.directions_bike, color: Colors.white, size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${formatDistance(route.distanceM)} · '
+                      '${formatDuration(route.durationMin)}',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 16),
+                    ),
+                    const Text('Low-stress bike route',
+                        style: TextStyle(color: Colors.white70, fontSize: 12)),
+                  ],
+                ),
+              ),
+              if (route.steps.isNotEmpty)
+                FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Colors.white,
+                    foregroundColor: const Color(0xFF1565C0),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  icon: const Icon(Icons.navigation, size: 18),
+                  label: const Text('Start'),
+                  onPressed: _startNav,
+                ),
               IconButton(
-                icon: const Icon(Icons.close, color: Colors.white, size: 18),
+                icon: const Icon(Icons.close, color: Colors.white, size: 20),
                 onPressed: _clearRoute,
               ),
             ],
@@ -653,7 +962,187 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
+  /// Turn-by-turn chrome: maneuver card on top, trip bar on the bottom.
+  List<Widget> _navChrome() {
+    final route = _navRoute;
+    final progress = _progress;
+    if (route == null || route.steps.isEmpty) return const [];
+    final nextIndex =
+        math.min((progress?.stepIndex ?? -1) + 1, route.steps.length - 1);
+    final step = route.steps[nextIndex];
+    final after = nextIndex + 1 < route.steps.length
+        ? route.steps[nextIndex + 1]
+        : null;
+    final toManeuver = progress?.distanceToManeuverM ?? step.distanceM;
+    final remaining = progress?.remainingM ?? route.distanceM;
+    final etaMin = route.durationMin <= 0 || route.distanceM <= 0
+        ? 0.0
+        : route.durationMin * (remaining / route.distanceM);
+
+    return [
+      SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 0),
+          child: Material(
+            elevation: 6,
+            borderRadius: BorderRadius.circular(18),
+            color: const Color(0xFF13322A),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 12, 6, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(step.icon, color: Colors.white, size: 42),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              formatDistance(toManeuver),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 26,
+                                fontWeight: FontWeight.w700,
+                                height: 1.1,
+                              ),
+                            ),
+                            Text(
+                              step.instruction,
+                              style: const TextStyle(
+                                  color: Colors.white, fontSize: 16),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: _voice ? 'Mute voice' : 'Unmute voice',
+                        icon: Icon(_voice ? Icons.volume_up : Icons.volume_off,
+                            color: Colors.white70),
+                        onPressed: () {
+                          setState(() => _voice = !_voice);
+                          if (!_voice) _tts?.stop();
+                        },
+                      ),
+                    ],
+                  ),
+                  if (after != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6, left: 4),
+                      child: Row(
+                        children: [
+                          const Text('then ',
+                              style: TextStyle(color: Colors.white54)),
+                          Icon(after.icon, color: Colors.white54, size: 18),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              after.instruction,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: Colors.white54),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+      Positioned(
+        left: 10,
+        right: 10,
+        bottom: 20,
+        child: Material(
+          elevation: 6,
+          borderRadius: BorderRadius.circular(18),
+          color: Colors.white,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 10, 10),
+            child: Row(
+              children: [
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      formatDuration(etaMin),
+                      style: const TextStyle(
+                          fontSize: 20, fontWeight: FontWeight.w700),
+                    ),
+                    Text('${formatDistance(remaining)} left',
+                        style: const TextStyle(color: Colors.black54)),
+                  ],
+                ),
+                const Spacer(),
+                TextButton.icon(
+                  icon: const Icon(Icons.list_alt),
+                  label: const Text('Steps'),
+                  onPressed: _openStepsSheet,
+                ),
+                const SizedBox(width: 4),
+                FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                      backgroundColor: Colors.red.shade700),
+                  icon: const Icon(Icons.close),
+                  label: const Text('End'),
+                  onPressed: () => _stopNav(),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ];
+  }
+
+  void _openStepsSheet() {
+    final route = _navRoute;
+    if (route == null) return;
+    final current = _progress?.stepIndex ?? 0;
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text(
+                '${formatDistance(route.distanceM)} · '
+                '${formatDuration(route.durationMin)}',
+                style: Theme.of(ctx).textTheme.titleMedium,
+              ),
+            ),
+            for (var i = 0; i < route.steps.length; i++)
+              ListTile(
+                dense: true,
+                leading: Icon(route.steps[i].icon,
+                    color: i < current ? Colors.black26 : brandGreen),
+                title: Text(
+                  route.steps[i].instruction,
+                  style: TextStyle(
+                    color: i < current ? Colors.black45 : null,
+                    fontWeight: i == current ? FontWeight.w600 : null,
+                  ),
+                ),
+                trailing: route.steps[i].distanceM > 0
+                    ? Text(formatDistance(route.steps[i].distanceM))
+                    : null,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _openLayersSheet() {
+    final zoom = _map?.cameraPosition?.zoom ?? homeZoom;
     showModalBottomSheet(
       context: context,
       builder: (ctx) => Consumer<AppState>(
@@ -672,11 +1161,11 @@ class _MapScreenState extends State<MapScreen> {
                   dense: true,
                   secondary: def.colorByStress
                       ? const Icon(Icons.speed)
-                      : Icon(def.icon,
-                          color: Color(int.parse(
-                              'ff${def.color.substring(1)}',
-                              radix: 16))),
+                      : Icon(def.icon, color: hexColor(def.color)),
                   title: Text(def.label),
+                  subtitle: def.minZoom > zoom
+                      ? const Text('Zoom in to see these')
+                      : null,
                   value: state.overrideFor(def),
                   onChanged: (v) => state.toggleLayer(def.id, v),
                 ),
@@ -747,8 +1236,8 @@ class RoadInfoSheet extends StatelessWidget {
               const Padding(
                 padding: EdgeInsets.only(top: 8),
                 child: Text(
-                  'This office has no public email — reports from the app are '
-                  'relayed by BWG with the online form linked above.',
+                  'This office has no public email — use the online form above '
+                  'to contact them directly.',
                   style: TextStyle(fontSize: 12, color: Colors.black54),
                 ),
               ),

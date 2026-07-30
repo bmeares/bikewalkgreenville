@@ -4,7 +4,7 @@ publish_to: 'none'
 
 # +N is the Android versionCode; both MUST increase every release or
 # in-place upgrades silently no-op on device. (Flet app ended at 29.)
-version: 1.0.0+30
+version: 1.1.0+31
 
 environment:
   sdk: ^3.10.7
@@ -20,6 +20,8 @@ dependencies:
   image_picker: ^1.1.2
   url_launcher: ^6.3.1
   shared_preferences: ^2.5.5
+  flutter_tts: ^4.2.5
+  wakelock_plus: ^1.6.1
 
 dev_dependencies:
   flutter_test:

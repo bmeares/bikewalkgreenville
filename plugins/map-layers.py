@@ -473,19 +473,21 @@ def _equirect_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return (dx * dx + dy * dy) ** 0.5
 
 
-def _route_source_rows(debug: bool = False) -> list[tuple[list, str]]:
-    """Pull (coords, category) rows for every routable segment.
+def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str]]:
+    """Pull (coords, category, street name) rows for every routable segment.
     Geography-cast lengths sidestep per-CRS units; simplification preserves
-    endpoints, so connectivity is unaffected."""
+    endpoints, so connectivity is unaffected. The name feeds turn-by-turn
+    instructions ("Turn right onto Main St")."""
     import json
 
     sources = [
-        ('bike-stress', None),       # category = stress_level per row
-        ('bike-lanes', 'bike-lane'),
-        ('srt', 'srt'),
+        # (layer, category, SQL expression for the street name)
+        ('bike-stress', None, '"street_name"'),   # category = stress_level per row
+        ('bike-lanes', 'bike-lane', '"STREET_NAM"'),
+        ('srt', 'srt', "'Swamp Rabbit Trail'"),
     ]
     rows = []
-    for layer_id, category in sources:
+    for layer_id, category, name_expr in sources:
         layer = LAYERS[layer_id]
         pipe = _layer_pipe(layer)
         conn = pipe.instance_connector
@@ -509,7 +511,8 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str]]:
                 ),
                 5
             ) AS "gj",
-            {cat_col}
+            {cat_col},
+            {name_expr} AS "name"
         FROM "{schema}"."{target}"
         '''
         df = conn.read(query, debug=debug)
@@ -523,9 +526,11 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str]]:
                 if geom['type'] == 'MultiLineString'
                 else [geom['coordinates']]
             )
+            name = rec.get('name')
+            name = None if not name or str(name).strip() in ('', 'N/A', 'None') else str(name).strip()
             for part in parts:
                 if len(part) >= 2:
-                    rows.append((part, rec.get('category')))
+                    rows.append((part, rec.get('category'), name))
     return rows
 
 
@@ -555,8 +560,8 @@ def _subdivide(coords: list) -> list[list]:
 
 def _build_route_graph(debug: bool = False) -> dict[str, Any]:
     """nodes: cell -> (lat, lon); adj: cell -> list of
-    (nbr, weight, length_m, category, coords, reversed?). Largest connected
-    component only, so off-island termini snap to routable nodes."""
+    (nbr, weight, length_m, category, coords, reversed?, name). Largest
+    connected component only, so off-island termini snap to routable nodes."""
     nodes: dict = {}
     adj: dict = {}
     street_nodes: set = set()
@@ -569,7 +574,7 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
             adj[cell] = []
         return cell
 
-    for coords, category in _route_source_rows(debug=debug):
+    for coords, category, name in _route_source_rows(debug=debug):
         factor = ROUTE_FACTORS.get(category, ROUTE_DEFAULT_FACTOR)
         is_path = category in ('srt', 'bike-lane')
         for chunk in _subdivide(coords):
@@ -595,8 +600,8 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
             if existing is not None:
                 adj[u] = [e for e in adj[u] if e[0] != v]
                 adj[v] = [e for e in adj[v] if e[0] != u]
-            adj[u].append((v, weight, length_m, category, chunk, False))
-            adj[v].append((u, weight, length_m, category, chunk, True))
+            adj[u].append((v, weight, length_m, category, chunk, False, name))
+            adj[v].append((u, weight, length_m, category, chunk, True, name))
 
     def _add_connector(u, v):
         d = _equirect_m(*nodes[u], *nodes[v])
@@ -605,8 +610,8 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
             [nodes[v][1], nodes[v][0]],
         ]
         length = max(d, 1.0)
-        adj[u].append((v, length, length, 'connector', coords, False))
-        adj[v].append((u, length, length, 'connector', coords, True))
+        adj[u].append((v, length, length, 'connector', coords, False, None))
+        adj[v].append((u, length, length, 'connector', coords, True, None))
 
     def _spatial_hash(cells, cell_m):
         cell_lat = cell_m / M_PER_DEG_LAT
@@ -759,6 +764,178 @@ def _astar(graph: dict, start, goal):
     return None
 
 
+#: Bearing change (degrees) at a junction -> maneuver type. Ordered by the
+#: upper bound of |delta|; the sign picks left vs. right.
+TURN_BANDS = (
+    (20, 'straight'),
+    (50, 'slight'),
+    (125, 'turn'),
+    (165, 'sharp'),
+)
+COMPASS = ('north', 'northeast', 'east', 'southeast',
+           'south', 'southwest', 'west', 'northwest')
+#: Merge a leg into the current step below this bearing change (unless the
+#: street name changes) so gentle curves don't generate maneuvers.
+STEP_TURN_MIN_DEG = 22.0
+#: Same street (or an unnamed/connector leg): only a real corner splits it.
+STEP_SAME_STREET_TURN_DEG = 60.0
+#: Steps shorter than this (meters) are folded into the previous one.
+STEP_MIN_M = 25.0
+
+
+def _bearing(a: list, b: list) -> float:
+    """Compass bearing in degrees from [lon, lat] `a` to `b`."""
+    lat1, lat2 = math.radians(a[1]), math.radians(b[1])
+    dlon = math.radians(b[0] - a[0])
+    y = math.sin(dlon) * math.cos(lat2)
+    x = (
+        math.cos(lat1) * math.sin(lat2)
+        - math.sin(lat1) * math.cos(lat2) * math.cos(dlon)
+    )
+    return (math.degrees(math.atan2(y, x)) + 360.0) % 360.0
+
+
+def _maneuver(delta: float) -> str:
+    """Signed bearing change (-180..180) -> maneuver key."""
+    side = 'left' if delta < 0 else 'right'
+    mag = abs(delta)
+    for bound, kind in TURN_BANDS:
+        if mag < bound:
+            if kind == 'straight':
+                return 'straight'
+            return f'{kind}-{side}' if kind != 'turn' else side
+    return 'uturn'
+
+
+def _titleize(name: str | None) -> str | None:
+    """GIS street names are SHOUTED; instructions shouldn't be."""
+    if not name:
+        return None
+    return name.title() if name.isupper() else name
+
+
+def _instruction(
+    maneuver: str,
+    name: str | None,
+    bearing: float,
+    prev_name: str | None = None,
+) -> str:
+    name = _titleize(name)
+    onto = f' onto {name}' if name else ''
+    if maneuver == 'depart':
+        heading = COMPASS[int((bearing + 22.5) % 360 // 45)]
+        return f'Head {heading}' + (f' on {name}' if name else '')
+    if maneuver == 'arrive':
+        return 'Arrive at your destination'
+    if maneuver == 'straight':
+        if not name:
+            return 'Continue straight'
+        return f'Continue onto {name}' if name != _titleize(prev_name) else f'Continue on {name}'
+    if maneuver == 'uturn':
+        return f'Make a U-turn{onto}'
+    words = {
+        'left': 'Turn left',
+        'right': 'Turn right',
+        'slight-left': 'Bear left',
+        'slight-right': 'Bear right',
+        'sharp-left': 'Sharp left',
+        'sharp-right': 'Sharp right',
+    }
+    return words.get(maneuver, 'Continue') + onto
+
+
+def _build_steps(legs: list[dict], coordinates: list) -> list[dict]:
+    """Collapse routed legs into turn-by-turn steps.
+
+    A new step starts when the street name changes or the bearing swings more
+    than [STEP_TURN_MIN_DEG]; everything else accumulates into the step in
+    progress, the way Google/Komoot report "continue for 0.4 mi".
+    """
+    steps: list[dict] = []
+    prev_out_bearing: float | None = None
+
+    for leg in legs:
+        coords = leg['coords']
+        if len(coords) < 2:
+            continue
+        in_bearing = _bearing(coords[0], coords[1])
+        out_bearing = _bearing(coords[-2], coords[-1])
+        if prev_out_bearing is None:
+            maneuver, delta = 'depart', 0.0
+        else:
+            delta = ((in_bearing - prev_out_bearing + 540.0) % 360.0) - 180.0
+            maneuver = _maneuver(delta)
+
+        # Connector edges are synthetic gap-crossers with no street name; they
+        # belong to whatever step they interrupt, not to a maneuver of their own.
+        # Unnamed legs likewise continue whatever the rider is already on.
+        continues = bool(steps) and (
+            steps[-1]['name'] == _titleize(leg['name'])
+            or leg['category'] == 'connector'
+            or not leg['name']
+        )
+        # A street that curves stays one step; only a real corner splits it.
+        limit = STEP_SAME_STREET_TURN_DEG if continues else STEP_TURN_MIN_DEG
+        if steps and continues and abs(delta) < limit:
+            steps[-1]['distance_m'] += leg['length_m']
+        else:
+            steps.append({
+                'maneuver': maneuver,
+                'name': _titleize(leg['name']),
+                'category': leg['category'],
+                'instruction': _instruction(
+                    maneuver, leg['name'], in_bearing,
+                    prev_name=steps[-1]['name'] if steps else None,
+                ),
+                'distance_m': leg['length_m'],
+                'start_index': leg['start_index'],
+                'location': list(coords[0]),
+                'bearing': round(in_bearing, 1),
+            })
+        prev_out_bearing = out_bearing
+
+    # Fold away hops too short to announce ("in 40 ft, turn left, then turn
+    # right" is worse than one instruction).
+    merged: list[dict] = []
+    for step in steps:
+        if merged and step['distance_m'] < STEP_MIN_M and step['maneuver'] != 'depart':
+            merged[-1]['distance_m'] += step['distance_m']
+            continue
+        merged.append(step)
+    steps = merged
+
+    # A hair-length depart leg (origin -> snapped node) is noise; promote the
+    # first real step to the departure instead.
+    if (
+        len(steps) > 1
+        and steps[0]['maneuver'] == 'depart'
+        and steps[0]['distance_m'] < STEP_MIN_M
+    ):
+        head, nxt = steps.pop(0), steps[0]
+        nxt['distance_m'] += head['distance_m']
+        nxt['start_index'] = head['start_index']
+        nxt['location'] = head['location']
+        nxt['maneuver'] = 'depart'
+        nxt['instruction'] = _instruction('depart', nxt['name'], nxt['bearing'])
+
+    if coordinates:
+        steps.append({
+            'maneuver': 'arrive',
+            'name': None,
+            'category': None,
+            'instruction': _instruction('arrive', None, 0.0),
+            'distance_m': 0.0,
+            'start_index': len(coordinates) - 1,
+            'location': list(coordinates[-1]),
+        })
+    for step in steps:
+        step['distance_m'] = round(step['distance_m'], 1)
+        step['duration_min'] = round(
+            step['distance_m'] / ROUTE_SPEED_M_S / 60, 2
+        )
+    return steps
+
+
 def _route(
     from_lat: float,
     from_lon: float,
@@ -776,11 +953,19 @@ def _route(
     if start_d > ROUTE_SNAP_MAX_M or goal_d > ROUTE_SNAP_MAX_M:
         raise ValueError("No bikeable network near that point.")
 
+    legs: list[dict] = []
     if start == goal:
         nlat, nlon = graph['nodes'][start]
         coordinates = [[from_lon, from_lat], [nlon, nlat], [to_lon, to_lat]]
         distance_m = start_d + goal_d
         breakdown: dict[str, float] = {}
+        legs.append({
+            'coords': coordinates,
+            'name': None,
+            'category': None,
+            'length_m': distance_m,
+            'start_index': 0,
+        })
     else:
         path = _astar(graph, start, goal)
         if path is None:
@@ -791,14 +976,24 @@ def _route(
         for _node, edge in path:
             if edge is None:
                 continue
-            _nbr, _w, length_m, category, coords, is_reversed = edge
+            _nbr, _w, length_m, category, coords, is_reversed, name = edge
             seg = list(reversed(coords)) if is_reversed else list(coords)
+            start_index = max(len(coordinates) - 1, 0)
+            leg_coords = [coordinates[-1]] + seg if coordinates else list(seg)
             if coordinates and coordinates[-1] == seg[0]:
                 seg = seg[1:]
+                leg_coords = [coordinates[-1]] + seg
             coordinates.extend(seg)
             distance_m += length_m
             key = str(category or 'unknown')
             breakdown[key] = breakdown.get(key, 0.0) + length_m
+            legs.append({
+                'coords': leg_coords,
+                'name': name,
+                'category': category,
+                'length_m': length_m,
+                'start_index': start_index,
+            })
         coordinates.append([to_lon, to_lat])
 
     return {
@@ -806,10 +1001,12 @@ def _route(
         'geometry': {'type': 'LineString', 'coordinates': coordinates},
         'properties': {
             'distance_m': round(distance_m, 1),
+            'distance_mi': round(distance_m / 1609.344, 2),
             'duration_min': round(distance_m / ROUTE_SPEED_M_S / 60, 1),
             'stress_breakdown': {k: round(v, 1) for k, v in breakdown.items()},
             'from_snap_m': round(start_d, 1),
             'to_snap_m': round(goal_d, 1),
+            'steps': _build_steps(legs, coordinates),
         },
     }
 

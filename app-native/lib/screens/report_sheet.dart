@@ -192,13 +192,14 @@ class _ReportSheetState extends State<ReportSheet> {
                     ),
                     child: Row(
                       children: [
-                        const Icon(Icons.forward_to_inbox,
+                        const Icon(Icons.place_outlined,
                             color: brandGreen, size: 20),
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            'Near ${_roadInfo?['name'] ?? 'this road'} — '
-                            'BWG will forward this to $owner.',
+                            'Near ${_roadInfo?['name'] ?? 'this road'}, '
+                            'maintained by $owner. Your report will appear on '
+                            'the BWG map.',
                             style: const TextStyle(fontSize: 13),
                           ),
                         ),

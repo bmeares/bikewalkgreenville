@@ -59,6 +59,13 @@ class LayerDef {
   final bool defaultOn;
   final IconData icon;
 
+  /// Point layers only: hide the symbols until this zoom so the map isn't a
+  /// soup of dots at city scale. 0 = always drawn.
+  final double minZoom;
+
+  /// Point layers only: pin size multiplier at the reference zoom.
+  final double pinScale;
+
   const LayerDef({
     required this.id,
     required this.label,
@@ -70,13 +77,15 @@ class LayerDef {
     this.width = 2.5,
     this.defaultOn = true,
     this.icon = Icons.timeline,
+    this.minZoom = 0,
+    this.pinScale = 1.0,
   });
 }
 
 const layerDefs = <LayerDef>[
   LayerDef(
     id: 'bike-stress',
-    label: 'Bike stress (PCC)',
+    label: 'Bike stress',
     path: '/map-layers/bike-stress.geojson',
     color: '#1a9850',
     colorByStress: true,
@@ -96,12 +105,12 @@ const layerDefs = <LayerDef>[
   ),
   LayerDef(
     id: 'srt',
-    label: 'Swamp Rabbit Trail',
+    label: 'Prisma Health Swamp Rabbit Trail',
     path: '/map-layers/srt.geojson',
     color: '#FF6F00',
     width: 3.5,
     modes: {TravelMode.cyclist, TravelMode.pedestrian},
-    icon: Icons.forest,
+    icon: Icons.cruelty_free, // Material's rabbit
   ),
   LayerDef(
     id: 'sidewalks-city',
@@ -138,6 +147,8 @@ const layerDefs = <LayerDef>[
     isPoint: true,
     modes: {TravelMode.transit},
     icon: Icons.directions_bus,
+    minZoom: 13,
+    pinScale: 0.85,
   ),
   LayerDef(
     id: 'bike-parking',
@@ -147,6 +158,7 @@ const layerDefs = <LayerDef>[
     isPoint: true,
     modes: {TravelMode.cyclist},
     icon: Icons.local_parking,
+    minZoom: 13,
   ),
   LayerDef(
     id: 'repair-stations',
@@ -156,7 +168,9 @@ const layerDefs = <LayerDef>[
     isPoint: true,
     modes: {TravelMode.cyclist},
     icon: Icons.build,
+    minZoom: 11,
   ),
+  // Community reports are the point of the app — always on, always drawn.
   LayerDef(
     id: 'reports',
     label: 'Reported issues',
@@ -164,10 +178,14 @@ const layerDefs = <LayerDef>[
     color: '#F9A825',
     isPoint: true,
     modes: {TravelMode.cyclist, TravelMode.pedestrian, TravelMode.transit},
-    defaultOn: false,
     icon: Icons.report_problem,
+    pinScale: 1.15,
   ),
 ];
+
+/// `#rrggbb` (as stored in [LayerDef.color]) → a Flutter [Color].
+Color hexColor(String hex) =>
+    Color(int.parse('ff${hex.replaceFirst('#', '')}', radix: 16));
 
 ThemeData buildTheme() => ThemeData(
       colorScheme: ColorScheme.fromSeed(seedColor: brandGreen),

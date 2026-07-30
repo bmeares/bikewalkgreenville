@@ -3,8 +3,12 @@
 
 """
 Walk Audit: accept accessibility-issue reports from the BWG app, resolve the
-responsible office from "Who Owns The Roads" data, store the report, and
-forward it by email from data@bikewalkgreenville.org.
+responsible office from "Who Owns The Roads" data, and store the report so it
+shows up on the map.
+
+Reports are NOT forwarded to municipal offices. Owner resolution is stored with
+each report (useful for later analysis and for the app's contact card), and an
+optional notification email goes to BWG staff only.
 
 Routes (mounted on the Meerschaum API FastAPI app, i.e. https://bwg.mrsm.io):
 
@@ -13,17 +17,23 @@ Routes (mounted on the Meerschaum API FastAPI app, i.e. https://bwg.mrsm.io):
   GET  /walk-audit/reports.geojson  -> FeatureCollection of submitted reports
   GET  /walk-audit/categories.json  -> report categories for the app UI
 
-Owner resolution: nearest segment in "Roads".roads (KNN, SRID 6570). If the
-owner has no email (e.g. SCDOT), the report is stored with the owner's online
-form URL and the email goes to BWG staff only.
+Owner resolution: nearest segment in "Roads".roads (KNN, SRID 6570).
 
-SMTP config from the environment (root .env / prod container env):
-  MRSM_SMTP_HOST, MRSM_SMTP_PORT, MRSM_SMTP_USER, MRSM_SMTP_PASSWORD
-  MRSM_WALK_AUDIT_TEST_RECIPIENT  -- while set, ALL mail goes here instead of
-                                     the resolved office (pre-launch safety).
+Config lives under the `plugins:walk-audit` Meerschaum config keys (set via a
+compose project file locally, or the API container's config in prod):
+
+  plugins:
+    walk-audit:
+      smtp:
+        host, port, username, password
+      notify:
+        enabled: true          # false disables staff email entirely
+        recipient: ...         # defaults to smtp:username
+
+The repo is public — never commit literal credentials; interpolate them from
+the environment in the compose file.
 """
 
-import os
 import threading
 
 import meerschaum as mrsm
@@ -124,37 +134,39 @@ def _photos_dir():
     return photos_dir
 
 
-def _env(key: str) -> str | None:
-    """Environment first, then `<root>/.env` (the api container has no
-    stack-level env hook for plugin secrets)."""
-    if key in os.environ:
-        return os.environ[key]
+def _cfg(*keys, default=None):
+    """Read a `plugins:walk-audit` config value; `default` when unset."""
     try:
-        from meerschaum.config.paths import ROOT_DIR_PATH
-        env_path = ROOT_DIR_PATH / '.env'
-        if env_path.exists():
-            for line in env_path.read_text().splitlines():
-                line = line.strip()
-                if line.startswith(f'{key}='):
-                    return line.split('=', 1)[1].strip().strip('"\'')
+        value = mrsm.get_config(
+            'plugins', 'walk-audit', *keys,
+            warn=False,
+            write_missing=False,
+        )
     except Exception:
-        pass
-    return None
+        return default
+    return default if value is None or value == '' else value
+
+
+def _notify_recipient() -> str | None:
+    """The BWG staff inbox notified on each report (never a municipal office)."""
+    if not _cfg('notify', 'enabled', default=True):
+        return None
+    return _cfg('notify', 'recipient') or _cfg('smtp', 'username')
 
 
 def _send_report_email(report: dict, photo_path=None) -> str | None:
-    """Send the report from data@bikewalkgreenville.org. Returns the recipient
-    actually used, or None if sending is unconfigured/failed."""
-    host = _env('MRSM_SMTP_HOST')
-    user = _env('MRSM_SMTP_USER')
-    password = _env('MRSM_SMTP_PASSWORD')
-    port = int(_env('MRSM_SMTP_PORT') or '587')
-    if not (host and user and password):
-        warn("walk-audit: MRSM_SMTP_* unset; report stored but not emailed.")
+    """Notify BWG staff from data@bikewalkgreenville.org. Reports are never
+    emailed to municipal offices. Returns the recipient used, or None."""
+    host = _cfg('smtp', 'host')
+    user = _cfg('smtp', 'username')
+    password = _cfg('smtp', 'password')
+    port = int(_cfg('smtp', 'port', default=587))
+    recipient = _notify_recipient()
+    if not recipient:
         return None
-
-    # Pre-launch safety: while the test recipient is set, never email offices.
-    recipient = _env('MRSM_WALK_AUDIT_TEST_RECIPIENT') or report.get('owner_email') or user
+    if not (host and user and password):
+        warn("walk-audit: plugins:walk-audit:smtp unset; report stored but not emailed.")
+        return None
 
     category = CATEGORY_LABELS.get(report.get('category'), report.get('category') or 'Issue')
     road = report.get('road_name') or 'unknown road'
@@ -163,22 +175,19 @@ def _send_report_email(report: dict, photo_path=None) -> str | None:
 
     lines = [
         "A walk audit report was submitted through the Bike Walk Greenville app.",
+        "It is now visible on the app's map; it has NOT been sent to any office.",
         "",
         f"Issue: {category}",
         f"Nearest road: {road} ({report.get('road_type') or 'unknown type'})",
-        f"Responsible office: {owner}",
+        f"Likely responsible office: {owner}",
         f"Location: {report['lat']:.6f}, {report['lon']:.6f}",
         f"Map: {maps_link}",
         "",
         f"Reporter comment:\n{report.get('comment') or '(none)'}",
         "",
+        f"Report ID: {report['id']}",
+        "-- Bike Walk Greenville Data Analytics",
     ]
-    if not report.get('owner_email'):
-        lines.append(
-            f"NOTE: {owner} has no email contact; submit via their online form: "
-            f"{report.get('owner_form') or 'N/A'}"
-        )
-    lines += ["", f"Report ID: {report['id']}", "-- Bike Walk Greenville Data Analytics"]
 
     import smtplib
     from email.message import EmailMessage
@@ -259,17 +268,20 @@ def init_app(app):
             'owner_email': road.get('owner_email'),
             'owner_phone': road.get('owner_phone'),
             'owner_form': road.get('owner_form'),
-            'forwarded_to': None,
+            # Staff notification inbox, not a municipal office (see module docs).
+            'forwarded_to': _notify_recipient(),
             'ip': client.host if client else None,
             'user_agent': request.headers.get('user-agent'),
         }
 
-        # Email + store off the request thread; one sync so the row carries
-        # the actual recipient (autotime would dupe on a second sync).
-        def _forward():
-            recipient = _send_report_email(report, photo_path)
-            REPORTS_PIPE.sync([{**report, 'forwarded_to': recipient}])
-        threading.Thread(target=_forward, daemon=True).start()
+        # Store synchronously so the app can refresh the reports layer and see
+        # the new pin immediately; the staff email goes out off-thread.
+        REPORTS_PIPE.sync([report])
+        threading.Thread(
+            target=_send_report_email,
+            args=(report, photo_path),
+            daemon=True,
+        ).start()
         return JSONResponse({
             'ok': True,
             'id': rec_id,

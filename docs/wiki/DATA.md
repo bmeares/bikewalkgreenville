@@ -20,7 +20,7 @@ Anything served to the app must `ST_Transform(geom, 4326)`. `pcc.stress_levels.g
 | Bike lanes/infra | `city.BicycleInfrastructure` | 919 | `STATUS` EXISTING/PROPOSED, `BIKE_TYPE` BIKELANE 588 / SHARROW 322 / GREENWAY 9; city limits only |
 | Trails / SRT | `city.Trails` (542), `city.ApprovedTrails` (72), `gcgis."PRISMA Health Swamp Rabbit Trail"` (305), `SRT.segments*` | | `SRT.segments_owners` carries maintenance contacts per segment |
 | Sidewalks | `county.sidewalks` (18,493 lines), `Sidewalks.sidewalks` (5,325 city **polygons**), `Sidewalks.streets_with_sidewalks` (3,103) | | `Sidewalks.county_sidewalks` is EMPTY (dead) |
-| Bus/transit | `transit.routes` (16), `transit.stops` (997, w/ routes-served + Point 4326), `transit.route_shapes` (31 LineString 4326 w/ official colors) | | Greenlink GTFS (`plugins/gtfs.py`, `projects/transit.yaml`, feed `gtfs.greenlink.cadavl.com`); supersedes stale `city.BusRoutes`/`BusStops`. Schedules (stop_times) not yet ingested — headways/frequency a future step. Sync is manual for now: not in prod compose scheduler. |
+| Bus/transit | `transit.routes` (16), `transit.stops` (997, w/ routes-served + Point 4326), `transit.route_shapes` (31 LineString 4326 w/ official colors) | | Greenlink GTFS (`plugins/gtfs.py`, `projects/transit.yaml`, feed `gtfs.greenlink.cadavl.com`); supersedes stale `city.BusRoutes`/`BusStops`. Schedules (stop_times) not yet ingested — headways/frequency a future step. Synced daily in prod by the `transit` job inside `mrsm-api-bwg-1`. |
 | Bike parking | `BikeParking.parking_locations` | 283 | OSM Overpass `amenity=bicycle_parking`; lat/lon floats |
 | Bike repair stations | `BikeParking.repair_stations` | ~few | OSM `amenity=bicycle_repair_station` (added 2026-07) |
 | Roads/ownership (WOTR) | `Roads.roads` | 35,204 | Owner + Email/Phone/Online Form denormalized per segment; `Roads.contact_info` (20) is the municipal contact lookup (Greenville Cares `cares@greenvillesc.gov`, SCDOT MWRO, six cities, GCPRT…) |
@@ -34,7 +34,7 @@ Anything served to the app must `ST_Transform(geom, 4326)`. `pcc.stress_levels.g
 ### `plugins/map-layers.py`
 - `GET /map-layers/index.json` — layer registry (bus-routes, bus-stops, bike-lanes, sidewalks-city, sidewalks-county, srt, bike-stress)
 - `GET /map-layers/{layer}.geojson` — dissolved overview; `?bbox=&zoom=` → per-feature detail (limit 4000)
-- `GET /map-layers/route?from=lat,lon&to=lat,lon` — in-process A* over SRT + bike lanes + PCC stress (low-stress preference via `ROUTE_FACTORS`); `route-stats.json`
+- `GET /map-layers/route?from=lat,lon&to=lat,lon` — in-process A* over SRT + bike lanes + PCC stress (low-stress preference via `ROUTE_FACTORS`); `route-stats.json`. Response `properties.steps[]` is the turn-by-turn list the app narrates: `{maneuver, instruction, name, distance_m, duration_min, start_index, location, bearing}`. Street names come from `pcc.stress_levels.street_name` / `city.BicycleInfrastructure.STREET_NAM` (SRT legs are named "Swamp Rabbit Trail") and are title-cased; legs merge into one step unless the name changes or the bearing swings (`STEP_TURN_MIN_DEG` / `STEP_SAME_STREET_TURN_DEG`).
 - `GET /map-layers/search?q=` — bike parking ∪ bus stops ∪ `city."Addresses"` ∪ PCC street names, Nominatim fallback
 - `POST /map-layers/feedback` — generic report → `MapLayers.layer_feedback` (photos → `<root>/uploads/map-layers/`)
 
@@ -45,7 +45,7 @@ Anything served to the app must `ST_Transform(geom, 4326)`. `pcc.stress_levels.g
 Both POST endpoints: **no auth, no rate limit, no moderation column** — known risk, revisit before public launch.
 
 ### `plugins/walk-audit.py` (added 2026-07)
-- `POST /walk-audit/submit` — category + comment + photo + lat/lon → nearest-road owner resolution via `Roads.roads` → stored in `app/reports/WalkAudit` → SMTP from `data@bikewalkgreenville.org` (creds: `.env` `MRSM_SMTP_*`; recipient pinned to `MRSM_WALK_AUDIT_TEST_RECIPIENT` until go-live). SCDOT has no email → report stores/links its Online Form instead.
+- `POST /walk-audit/submit` — category + comment + photo + lat/lon → nearest-road owner resolution via `Roads.roads` → stored **synchronously** in `app/reports/WalkAudit` (so the app can refresh the reports layer and see the new pin), then a staff-only notification email is sent off-thread. **Reports are never forwarded to municipal offices**; owner resolution is stored for analysis and for the app's contact card. SMTP + recipient come from Meerschaum config `plugins:walk-audit:{smtp,notify}` — locally via `mrsm-compose.yaml` (interpolated from `.env`, repo is public), in prod from the API container's `/meerschaum/config/plugins.json`. The old `/meerschaum/.env` hack is gone.
 - `GET /walk-audit/reports.geojson` — submitted issues layer
 - `GET /map-layers/road-info?lat=&lon=` — nearest road contact card (WOTR-on-tap)
 

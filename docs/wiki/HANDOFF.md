@@ -1,58 +1,87 @@
-# Handoff — continue on host `omega` (repo at `~/projects/bikewalkgreenville`)
+# Handoff — work continues on host `omega` (repo at `~/projects/bikewalkgreenville`)
 
-Written 2026-07-30 at end of session on Bennett's laptop. Read this + `DATA.md` before touching anything.
+Updated 2026-07-30 (session on omega). Read this + `DATA.md` before touching anything.
 
 ## ⚠️ Repo is PUBLIC on GitHub
 
-`gh repo view bmeares/bikewalkgreenville` → PUBLIC. **Never commit secrets** — no SMTP passwords, no keystores, no connection strings. `.gitignore` already covers `.env`, `keystore.properties`, `*.keystore`, `*.jks`. Bennett asked to move SMTP config from env vars into the Meerschaum compose project file — because the repo is public, the compose file must reference host config (e.g. `MRSM{plugins:walk-audit:smtp}` style) or interpolate, with real values living only in the prod stack file / local host config. Do NOT put the app password literal in any committed YAML.
+`gh repo view bmeares/bikewalkgreenville` → PUBLIC. **Never commit secrets** — no SMTP passwords, no keystores, no connection strings. `.gitignore` covers `.env`, `keystore.properties`, `*.keystore`, `*.jks`. Plugin config in `mrsm-compose.yaml` interpolates from the environment (`$MRSM_SMTP_*`); real values live only in the untracked `.env` and in the prod container's config.
 
-## State as of this commit (all TESTED and DEPLOYED)
+## State (all TESTED; backend DEPLOYED)
 
-- **`app-native/`** — native Flutter rewrite (replaces Flet `bwg_app/`, which is retired reference). Map-first MapLibre GL app, signed APK verified on Bennett's Pixel 8 Pro. v1.0.0+30, applicationId `org.bikewalkgreenville.app`. All features e2e-tested on device: mode switch (Bike/Walk/Transit), all layers render, search, low-stress routing from GPS, walk-audit report submit (landed in prod DB), feature tap sheets, WOTR contact card, tools screen.
-- **Backend live on bwg.mrsm.io**: `plugins/walk-audit.py` (submit/reports.geojson/categories), `plugins/gtfs.py` (Greenlink ingest), `/map-layers/road-info` (nearest-road contact KNN), `/bike-parking/repair-stations.geojson`, GTFS-backed `bus-routes`/`bus-stops` layers (16 routes w/ official colors, 997 stops). `WalkAudit.reports` table is empty (test rows cleaned).
-- **Prod deploy method used**: `scp` plugin → VPS `/tmp` → `docker cp` into `mrsm-api-bwg-1:/meerschaum/plugins/` → `docker restart mrsm-api-bwg-1`. Plugins live in docker volume `mrsm_bwg_api_root`, NOT a repo bind mount. VPS repo checkout (`meerschaum@mrsm.io:~/projects/bikewalkgreenville`, ssh port 2269) is at old commit `4af090e` — needs `git pull` after this push.
-- **BWG Meerschaum jobs run INSIDE the api container** (`mrsm-api-bwg-1`), alongside `who-owns-the-roads` etc. New projects (`transit.yaml`, walk-audit) are NOT yet registered as prod jobs — that's pending work (below).
-- `sql:bwg` direct connection + prod port mapping: Bennett FIXED both (host connects fine now, no tunnel needed). The SSH-tunnel workaround in memory/wiki is obsolete.
+- **`app-native/`** — native Flutter app (map-first, MapLibre GL), v**1.1.0+31**, applicationId `org.bikewalkgreenville.app`. `flutter analyze` clean, `flutter test` 8/8 green, signed release APK + AAB built on omega (signer SHA-1 `537F9A88…A843`, the shared SRA upload key).
+  - `build/app/outputs/flutter-apk/app-release.apk` (86 MB)
+  - `build/app/outputs/bundle/release/app-release.aab` (58 MB)
+- **Backend live on bwg.mrsm.io**: `plugins/walk-audit.py`, `plugins/map-layers.py` (now serving turn-by-turn `steps`), `plugins/bike-parking.py`, `plugins/gtfs.py`.
+- **Prod jobs registered** inside `mrsm-api-bwg-1`: `transit` (daily GTFS sync) and `bike-parking` (daily Overpass sync), alongside `annex-watch`, `trails-output`, `duke`, `who-owns-the-roads`, `parking`. Both verified running with successful first syncs (`mrsm show logs <job>`).
+- **walk-audit config** moved off env vars onto Meerschaum config (`plugins:walk-audit:{smtp,notify}`). Prod values live in the container volume at `/meerschaum/config/plugins.json` (chmod 600); the `/meerschaum/.env` hack has been **deleted**.
+- `WalkAudit.reports` is empty (the deploy-check row was removed).
 
-## Secrets — ALREADY PLACED ON OMEGA (2026-07-30)
+### Shipped this session
 
-Copied via scp at handoff, all gitignored there, chmod 600:
-- `~/projects/bikewalkgreenville/.env` — `FELT_API_TOKEN`, `MRSM_SMTP_*` (data@bikewalkgreenville.org app password), `MRSM_WALK_AUDIT_TEST_RECIPIENT`, **`MRSM_SQL_BWG`** (full prod DB URI — compose works without host-config setup).
-- `~/projects/bikewalkgreenville/app-native/keystore.properties` + `sra-upload.keystore` — shared SRA upload key (same as trail-counter/anchored, both also cloned on omega), alias `sra-upload`, SHA-1 `537F9A88AAB6623CFA91F0FBABCE6F95E705A843`.
+1. **No more forwarding language.** Reports are stored and shown on the map; only a staff notification email goes out (to `data@…`, never to an office). Owner resolution is still stored per report. Banner in `report_sheet.dart`, post-submit toast, `RoadInfoSheet` note and the `tools_screen.dart` blurb all reworded.
+2. **Reports layer is prominent**: `defaultOn: true`, always drawn (`iconAllowOverlap`), larger pin, and `_refreshReports()` re-fetches the layer right after a submit — the server now writes the row synchronously so the new pin appears immediately.
+3. **Layer polish**: SRT → "Prisma Health Swamp Rabbit Trail" + `Icons.cruelty_free`; "Bike stress" (dropped " (PCC)").
+4. **Dot soup killed**: point layers render Material-icon teardrop pins (`lib/map_icons.dart` paints them to PNG at the device pixel ratio → `addImage` → `addSymbolLayer` with zoom-interpolated `iconSize`). Per-layer `minZoom` (bus stops/bike parking 13, repair 11); the layers sheet shows "Zoom in to see these" when a layer is below its zoom.
+5. **Selection feedback**: `HapticFeedback.selectionClick()` on every feature tap + a `highlight` GeoJSON source (wide translucent line / ring circle, added between the line and pin layers) cleared when the sheet closes.
+6. **WOTR tools entry** expands into three sublinks: search dashboard, Felt map, and the `bikewalkgreenville.org/roads` story.
+7. **Turn-by-turn navigation** (new): see below.
 
-If ever lost: keystore + its passwords in Google Drive folder "Backup" (search `sra-upload`); SMTP password also in prod api container (`ssh -p 2269 meerschaum@mrsm.io docker exec mrsm-api-bwg-1 cat /meerschaum/.env`); otherwise ask Bennett.
+### Turn-by-turn navigation
 
-Omega must still provide its own toolchain: Flutter 3.38.x, Android SDK 36 + platform-tools, **JDK 21** (update the `org.gradle.java.home` path in `app-native/android/gradle.properties` if omega's JDK 21 lives elsewhere — laptop path was `/usr/lib/jvm/java-21-temurin-jdk`).
+- Backend (`plugins/map-layers.py`): routing edges now carry street names; `/map-layers/route` returns `properties.steps[]` (maneuver, instruction, name, distance, `start_index`, location, bearing) plus `distance_mi`. Legs merge into one step unless the street name changes or the bearing swings past `STEP_TURN_MIN_DEG` (22°, or 60° when staying on the same street); sub-25 m steps fold away, and a hair-length depart leg is promoted into the first real step.
+- App: `lib/nav.dart` (`NavRoute`, `RouteStep`, `NavProgress` — snap-to-polyline, current step, distance to maneuver, off-route distance, imperial formatting; covered by `test/nav_test.dart`), driven from `map_screen.dart`:
+  - Route preview banner → **Start** enters navigation.
+  - Course-up follow camera (zoom 17, tilt 45, GPS heading while moving), maneuver card with "then …" preview, bottom trip bar (ETA + distance left, Steps sheet, End), voice mute toggle.
+  - Voice prompts via `flutter_tts` at ~230 m and again at ~45 m; screen kept awake with `wakelock_plus`.
+  - Off-route: 3 consecutive fixes >45 m → "Rerouting" + silent re-route from the current position. Arrival at <25 m remaining.
+- New deps: `flutter_tts`, `wakelock_plus`.
 
-## PENDING WORK (Bennett's last instructions, not yet done)
+## NOT yet done / next up
 
-1. **Config rework**: walk-audit plugin currently reads `MRSM_SMTP_*` env vars with `<root>/.env` file fallback (`_env()` in `plugins/walk-audit.py`). Replace with Meerschaum config (`mrsm.get_config('plugins', 'walk-audit', ...)`); set values in a compose project file locally (secret-free — see PUBLIC warning) and in the prod Meerschaum stack file for the api container. Remove the `/meerschaum/.env` hack afterward.
-2. **Deploy prod jobs**: register/schedule the new compose projects (`projects/transit.yaml` daily GTFS sync; bike-parking already has repair_stations pipe) as jobs inside the api container, alongside existing ones (`who-owns-the-roads` etc.). Inspect how existing jobs are defined in the container first (`docker exec mrsm-api-bwg-1 mrsm show jobs`).
-3. **Feature change — forwarding removed (pending Jasmine)**: submissions should be visible on the map, NOT forwarded to municipal offices (Bennett will confirm with Jasmine whether forwarding happens at all). Remove ALL user-facing "BWG will forward this to X" mentions: the owner banner in `app-native/lib/screens/report_sheet.dart`, the post-submit toast in `map_screen.dart` (`_openReportSheet`), the note in `tools_screen.dart`, and reconsider the email send in `walk-audit.py` (keep internal notification to data@ at most; keep owner resolution stored in DB — useful later). Make the `reports` layer (`/walk-audit/reports.geojson`) prominent: `defaultOn: true`, refresh its source after a successful submit so the new pin appears immediately.
-4. **Layer polish** (`app-native/lib/theme.dart`):
-   - SRT: label **"Prisma Health Swamp Rabbit Trail"**, rabbit icon (`Icons.cruelty_free` is Material's rabbit).
-   - Bike stress: label "Bike stress" (drop " (PCC)").
-5. **Point rendering — kill the dot soup**: uniform teal/purple circles everywhere overwhelm the map. Use proper icons/pins per layer (bus, parking P, wrench, warning): render Material icons to PNG via Flutter `TextPainter`/canvas → `controller.addImage()` → `addSymbolLayer` with `iconImage`, `iconSize` zoom-interpolated. Add `minzoom` per point layer (bus stops ~13, bike parking ~13, repair ~11) so points appear on zoom-in; consider circle→icon swap at zoom threshold.
-6. **Selection feedback**: tapping a feature should (a) fire `HapticFeedback.selectionClick()`, (b) visually highlight the tapped feature (dedicated `highlight` geojson source + wide translucent line layer / ring circle layer, populated from the tapped feature's geometry, cleared when the sheet closes). Today it's unclear whether a tap registered.
-7. **Commit/deploy when finished** (Bennett's standing instruction for this batch).
+1. **On-device testing of everything above.** No Android device was attached to omega this session, so pins, haptics, highlight, voice guidance and the follow camera are untested on hardware. Sideload the APK and ride/walk a route before promoting. `adb uninstall org.bikewalkgreenville.app` first if a debug build is installed.
+2. **Jasmine's call on forwarding** — the app no longer promises forwarding anywhere. If BWG decides to forward after all, the owner contact info is still stored per report.
+3. **Play upload** when ready: the AAB above; `gplay release --package org.bikewalkgreenville.app --bundle build/app/outputs/bundle/release/app-release.aab --track internal --wait`; listing assets pattern in trail-counter `app-native/play/`.
+4. Optional: `stop_times` ingest for headways; moderation/rate limiting on the public POST endpoints (still none — see DATA.md "Gaps").
+
+## Secrets (present on omega, all gitignored, chmod 600)
+
+- `~/projects/bikewalkgreenville/.env` — `FELT_API_TOKEN`, `MRSM_SMTP_*`, **`MRSM_WALK_AUDIT_NOTIFY_RECIPIENT`** (renamed from `…_TEST_RECIPIENT`), `MRSM_SQL_BWG`.
+- `~/projects/bikewalkgreenville/app-native/keystore.properties` + `sra-upload.keystore` — shared SRA upload key, alias `sra-upload`, SHA-1 `537F9A88AAB6623CFA91F0FBABCE6F95E705A843`.
+
+If lost: keystore + passwords in Google Drive "Backup" (search `sra-upload`); SMTP creds now also in the prod container at `/meerschaum/config/plugins.json`; otherwise ask Bennett.
+
+## Toolchain on omega
+
+Flutter `~/flutter-sdk`, Android SDK `~/Android/Sdk` (build-tools 36), **JDK 21 at `~/sdk/jdk21`** — `app-native/android/gradle.properties` pins `org.gradle.java.home=/home/bmeares/sdk/jdk21` (system JDK is 25, which maplibre_gl won't build with). Change that line if the repo moves hosts again.
+
+## Prod deploy procedure
+
+Plugins live in the docker volume `mrsm_bwg_api_root`, not a bind mount:
+
+```bash
+scp -P 2269 plugins/<plugin>.py meerschaum@mrsm.io:/tmp/
+ssh -p 2269 meerschaum@mrsm.io \
+  'docker cp /tmp/<plugin>.py mrsm-api-bwg-1:/meerschaum/plugins/ && docker restart mrsm-api-bwg-1'
+```
+
+Jobs run inside the same container: `docker exec mrsm-api-bwg-1 mrsm show jobs`, create with e.g.
+`docker exec mrsm-api-bwg-1 mrsm sync pipes -t transit -s daily --name transit -d -y`.
+
+The VPS repo checkout (`meerschaum@mrsm.io:~/projects/bikewalkgreenville`, ssh port 2269) still needs a `git pull`.
 
 ## Hard-won findings (do not rediscover)
 
 - **maplibre_gl 0.26.2 fork quirks**:
-  - Feature taps do NOT fire `onMapClick` — layers added with `enableInteraction` (default true) route taps to `controller.onFeatureTapped` callbacks `(point, latLng, id, layerId, annotation)`; `featureTapsTriggersMapClick: false` by default. `map_screen.dart` `_onFeatureTap` then queries props via `queryRenderedFeaturesInRect` (logical px first, device-px fallback). Route/pin overlay layers use `enableInteraction: false` so they don't swallow taps.
-  - Needs **JDK 21** (`sourceCompatibility 21`); Flutter's configured JDK is 17 → pinned via `org.gradle.java.home=/usr/lib/jvm/java-21-temurin-jdk` in `app-native/android/gradle.properties` (adjust path for omega's JDK 21).
+  - Feature taps do NOT fire `onMapClick`; layers added with `enableInteraction` (default true) route taps to `controller.onFeatureTapped`. `map_screen.dart` `_onFeatureTap` queries props via `queryRenderedFeaturesInRect` (logical px first, device-px fallback). Route/pin/highlight overlays use `enableInteraction: false` so they don't swallow taps.
+  - Layer draw order = insertion order: lines → highlight → symbol pins → route → pin.
+  - `addImage` bitmaps are drawn in physical pixels — render them at `MediaQuery.devicePixelRatio` or they come out tiny on 3x screens.
+  - Needs **JDK 21** (`sourceCompatibility 21`); Flutter's configured JDK is 17 → pinned in `android/gradle.properties`.
+- Material icon glyphs rendered by code point survive `flutter build`'s icon tree-shaking only because the `IconData`s are `const` in `theme.dart`/`nav.dart`. Keep them const.
 - **Release builds strip all logs** — debug with `flutter run --debug` when a callback silently doesn't fire.
-- `flutter create` scaffold trap: changing applicationId requires moving `MainActivity.kt` to the matching package dir or launch crashes `ClassNotFoundException`.
 - Debug↔release reinstall needs `adb uninstall` (signature mismatch); release↔release upgrades in place ONLY if pubspec `+N` increases.
-- Basemap: OpenFreeMap Liberty (`https://tiles.openfreemap.org/styles/liberty`), keyless. GeoJSON layer endpoints consumed directly as MapLibre sources — no vector-tile infra needed.
-- Local API dev loop: `mrsm compose start api --port 8899` (repo plugins loaded) + `adb reverse tcp:8899 tcp:8899`; app's Dio client (lib/api.dart) pins prod-then-localhost:8899. Local venv needed `mrsm compose install packages python-multipart` once.
+- Basemap: OpenFreeMap Liberty (`https://tiles.openfreemap.org/styles/liberty`), keyless. GeoJSON endpoints are consumed directly as MapLibre sources — no vector-tile infra.
+- Local API dev loop: `mrsm compose start api --port 8899` + `adb reverse tcp:8899 tcp:8899`; the app's Dio client pins prod-then-localhost:8899.
 - `mrsm` CLI: `-f` = `--force`, use `--file`; `up --dry` registers pipes; `mrsm sql bwg "<query>"` executes raw SQL (writes too, `-y`).
-- Greenlink GTFS feed: `https://gtfs.greenlink.cadavl.com/GTA/GTFS/GTFS_GTA.zip` (service dates through 2027-07). `stop_times` not ingested yet (headways future work).
-- Device UI driving (Pixel 8 Pro `46061FDJG00187` on Bennett's laptop — omega may differ): screen 1008x2244; screenshots read at 898x2000 → multiply by 1.12. `adb shell input swipe X Y X Y 900` = long-press. Grant location: `adb shell pm grant org.bikewalkgreenville.app android.permission.ACCESS_FINE_LOCATION`.
-- Play upload (when ready): `flutter build appbundle --release`; `gplay release --package org.bikewalkgreenville.app --bundle ... --track internal --wait`; listing assets pattern in trail-counter `app-native/play/`.
-
-## Cleanup notes
-
-- Two dead memory refs on the old laptop only (memory dir doesn't transfer hosts) — this file is the source of truth.
-- `WalkAudit.reports` cleaned of test rows; repair stations (13) + transit tables (16/997/31) are real synced data, keep.
-- Prod stack port mapping + external `sql:bwg` access: FIXED by Bennett post-session; ignore tunnel instructions in git history.
+- Greenlink GTFS feed: `https://gtfs.greenlink.cadavl.com/GTA/GTFS/GTFS_GTA.zip` (service dates through 2027-07).
+- OSM Overpass (`overpass-api.de`) 504s intermittently — the bike-parking job retries daily, so a failed run is not a code problem.
+- Device UI driving (Pixel 8 Pro on Bennett's laptop): screen 1008x2244; screenshots read at 898x2000 → multiply by 1.12. `adb shell input swipe X Y X Y 900` = long-press. Grant location: `adb shell pm grant org.bikewalkgreenville.app android.permission.ACCESS_FINE_LOCATION`.
