@@ -135,3 +135,7 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Flutter app source is not a Python venv lib dir
+!app-native/lib/
+!app-native/lib/**
