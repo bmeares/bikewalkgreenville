@@ -7,9 +7,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This repo contains two unrelated codebases that share data:
 
 1. **Meerschaum data pipeline** (repo root) — ETL + dashboards for Greenville traffic, road ownership, collisions, etc. Python plugins + YAML compose files.
-2. **`bwg_app/`** — Flet (Python) mobile app that surfaces the dashboards on Android/iOS.
+2. **`app-native/`** — native Flutter Android app (map-first, MapLibre GL). Replaces the legacy Flet app in `bwg_app/` (kept for reference; do not extend).
 
-They communicate only via the public dashboards at `bwg.mrsm.io`.
+They communicate only via HTTP endpoints at `bwg.mrsm.io` (GeoJSON layers, search, routing, report submission — see `docs/wiki/DATA.md`).
+
+**Data knowledge base: `docs/wiki/DATA.md`** — full schema/table inventory, SRID gotchas, feature→data mapping, and the app-facing endpoint catalog. Read it before touching map layers or app data flows.
+
+**Active work handoff: `docs/wiki/HANDOFF.md`** — pending task list, secrets-restore instructions, maplibre/build gotchas, prod deploy procedure. Read FIRST when resuming app work. NOTE: this repo is PUBLIC — never commit secrets.
 
 ## Meerschaum pipeline
 
@@ -130,4 +134,5 @@ Native controls beyond core Flet ship as **separate extension packages** that bu
 ## Cross-cutting
 
 - All dashboards consumed by `bwg_app` live under `bwg.mrsm.io/dash/<plugin>`, served by the Meerschaum Web container from this repo's plugins. Adding a new screen to the app generally means: write a `@dash_plugin` in `plugins/`, deploy the stack, then point the app at the URL.
-- `.env` at root holds the `sql:bwg` connection string (`MRSM_SQL_BWG`). Do not commit.
+- `.env` at root holds secrets (`FELT_API_TOKEN`, `MRSM_SMTP_*` for walk-audit email from data@bikewalkgreenville.org). Do not commit.
+- App signing: `app-native/keystore.properties` + `sra-upload.keystore` (gitignored; Google Drive backup). Shared SRA upload key — same as trail-counter/anchored.

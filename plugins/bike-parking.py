@@ -33,6 +33,18 @@ LOCATIONS_PIPE: mrsm.Pipe = mrsm.Pipe(
     instance='sql:bwg',
 )
 
+# Public bike repair stands (pump + tools), also OSM-sourced.
+REPAIR_PIPE: mrsm.Pipe = mrsm.Pipe(
+    'plugin:bike-parking', 'repair_stations', 'greenville',
+    instance='sql:bwg',
+)
+
+#: metric_key -> OSM amenity tag fetched for that pipe.
+METRICS_AMENITIES = {
+    'locations': 'bicycle_parking',
+    'repair_stations': 'bicycle_repair_station',
+}
+
 # User-submitted photos + feedback.
 FEEDBACK_PIPE: mrsm.Pipe = mrsm.Pipe(
     'app', 'feedback', 'BikeParking',
@@ -61,14 +73,15 @@ FEEDBACK_PIPE: mrsm.Pipe = mrsm.Pipe(
 
 
 def fetch(pipe: mrsm.Pipe, debug: bool = False, **kwargs):
-    """Fetch OSM `amenity=bicycle_parking` points for greater Greenville
-    (Overpass API). Returns docs for the locations pipe."""
+    """Fetch OSM amenity points for greater Greenville (Overpass API).
+    The amenity tag is chosen by the pipe's metric (see METRICS_AMENITIES)."""
     requests = mrsm.attempt_import('requests')
 
+    amenity = METRICS_AMENITIES.get(pipe.metric_key, 'bicycle_parking')
     south, west, north, east = OSM_BBOX
     query = f"""
     [out:json][timeout:60];
-    nwr["amenity"="bicycle_parking"]({south},{west},{north},{east});
+    nwr["amenity"="{amenity}"]({south},{west},{north},{east});
     out center tags;
     """
     resp = requests.post(
@@ -91,9 +104,12 @@ def fetch(pipe: mrsm.Pipe, debug: bool = False, **kwargs):
             capacity = int(tags['capacity'])
         except (KeyError, ValueError, TypeError):
             capacity = None
-        name = tags.get('name') or tags.get('description') or (
-            f"Bike rack ({capacity} spaces)" if capacity else "Bike rack"
-        )
+        if amenity == 'bicycle_repair_station':
+            name = tags.get('name') or tags.get('brand') or 'Bike repair station'
+        else:
+            name = tags.get('name') or tags.get('description') or (
+                f"Bike rack ({capacity} spaces)" if capacity else "Bike rack"
+            )
         address = ', '.join(
             part for part in (
                 ' '.join(
@@ -133,12 +149,11 @@ def init_app(app):
     from fastapi import Form, File, UploadFile, Request
     from fastapi.responses import JSONResponse
 
-    @app.get('/bike-parking/data.geojson')
-    def bike_parking_geojson():
+    def _points_geojson(pipe: mrsm.Pipe, default_name: str):
         features = []
         try:
-            if LOCATIONS_PIPE.exists():
-                df = LOCATIONS_PIPE.get_data()
+            if pipe.exists():
+                df = pipe.get_data()
                 for row in (df.to_dict(orient='records') if df is not None else []):
                     lat, lon = row.get('lat'), row.get('lon')
                     if lat is None or lon is None:
@@ -150,7 +165,7 @@ def init_app(app):
                             'coordinates': [float(lon), float(lat)],
                         },
                         'properties': {
-                            'name': row.get('name') or 'Bike Parking',
+                            'name': row.get('name') or default_name,
                             'capacity': row.get('capacity'),
                             'address': row.get('address') or '',
                         },
@@ -158,6 +173,14 @@ def init_app(app):
         except Exception:
             pass
         return JSONResponse({'type': 'FeatureCollection', 'features': features})
+
+    @app.get('/bike-parking/data.geojson')
+    def bike_parking_geojson():
+        return _points_geojson(LOCATIONS_PIPE, 'Bike Parking')
+
+    @app.get('/bike-parking/repair-stations.geojson')
+    def repair_stations_geojson():
+        return _points_geojson(REPAIR_PIPE, 'Bike repair station')
 
     @app.post('/bike-parking/submit')
     async def submit_bike_parking(

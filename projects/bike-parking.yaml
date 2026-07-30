@@ -24,6 +24,22 @@ pipes:
       capacity: "int"
       address: "string"
 
+- connector: "plugin:bike-parking"
+  metric: "repair_stations"
+  location: "greenville"
+  parameters:
+    schema: "BikeParking"
+    target: "repair_stations"
+    columns:
+      primary: "id"
+    dtypes:
+      id: "string"
+      name: "string"
+      lat: "float"
+      lon: "float"
+      capacity: "int"
+      address: "string"
+
 config:
   meerschaum:
     instance: sql:bwg

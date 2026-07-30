@@ -1,0 +1,69 @@
+project_name: transit
+
+root_dir: ../root
+
+plugins_dir:
+- ../.installed_plugins
+- ../plugins
+
+sync:
+  schedule: "daily"
+
+pipes:
+
+- connector: "plugin:gtfs"
+  metric: "routes"
+  location: "greenlink"
+  parameters:
+    schema: "transit"
+    target: "routes"
+    columns:
+      primary: "route_id"
+    dtypes:
+      route_id: "string"
+      short_name: "string"
+      long_name: "string"
+      color: "string"
+
+- connector: "plugin:gtfs"
+  metric: "stops"
+  location: "greenlink"
+  parameters:
+    schema: "transit"
+    target: "stops"
+    columns:
+      primary: "stop_id"
+    dtypes:
+      stop_id: "string"
+      name: "string"
+      lat: "float"
+      lon: "float"
+      routes: "string"
+      geometry: "geometry[POINT, 4326]"
+
+- connector: "plugin:gtfs"
+  metric: "route_shapes"
+  location: "greenlink"
+  parameters:
+    schema: "transit"
+    target: "route_shapes"
+    columns:
+      primary: "shape_id"
+    dtypes:
+      shape_id: "string"
+      route_id: "string"
+      short_name: "string"
+      long_name: "string"
+      color: "string"
+      geometry: "geometry[LINESTRING, 4326]"
+
+config:
+  meerschaum:
+    instance: sql:bwg
+    connectors:
+      sql:
+        bwg: "{sql:bwg}"
+
+  plugins:
+    bwg:
+      data_path: '{MRSM_ROOT_DIR}/../data'

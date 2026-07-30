@@ -47,16 +47,16 @@ LAYERS: dict[str, dict[str, Any]] = {
     'bus-routes': {
         'label': 'Bus Routes',
         'kind': 'line',
-        'pipe': ('plugin:city-gis', 'BusRoutes'),
-        'props': {'dir_id': 'dir_id'},
+        'pipe': ('plugin:gtfs', 'route_shapes', 'greenlink'),
+        'props': {'route': 'short_name', 'name': 'long_name', 'color': 'color'},
         'tolerance_m': 5,
         'color': '#7B1FA2',
     },
     'bus-stops': {
         'label': 'Bus Stops',
         'kind': 'point',
-        'pipe': ('plugin:city-gis', 'BusStops'),
-        'props': {'name': 'NAME'},
+        'pipe': ('plugin:gtfs', 'stops', 'greenlink'),
+        'props': {'name': 'name', 'routes': 'routes'},
         'color': '#7B1FA2',
         'icon': 'directions_bus',
     },
@@ -335,14 +335,13 @@ def _search_local(q: str, limit: int) -> list[dict[str, Any]]:
         ''')
     arms.append(r'''
     (SELECT
-        INITCAP("NAME") AS "label",
-        'Bus stop' AS "sublabel",
-        ST_Y(ST_Transform("geometry", 4326)) AS "lat",
-        ST_X(ST_Transform("geometry", 4326)) AS "lon",
+        "name" AS "label",
+        COALESCE(NULLIF('Bus stop — routes ' || NULLIF("routes", ''), 'Bus stop — routes '), 'Bus stop') AS "sublabel",
+        "lat", "lon",
         'bus-stops' AS "kind",
-        ("NAME" ILIKE :qp ESCAPE '\') AS "prefix"
-    FROM "city"."BusStops"
-    WHERE "NAME" ILIKE :q ESCAPE '\'
+        ("name" ILIKE :qp ESCAPE '\') AS "prefix"
+    FROM "transit"."stops"
+    WHERE "name" ILIKE :q ESCAPE '\'
     LIMIT 5)
     ''')
     arms.append(r'''
@@ -1093,6 +1092,43 @@ def init_app(app):
             except Exception:
                 results = []
         return JSONResponse({'results': results})
+
+    @app.get('/map-layers/road-info')
+    def map_layers_road_info(lat: float, lon: float):
+        """Nearest road segment + its owner contact info ("Who Owns The Roads" on tap)."""
+        query = """
+        WITH pt AS (
+            SELECT ST_Transform(ST_SetSRID(ST_MakePoint(:lon, :lat), 4326), 6570) AS geom
+        )
+        SELECT
+            r."Name", r."Type", r."Owner", r."Email", r."Phone", r."Online Form",
+            ST_Distance(r.geometry, pt.geom) AS distance_ft
+        FROM "Roads".roads AS r, pt
+        ORDER BY r.geometry <-> pt.geom
+        LIMIT 1
+        """
+        try:
+            conn = mrsm.get_connector('sql:bwg')
+            df = conn.read(query, params={'lat': lat, 'lon': lon})
+        except Exception as e:
+            return JSONResponse({'error': str(e)}, status_code=500)
+        if df is None or not len(df):
+            return JSONResponse({'error': 'No road found.'}, status_code=404)
+        row = df.iloc[0]
+
+        def _val(key):
+            v = row.get(key)
+            return None if v is None or (isinstance(v, float) and v != v) or v == 'N/A' else v
+
+        return JSONResponse({
+            'name': _val('Name'),
+            'type': _val('Type'),
+            'owner': _val('Owner'),
+            'email': _val('Email'),
+            'phone': _val('Phone'),
+            'online_form': _val('Online Form'),
+            'distance_ft': round(float(row['distance_ft']), 1),
+        })
 
     @app.post('/map-layers/feedback')
     async def submit_layer_feedback(
