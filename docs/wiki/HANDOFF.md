@@ -1,6 +1,6 @@
 # Handoff — work continues on host `omega` (repo at `~/projects/bikewalkgreenville`)
 
-Updated 2026-07-30 (session on omega). Read this + `DATA.md` before touching anything.
+Updated 2026-07-30 (second session on omega). Read this + `DATA.md` before touching anything.
 
 ## ⚠️ Repo is PUBLIC on GitHub
 
@@ -8,7 +8,7 @@ Updated 2026-07-30 (session on omega). Read this + `DATA.md` before touching any
 
 ## State (all TESTED; backend DEPLOYED)
 
-- **`app-native/`** — native Flutter app (map-first, MapLibre GL), v**1.1.0+31**, applicationId `org.bikewalkgreenville.app`. `flutter analyze` clean, `flutter test` 8/8 green, signed release APK + AAB built on omega (signer SHA-1 `537F9A88…A843`, the shared SRA upload key).
+- **`app-native/`** — native Flutter app (map-first, MapLibre GL), v**1.2.0+32**, applicationId `org.bikewalkgreenville.app`. `flutter analyze` clean, `flutter test` 10/10 green, signed release APK + AAB built on omega (signer SHA-1 `537F9A88…A843`, the shared SRA upload key).
   - `build/app/outputs/flutter-apk/app-release.apk` (86 MB)
   - `build/app/outputs/bundle/release/app-release.aab` (58 MB)
 - **Backend live on bwg.mrsm.io**: `plugins/walk-audit.py`, `plugins/map-layers.py` (now serving turn-by-turn `steps`), `plugins/bike-parking.py`, `plugins/gtfs.py`.
@@ -25,6 +25,17 @@ Updated 2026-07-30 (session on omega). Read this + `DATA.md` before touching any
 5. **Selection feedback**: `HapticFeedback.selectionClick()` on every feature tap + a `highlight` GeoJSON source (wide translucent line / ring circle, added between the line and pin layers) cleared when the sheet closes.
 6. **WOTR tools entry** expands into three sublinks: search dashboard, Felt map, and the `bikewalkgreenville.org/roads` story.
 7. **Turn-by-turn navigation** (new): see below.
+
+### Shipped 2026-07-30 (second session) — v1.2.0+32
+
+1. **Walk + transit turn-by-turn** (`plugins/map-layers.py` v0.2.0): `?mode=bike|walk|transit` on `/map-layers/route`. Shared graph, per-mode `MODE_FACTORS`/speeds; transit = walk→board Greenlink shape→alight→walk with `board`/`ride`/`alight` steps (flat 8-min wait — no stop_times yet). "Low-stress" wording dropped everywhere.
+2. **App is mode-aware end to end**: route request uses the selected mode; preview banner shows mode icon + "Bike route / Walking route / Transit route" (transit shows Greenlink route + boarding stop, banner + line in official route color via `coalesce` on a per-feature `color`); switching the mode segment re-routes a drawn route.
+3. **Nav view**: follow camera now zoom 17.5 / tilt 60 (isometric); route preview tips to 35° after the bounds fit; maneuver card is tappable → full upcoming-turns sheet; preview banner has a list button too.
+4. **Directions everywhere**: feature sheets (bus stops, bike parking, repair stations…) have a green Directions button routing to the feature's own coordinate; WOTR shrank to an icon.
+5. **Tap = long-press now**: plain map taps open the same actions sheet (directions / report / who-owns) — long-press was undiscoverable. First tap with keyboard up just dismisses it.
+6. **SRT dot-soup fixed**: highlight circle layer got `['==', ['geometry-type'], 'Point']` (it was drawing a ring on every vertex of tapped lines); line highlight filtered to LineString.
+7. **Search UX**: results select into a big green bottom place card (replaces the tiny SnackBar) with a mode-verb button ("Bike/Walk/Bus here"); clear (X) button in the search field; `resizeToAvoidBottomInset: false` fixes the white band after backgrounding with the keyboard open.
+8. **Tools screen**: WOTR sublink descriptions removed.
 
 ### Turn-by-turn navigation
 

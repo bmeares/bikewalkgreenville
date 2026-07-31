@@ -5,10 +5,9 @@ import '../theme.dart';
 
 class _Link {
   final String title;
-  final String subtitle;
   final IconData icon;
   final String url;
-  const _Link(this.title, this.subtitle, this.icon, this.url);
+  const _Link(this.title, this.icon, this.url);
 }
 
 class _Tool {
@@ -31,13 +30,11 @@ const _tools = [
     links: [
       _Link(
         'Search tool',
-        'Find a road and its maintaining office',
         Icons.search,
         'https://bwg.mrsm.io/dash/who-owns-the-roads',
       ),
       _Link(
         'Interactive map',
-        'Ownership map on Felt',
         Icons.map_outlined,
         'https://felt.com/embed/map/'
             'Who-Owns-Our-Roads-uyICtyogTtuqrQs1Z19AtXC'
@@ -47,7 +44,6 @@ const _tools = [
       ),
       _Link(
         'Read the story',
-        'bikewalkgreenville.org/roads',
         Icons.article_outlined,
         'https://bikewalkgreenville.org/roads',
       ),
@@ -120,7 +116,6 @@ class ToolsScreen extends StatelessWidget {
                                 const EdgeInsets.only(left: 32, right: 16),
                             leading: Icon(l.icon, color: brandDark),
                             title: Text(l.title),
-                            subtitle: Text(l.subtitle),
                             trailing: const Icon(Icons.open_in_new, size: 18),
                             onTap: () => _open(l.url),
                           ),

@@ -66,10 +66,12 @@ class Api {
   }
 
   Future<Map<String, dynamic>> route(
-          double fromLat, double fromLon, double toLat, double toLon) async =>
+          double fromLat, double fromLon, double toLat, double toLon,
+          {String mode = 'bike'}) async =>
       Map<String, dynamic>.from(await _get('/map-layers/route', {
         'from': '$fromLat,$fromLon',
         'to': '$toLat,$toLon',
+        'mode': mode,
       }));
 
   Future<List<dynamic>> walkAuditCategories() async {

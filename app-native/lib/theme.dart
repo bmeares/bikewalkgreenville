@@ -29,6 +29,27 @@ const modeIcons = {
   TravelMode.transit: Icons.directions_bus,
 };
 
+/// API `mode` parameter for `/map-layers/route`.
+const modeApiNames = {
+  TravelMode.cyclist: 'bike',
+  TravelMode.pedestrian: 'walk',
+  TravelMode.transit: 'transit',
+};
+
+/// "Bike here" / "Walk here" / "Bus here" — directions verb per mode.
+const modeVerbs = {
+  TravelMode.cyclist: 'Bike here',
+  TravelMode.pedestrian: 'Walk here',
+  TravelMode.transit: 'Bus here',
+};
+
+/// Route preview subtitle per mode.
+const modeRouteLabels = {
+  TravelMode.cyclist: 'Bike route',
+  TravelMode.pedestrian: 'Walking route',
+  TravelMode.transit: 'Transit route',
+};
+
 /// PCC bike-stress colors, keyed by the `stress_level` GeoJSON property.
 const stressColors = {
   'H': '#d73027',

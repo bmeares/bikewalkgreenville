@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
@@ -77,6 +78,36 @@ void main() {
     final p = NavProgress.of(route, const LatLng(34.8510, -82.3990))!;
     expect(p.offRouteM, greaterThan(80));
     expect(p.offRouteM, lessThan(140));
+  });
+
+  test('transit metadata and maneuvers parse', () {
+    final f = _feature();
+    final props = f['properties'] as Map<String, dynamic>;
+    props['mode'] = 'transit';
+    props['route'] = '503';
+    props['board_stop'] = 'W Washington St + S Main St';
+    props['route_color'] = '#7B1FA2';
+    final route = NavRoute.fromFeature(f);
+    expect(route.mode, 'transit');
+    expect(route.transitRoute, '503');
+    expect(route.boardStop, 'W Washington St + S Main St');
+    expect(route.routeColor, '#7B1FA2');
+
+    RouteStep step(String maneuver) => RouteStep.fromJson({
+          'maneuver': maneuver,
+          'instruction': 'x',
+          'distance_m': 0.0,
+          'start_index': 0,
+        });
+    expect(step('board').icon, Icons.departure_board);
+    expect(step('ride').icon, Icons.directions_bus);
+    expect(step('alight').icon, Icons.pin_drop);
+  });
+
+  test('bike is the default mode', () {
+    final route = NavRoute.fromFeature(_feature());
+    expect(route.mode, 'bike');
+    expect(route.transitRoute, isNull);
   });
 
   test('distances format imperially', () {

@@ -32,7 +32,7 @@ from meerschaum.actions import make_action
 from meerschaum.plugins import api_plugin
 from meerschaum.utils.warnings import info, warn
 
-__version__ = '0.1.1'
+__version__ = '0.2.0'
 
 bwg = mrsm.Plugin('bwg')
 
@@ -433,31 +433,54 @@ def _search_nominatim(q: str) -> list[dict[str, Any]]:
 
 
 # =========================================================================
-# Low-stress routing
+# Routing (bike / walk / transit)
 #
-# Feasible-path finder biased toward the Swamp Rabbit Trail, bike lanes, and
-# low-stress (PCC LTS) streets -- not turn-by-turn wayfinding. The graph is
+# Feasible-path finder over the Swamp Rabbit Trail, bike lanes, and PCC
+# streets -- shared graph, per-mode edge weights. Transit rides Greenlink
+# route shapes between stops, with walking legs on either end. The graph is
 # built lazily from PostGIS, cached in-process, and traversed with A*.
 # =========================================================================
 
-#: Edge weight multiplier per category: trail < bike lane < LTS levels.
-ROUTE_FACTORS = {
-    'srt': 0.4,
-    'bike-lane': 0.4,
-    'L': 1.0,
-    'ML': 1.3,
-    'M': 2.5,
-    'MH': 6.0,
-    'H': 12.0,
+#: Edge weight multiplier per category and mode. Bike leans hard on stress
+#: (trail < bike lane < LTS levels); walking mostly cares about distance with
+#: a mild preference for the trail and calmer streets.
+MODE_FACTORS = {
+    'bike': {
+        'srt': 0.4,
+        'bike-lane': 0.4,
+        'L': 1.0,
+        'ML': 1.3,
+        'M': 2.5,
+        'MH': 6.0,
+        'H': 12.0,
+    },
+    'walk': {
+        'srt': 0.7,
+        'bike-lane': 1.0,
+        'L': 1.0,
+        'ML': 1.0,
+        'M': 1.1,
+        'MH': 1.25,
+        'H': 1.5,
+    },
 }
-ROUTE_DEFAULT_FACTOR = 2.5
-ROUTE_MIN_FACTOR = min(ROUTE_FACTORS.values())  # admissible A* heuristic
+MODE_DEFAULT_FACTOR = {'bike': 2.5, 'walk': 1.1}
+MODE_SPEED_M_S = {'bike': 4.2, 'walk': 1.35}  # casual cycling / walking pace
+MODE_NETWORK_NOUN = {'bike': 'bikeable', 'walk': 'walkable'}
 ROUTE_SNAP_MAX_M = 400      # reject termini farther than this from the network
 ROUTE_SUBDIVIDE_M = 120.0   # split long lines so they're enterable mid-way
 ROUTE_GRID_M = 12.0         # endpoint snap cell (stitches segment breaks)
 ROUTE_STITCH_M = 60.0       # max connector length between components
 ROUTE_CONNECT_M = 120.0     # max trail/lane -> street junction connector
-ROUTE_SPEED_M_S = 4.2       # ~15 km/h casual cycling
+
+# Transit tuning: how far someone will walk to/from a stop, how close a stop
+# must sit to its route shape to count as "on" it, minimum useful ride, an
+# average in-service bus speed, and a flat wait estimate (no stop_times yet).
+TRANSIT_WALK_MAX_M = 1500.0
+TRANSIT_STOP_SNAP_M = 100.0
+TRANSIT_MIN_RIDE_M = 250.0
+TRANSIT_BUS_SPEED_M_S = 6.5
+TRANSIT_WAIT_MIN = 8.0
 
 M_PER_DEG_LAT = 111320.0
 _COSLAT = math.cos(math.radians(34.85))  # Greenville-latitude lon scale
@@ -574,8 +597,9 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
             adj[cell] = []
         return cell
 
+    bike_factors = MODE_FACTORS['bike']
     for coords, category, name in _route_source_rows(debug=debug):
-        factor = ROUTE_FACTORS.get(category, ROUTE_DEFAULT_FACTOR)
+        factor = bike_factors.get(category, MODE_DEFAULT_FACTOR['bike'])
         is_path = category in ('srt', 'bike-lane')
         for chunk in _subdivide(coords):
             length_m = sum(
@@ -724,18 +748,29 @@ def _nearest_node(graph: dict, lat: float, lon: float):
     return best, best_d
 
 
-def _astar(graph: dict, start, goal):
+def _astar(graph: dict, start, goal, mode: str = 'bike'):
     """Returns list of (node, edge) from start to goal, or None. edge is the
-    adjacency tuple taken to arrive at node (None for start)."""
+    adjacency tuple taken to arrive at node (None for start). Edge weights are
+    recomputed per mode from length x category factor (the stored weight is
+    the bike one, kept for stats/dedup)."""
     import heapq
 
     nodes = graph['nodes']
     adj = graph['adj']
     glat, glon = nodes[goal]
+    factors = MODE_FACTORS[mode]
+    default_factor = MODE_DEFAULT_FACTOR[mode]
+    min_factor = min(min(factors.values()), 1.0)  # connectors weigh 1.0
 
     def h(cell):
         lat, lon = nodes[cell]
-        return _equirect_m(lat, lon, glat, glon) * ROUTE_MIN_FACTOR
+        return _equirect_m(lat, lon, glat, glon) * min_factor
+
+    def edge_weight(edge) -> float:
+        category = edge[3]
+        if category == 'connector':
+            return edge[2]
+        return edge[2] * factors.get(category, default_factor)
 
     dist = {start: 0.0}
     prev: dict = {start: (None, None)}
@@ -755,7 +790,7 @@ def _astar(graph: dict, start, goal):
                 node = parent
             return list(reversed(path))
         for edge in adj[cur]:
-            nbr, weight = edge[0], edge[1]
+            nbr, weight = edge[0], edge_weight(edge)
             ng = g + weight
             if nbr not in dist or ng < dist[nbr]:
                 dist[nbr] = ng
@@ -844,7 +879,11 @@ def _instruction(
     return words.get(maneuver, 'Continue') + onto
 
 
-def _build_steps(legs: list[dict], coordinates: list) -> list[dict]:
+def _build_steps(
+    legs: list[dict],
+    coordinates: list,
+    speed_m_s: float = 4.2,
+) -> list[dict]:
     """Collapse routed legs into turn-by-turn steps.
 
     A new step starts when the street name changes or the bearing swings more
@@ -931,7 +970,7 @@ def _build_steps(legs: list[dict], coordinates: list) -> list[dict]:
     for step in steps:
         step['distance_m'] = round(step['distance_m'], 1)
         step['duration_min'] = round(
-            step['distance_m'] / ROUTE_SPEED_M_S / 60, 2
+            step['distance_m'] / speed_m_s / 60, 2
         )
     return steps
 
@@ -941,8 +980,9 @@ def _route(
     from_lon: float,
     to_lat: float,
     to_lon: float,
+    mode: str = 'bike',
 ) -> dict[str, Any]:
-    """Compute a low-stress route; raises ValueError with a user-facing
+    """Compute a bike or walk route; raises ValueError with a user-facing
     message when no route is possible."""
     graph = _get_route_graph()
     if not graph['nodes']:
@@ -951,7 +991,8 @@ def _route(
     start, start_d = _nearest_node(graph, from_lat, from_lon)
     goal, goal_d = _nearest_node(graph, to_lat, to_lon)
     if start_d > ROUTE_SNAP_MAX_M or goal_d > ROUTE_SNAP_MAX_M:
-        raise ValueError("No bikeable network near that point.")
+        noun = MODE_NETWORK_NOUN.get(mode, 'routable')
+        raise ValueError(f"No {noun} network near that point.")
 
     legs: list[dict] = []
     if start == goal:
@@ -967,9 +1008,9 @@ def _route(
             'start_index': 0,
         })
     else:
-        path = _astar(graph, start, goal)
+        path = _astar(graph, start, goal, mode=mode)
         if path is None:
-            raise ValueError("Couldn't find a connected low-stress route.")
+            raise ValueError("Couldn't find a connected route.")
         coordinates = [[from_lon, from_lat]]
         distance_m = start_d + goal_d
         breakdown = {}
@@ -996,17 +1037,344 @@ def _route(
             })
         coordinates.append([to_lon, to_lat])
 
+    speed = MODE_SPEED_M_S[mode]
     return {
         'type': 'Feature',
         'geometry': {'type': 'LineString', 'coordinates': coordinates},
         'properties': {
+            'mode': mode,
             'distance_m': round(distance_m, 1),
             'distance_mi': round(distance_m / 1609.344, 2),
-            'duration_min': round(distance_m / ROUTE_SPEED_M_S / 60, 1),
+            'duration_min': round(distance_m / speed / 60, 1),
             'stress_breakdown': {k: round(v, 1) for k, v in breakdown.items()},
             'from_snap_m': round(start_d, 1),
             'to_snap_m': round(goal_d, 1),
-            'steps': _build_steps(legs, coordinates),
+            'steps': _build_steps(legs, coordinates, speed_m_s=speed),
+        },
+    }
+
+
+# ------------------------------------------------------------------ transit
+
+_TRANSIT: dict[str, Any] = {'epoch': 0.0, 'stops': None, 'shapes': None}
+_TRANSIT_LOCK = threading.Lock()
+_TRANSIT_TTL_SECONDS = 24 * 60 * 60
+
+
+def _get_transit_data() -> dict[str, Any]:
+    """Greenlink stops + route shapes, cached in-process.
+
+    stops: list of {name, lat, lon, routes: set of short names}
+    shapes: list of {route, long_name, color, coords: [[lon,lat],...],
+                     cumulative: [m from start]}
+    """
+    with _TRANSIT_LOCK:
+        if (
+            _TRANSIT['stops'] is not None
+            and (time.time() - _TRANSIT['epoch']) < _TRANSIT_TTL_SECONDS
+        ):
+            return _TRANSIT
+        import json
+
+        conn = mrsm.get_connector('sql:bwg')
+        stops = []
+        df = conn.read('SELECT "name", "lat", "lon", "routes" FROM "transit"."stops"')
+        for rec in df.to_dict(orient='records'):
+            routes = {
+                r.strip()
+                for r in str(rec.get('routes') or '').split(',')
+                if r.strip()
+            }
+            if not routes:
+                continue
+            stops.append({
+                'name': rec['name'],
+                'lat': float(rec['lat']),
+                'lon': float(rec['lon']),
+                'routes': routes,
+            })
+
+        shapes = []
+        df = conn.read('''
+            SELECT "short_name", "long_name", "color",
+                   ST_AsGeoJSON("geometry", 5) AS "gj"
+            FROM "transit"."route_shapes"
+        ''')
+        for rec in df.to_dict(orient='records'):
+            gj = rec.get('gj')
+            if not gj:
+                continue
+            coords = json.loads(gj).get('coordinates') or []
+            if len(coords) < 2:
+                continue
+            cumulative = [0.0]
+            for a, b in zip(coords, coords[1:]):
+                cumulative.append(
+                    cumulative[-1] + _equirect_m(a[1], a[0], b[1], b[0])
+                )
+            shapes.append({
+                'route': str(rec.get('short_name') or ''),
+                'long_name': str(rec.get('long_name') or ''),
+                'color': rec.get('color'),
+                'coords': coords,
+                'cumulative': cumulative,
+            })
+        _TRANSIT.update({'epoch': time.time(), 'stops': stops, 'shapes': shapes})
+        return _TRANSIT
+
+
+def _project_on_shape(shape: dict, lat: float, lon: float) -> tuple[float, float, int, float]:
+    """(meters along shape, offset meters, segment index, t) of the closest
+    point on the shape to (lat, lon)."""
+    coords = shape['coords']
+    best = (0.0, float('inf'), 0, 0.0)
+    for i in range(len(coords) - 1):
+        ax, ay = coords[i][0] * _COSLAT, coords[i][1]
+        bx, by = coords[i + 1][0] * _COSLAT, coords[i + 1][1]
+        px, py = lon * _COSLAT, lat
+        dx, dy = bx - ax, by - ay
+        denom = dx * dx + dy * dy
+        t = 0.0 if denom == 0 else ((px - ax) * dx + (py - ay) * dy) / denom
+        t = max(0.0, min(1.0, t))
+        cx, cy = ax + dx * t, ay + dy * t
+        off = ((px - cx) ** 2 + (py - cy) ** 2) ** 0.5 * M_PER_DEG_LAT
+        if off < best[1]:
+            seg_len = shape['cumulative'][i + 1] - shape['cumulative'][i]
+            best = (shape['cumulative'][i] + seg_len * t, off, i, t)
+    return best
+
+
+def _shape_slice(shape: dict, a: tuple, b: tuple) -> list[list]:
+    """Shape coords between projections a and b (from _project_on_shape)."""
+    coords = shape['coords']
+
+    def _point(proj):
+        _dist, _off, i, t = proj
+        ax, ay = coords[i]
+        bx, by = coords[i + 1]
+        return [ax + (bx - ax) * t, ay + (by - ay) * t]
+
+    out = [_point(a)]
+    out.extend(coords[a[2] + 1:b[2] + 1])
+    out.append(_point(b))
+    return [c for i, c in enumerate(out) if i == 0 or c != out[i - 1]]
+
+
+def _walk_or_direct(
+    from_lat, from_lon, to_lat, to_lon, toward: str = 'your stop',
+) -> dict[str, Any]:
+    """Walk route, falling back to a straight line when off-network."""
+    try:
+        return _route(from_lat, from_lon, to_lat, to_lon, mode='walk')
+    except ValueError:
+        coords = [[from_lon, from_lat], [to_lon, to_lat]]
+        dist = _equirect_m(from_lat, from_lon, to_lat, to_lon)
+        return {
+            'type': 'Feature',
+            'geometry': {'type': 'LineString', 'coordinates': coords},
+            'properties': {
+                'distance_m': round(dist, 1),
+                'duration_min': round(dist / MODE_SPEED_M_S['walk'] / 60, 1),
+                'steps': [{
+                    'maneuver': 'depart',
+                    'name': None,
+                    'category': None,
+                    'instruction': f'Walk toward {toward}',
+                    'distance_m': round(dist, 1),
+                    'duration_min': round(dist / MODE_SPEED_M_S['walk'] / 60, 2),
+                    'start_index': 0,
+                    'location': coords[0],
+                    'bearing': 0.0,
+                }],
+            },
+        }
+
+
+def _route_transit(
+    from_lat: float,
+    from_lon: float,
+    to_lat: float,
+    to_lon: float,
+) -> dict[str, Any]:
+    """Walk -> ride a Greenlink route -> walk. No schedules yet (stop_times
+    isn't ingested), so the wait is a flat estimate and the ride follows the
+    route shape between the boarding and alighting stops."""
+    data = _get_transit_data()
+    stops, shapes = data['stops'], data['shapes']
+    if not stops or not shapes:
+        raise ValueError("Transit network is unavailable.")
+
+    def _near(lat, lon):
+        out = []
+        for s in stops:
+            d = _equirect_m(lat, lon, s['lat'], s['lon'])
+            if d <= TRANSIT_WALK_MAX_M:
+                out.append((d, s))
+        out.sort(key=lambda x: x[0])
+        return out[:25]
+
+    near_from = _near(from_lat, from_lon)
+    near_to = _near(to_lat, to_lon)
+    if not near_from or not near_to:
+        raise ValueError("No bus stops within walking distance.")
+
+    shapes_by_route: dict[str, list] = {}
+    for sh in shapes:
+        shapes_by_route.setdefault(sh['route'], []).append(sh)
+
+    proj_cache: dict = {}
+
+    def _proj(shape_i, s):
+        key = (shape_i, id(s))
+        if key not in proj_cache:
+            proj_cache[key] = _project_on_shape(shapes[shape_i], s['lat'], s['lon'])
+        return proj_cache[key]
+
+    shape_index = {id(sh): i for i, sh in enumerate(shapes)}
+    walk_speed = MODE_SPEED_M_S['walk']
+    best = None  # (total_s, d1, s1, d2, s2, shape, p1, p2)
+    for d1, s1 in near_from:
+        for d2, s2 in near_to:
+            shared = s1['routes'] & s2['routes']
+            if not shared or s1 is s2:
+                continue
+            for route in shared:
+                for sh in shapes_by_route.get(route, []):
+                    i = shape_index[id(sh)]
+                    p1 = _proj(i, s1)
+                    p2 = _proj(i, s2)
+                    if p1[1] > TRANSIT_STOP_SNAP_M or p2[1] > TRANSIT_STOP_SNAP_M:
+                        continue
+                    ride_m = p2[0] - p1[0]
+                    if ride_m < TRANSIT_MIN_RIDE_M:
+                        continue
+                    total_s = (
+                        (d1 + d2) / walk_speed
+                        + ride_m / TRANSIT_BUS_SPEED_M_S
+                        + TRANSIT_WAIT_MIN * 60
+                    )
+                    if best is None or total_s < best[0]:
+                        best = (total_s, d1, s1, d2, s2, sh, p1, p2)
+
+    if best is None:
+        raise ValueError(
+            "No direct bus route between those points — try walk or bike."
+        )
+    _total_s, _d1, s1, _d2, s2, shape, p1, p2 = best
+
+    walk1 = _walk_or_direct(from_lat, from_lon, s1['lat'], s1['lon'])
+    walk2 = _walk_or_direct(
+        s2['lat'], s2['lon'], to_lat, to_lon, toward='your destination',
+    )
+    ride_coords = _shape_slice(shape, p1, p2)
+    ride_m = p2[0] - p1[0]
+
+    coordinates: list = []
+    steps: list[dict] = []
+
+    def _append_leg(feature, drop_arrive: bool):
+        offset = max(len(coordinates) - 1, 0)
+        coords = feature['geometry']['coordinates']
+        if coordinates and coordinates[-1] == coords[0]:
+            coords = coords[1:]
+        else:
+            offset = len(coordinates)
+        coordinates.extend(coords)
+        for step in feature['properties']['steps']:
+            if drop_arrive and step['maneuver'] == 'arrive':
+                continue
+            step = dict(step)
+            step['start_index'] = step['start_index'] + offset
+            steps.append(step)
+
+    _append_leg(walk1, drop_arrive=True)
+
+    route_name = f"Route {shape['route']}".strip()
+    long_name = _titleize(shape['long_name'])
+    board_index = max(len(coordinates) - 1, 0)
+    steps.append({
+        'maneuver': 'board',
+        'name': route_name,
+        'category': 'transit',
+        'instruction': (
+            f"Board Greenlink {route_name}"
+            + (f' ({long_name})' if long_name else '')
+            + f" at {s1['name']}"
+        ),
+        'distance_m': 0.0,
+        'duration_min': round(TRANSIT_WAIT_MIN, 1),
+        'start_index': board_index,
+        'location': [s1['lon'], s1['lat']],
+        'bearing': 0.0,
+    })
+    ride_start_index = len(coordinates) - 1 if coordinates else 0
+    if coordinates and coordinates[-1] == ride_coords[0]:
+        coordinates.extend(ride_coords[1:])
+    else:
+        ride_start_index = len(coordinates)
+        coordinates.extend(ride_coords)
+    steps.append({
+        'maneuver': 'ride',
+        'name': route_name,
+        'category': 'transit',
+        'instruction': f"Ride {route_name} to {s2['name']}",
+        'distance_m': round(ride_m, 1),
+        'duration_min': round(ride_m / TRANSIT_BUS_SPEED_M_S / 60, 1),
+        'start_index': ride_start_index,
+        'location': [s1['lon'], s1['lat']],
+        'bearing': 0.0,
+    })
+    steps.append({
+        'maneuver': 'alight',
+        'name': s2['name'],
+        'category': 'transit',
+        'instruction': f"Get off at {s2['name']}",
+        'distance_m': 0.0,
+        'duration_min': 0.0,
+        'start_index': max(len(coordinates) - 1, 0),
+        'location': [s2['lon'], s2['lat']],
+        'bearing': 0.0,
+    })
+    _append_leg(walk2, drop_arrive=False)
+    if not steps or steps[-1]['maneuver'] != 'arrive':
+        steps.append({
+            'maneuver': 'arrive',
+            'name': None,
+            'category': None,
+            'instruction': 'Arrive at your destination',
+            'distance_m': 0.0,
+            'duration_min': 0.0,
+            'start_index': max(len(coordinates) - 1, 0),
+            'location': list(coordinates[-1]),
+        })
+
+    walk_m = (
+        walk1['properties']['distance_m'] + walk2['properties']['distance_m']
+    )
+    duration_min = (
+        walk1['properties']['duration_min']
+        + walk2['properties']['duration_min']
+        + ride_m / TRANSIT_BUS_SPEED_M_S / 60
+        + TRANSIT_WAIT_MIN
+    )
+    distance_m = walk_m + ride_m
+    return {
+        'type': 'Feature',
+        'geometry': {'type': 'LineString', 'coordinates': coordinates},
+        'properties': {
+            'mode': 'transit',
+            'distance_m': round(distance_m, 1),
+            'distance_mi': round(distance_m / 1609.344, 2),
+            'duration_min': round(duration_min, 1),
+            'walk_m': round(walk_m, 1),
+            'ride_m': round(ride_m, 1),
+            'route': shape['route'],
+            'route_long_name': shape['long_name'],
+            'route_color': shape.get('color'),
+            'board_stop': s1['name'],
+            'alight_stop': s2['name'],
+            'wait_min': TRANSIT_WAIT_MIN,
+            'steps': steps,
         },
     }
 
@@ -1163,6 +1531,7 @@ def init_app(app):
     def map_layers_route(
         to: str = '',
         from_: str = Query('', alias='from'),
+        mode: str = 'bike',
     ):
         # Sync def on purpose: FastAPI runs it in the threadpool, so the
         # multi-second first-call graph build never blocks the event loop.
@@ -1170,6 +1539,12 @@ def init_app(app):
             lat_s, lon_s = value.split(',', 1)
             return float(lat_s), float(lon_s)
 
+        mode = (mode or 'bike').strip().lower()
+        if mode not in ('bike', 'walk', 'transit'):
+            return JSONResponse(
+                {'error': "Expected mode=bike, walk or transit."},
+                status_code=400,
+            )
         try:
             from_lat, from_lon = _parse_latlon(from_)
             to_lat, to_lon = _parse_latlon(to)
@@ -1184,7 +1559,10 @@ def init_app(app):
                 status_code=400,
             )
         try:
-            feature = _route(from_lat, from_lon, to_lat, to_lon)
+            if mode == 'transit':
+                feature = _route_transit(from_lat, from_lon, to_lat, to_lon)
+            else:
+                feature = _route(from_lat, from_lon, to_lat, to_lon, mode=mode)
         except ValueError as e:
             return JSONResponse({'error': str(e)}, status_code=422)
         except Exception as e:

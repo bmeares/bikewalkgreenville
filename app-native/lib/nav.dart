@@ -3,7 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
-/// Turn-by-turn model + progress math for the low-stress bike router.
+/// Turn-by-turn model + progress math for the bike / walk / transit router.
 ///
 /// The API (`/map-layers/route`) returns a LineString plus a `steps` list of
 /// maneuvers; everything here is about answering "where on that line am I, and
@@ -73,6 +73,12 @@ class RouteStep {
         return Icons.navigation;
       case 'arrive':
         return Icons.sports_score;
+      case 'board':
+        return Icons.departure_board;
+      case 'ride':
+        return Icons.directions_bus;
+      case 'alight':
+        return Icons.pin_drop;
       default:
         return Icons.straight;
     }
@@ -87,9 +93,14 @@ class NavRoute {
   final List<double> cumulative; // meters from start to points[i]
   final double distanceM;
   final double durationMin;
+  final String mode; // bike | walk | transit
+  final String? transitRoute; // Greenlink short name, transit only
+  final String? boardStop;
+  final String? routeColor; // official route color, transit only
 
   NavRoute._(this.points, this.steps, this.cumulative, this.distanceM,
-      this.durationMin);
+      this.durationMin, this.mode, this.transitRoute, this.boardStop,
+      this.routeColor);
 
   factory NavRoute.fromFeature(Map<String, dynamic> feature) {
     final coords = (feature['geometry']?['coordinates'] as List? ?? [])
@@ -113,6 +124,10 @@ class NavRoute {
       (props['distance_m'] as num?)?.toDouble() ??
           (cumulative.isEmpty ? 0.0 : cumulative.last),
       (props['duration_min'] as num?)?.toDouble() ?? 0.0,
+      (props['mode'] ?? 'bike').toString(),
+      props['route']?.toString(),
+      props['board_stop']?.toString(),
+      props['route_color']?.toString(),
     );
   }
 
