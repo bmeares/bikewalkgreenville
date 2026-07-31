@@ -1205,13 +1205,23 @@ def _route_transit(
         raise ValueError("Transit network is unavailable.")
 
     def _near(lat, lon):
-        out = []
+        """Candidate stops within walking distance — the nearest few PER
+        ROUTE, not overall (downtown the 25 nearest stops are all trolley
+        stops and the transit center never makes the cut)."""
+        ranked = []
         for s in stops:
             d = _equirect_m(lat, lon, s['lat'], s['lon'])
             if d <= TRANSIT_WALK_MAX_M:
+                ranked.append((d, s))
+        ranked.sort(key=lambda x: x[0])
+        out = []
+        per_route: dict[str, int] = {}
+        for d, s in ranked:
+            if any(per_route.get(r, 0) < 3 for r in s['routes']):
                 out.append((d, s))
-        out.sort(key=lambda x: x[0])
-        return out[:25]
+                for r in s['routes']:
+                    per_route[r] = per_route.get(r, 0) + 1
+        return out
 
     near_from = _near(from_lat, from_lon)
     near_to = _near(to_lat, to_lon)
