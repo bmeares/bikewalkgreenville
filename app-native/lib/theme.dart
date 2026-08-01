@@ -12,15 +12,20 @@ const homeLat = 34.8526;
 const homeLon = -82.3940;
 const homeZoom = 12.5;
 
-/// Travel modes — the top-level map filter. Jasmine's framing: pedestrian
-/// (sidewalks) + transit (bus) + cyclist together show the complete picture
-/// of non-car mobility in Greenville.
+/// Travel modes — the map filter and the set of ways a rider is willing to
+/// travel. Jasmine's framing: pedestrian (sidewalks) + transit (bus) + cyclist
+/// together show the complete picture of non-car mobility in Greenville.
+///
+/// These are multi-select: picking bike AND transit asks the router for a
+/// bike-to-the-bus itinerary, not one or the other.
 enum TravelMode { cyclist, pedestrian, transit }
 
 const modeLabels = {
   TravelMode.cyclist: 'Bike',
+  // Wheelchair users roll rather than walk; the `roll` preference switches the
+  // router's weighting, and this label makes the mode theirs too.
   TravelMode.pedestrian: 'Walk',
-  TravelMode.transit: 'Transit',
+  TravelMode.transit: 'Bus',
 };
 
 const modeIcons = {
@@ -29,7 +34,7 @@ const modeIcons = {
   TravelMode.transit: Icons.directions_bus,
 };
 
-/// API `mode` parameter for `/map-layers/route`.
+/// API `modes` values for `/map-layers/route`.
 const modeApiNames = {
   TravelMode.cyclist: 'bike',
   TravelMode.pedestrian: 'walk',
@@ -49,6 +54,24 @@ const modeRouteLabels = {
   TravelMode.pedestrian: 'Walking route',
   TravelMode.transit: 'Transit route',
 };
+
+/// Icon per router plan key (`properties.plan` / `alternatives[].plan`).
+const planIcons = {
+  'bike': Icons.directions_bike,
+  'walk': Icons.directions_walk,
+  'roll': Icons.accessible_forward,
+  'bcycle': Icons.pedal_bike,
+  'walk-transit': Icons.directions_bus,
+  'roll-transit': Icons.directions_bus,
+  'bike-transit': Icons.directions_bus,
+};
+
+/// Stretches of a route that lack the infrastructure the mode needs, drawn in
+/// this colour and called out in a banner. Not a "bad route" — a disclosure.
+const warnRed = Color(0xFFD32F2F);
+
+/// Greenville BCycle brand red, for the bike-share dock pins.
+const bcycleRed = '#E2231A';
 
 /// PCC bike-stress colors, keyed by the `stress_level` GeoJSON property.
 const stressColors = {
@@ -87,6 +110,11 @@ class LayerDef {
   /// Point layers only: pin size multiplier at the reference zoom.
   final double pinScale;
 
+  /// Contents change minute to minute (bike-share availability), so the source
+  /// is re-fetched when the layer is switched on rather than trusted from
+  /// style-load time.
+  final bool live;
+
   const LayerDef({
     required this.id,
     required this.label,
@@ -100,6 +128,7 @@ class LayerDef {
     this.icon = Icons.timeline,
     this.minZoom = 0,
     this.pinScale = 1.0,
+    this.live = false,
   });
 }
 
@@ -180,6 +209,20 @@ const layerDefs = <LayerDef>[
     modes: {TravelMode.cyclist},
     icon: Icons.local_parking,
     minZoom: 13,
+  ),
+  // Greenville BCycle docks. Availability is live, so the source is refreshed
+  // rather than left at whatever it was when the style loaded.
+  LayerDef(
+    id: 'bcycle',
+    label: 'BCycle bike share',
+    path: '/bcycle/stations.geojson',
+    color: bcycleRed,
+    isPoint: true,
+    modes: {TravelMode.cyclist},
+    icon: Icons.pedal_bike,
+    minZoom: 11,
+    pinScale: 1.05,
+    live: true,
   ),
   LayerDef(
     id: 'repair-stations',

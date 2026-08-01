@@ -65,14 +65,31 @@ class Api {
     return List<dynamic>.from(data['results'] ?? []);
   }
 
+  /// Multi-modal directions. [modes] is any of `bike` / `walk` / `transit`;
+  /// [roll] switches walking to wheelchair weighting, [bcycle] adds a
+  /// bike-share itinerary, and [plan] pins one of the returned alternatives.
   Future<Map<String, dynamic>> route(
-          double fromLat, double fromLon, double toLat, double toLon,
-          {String mode = 'bike'}) async =>
+    double fromLat,
+    double fromLon,
+    double toLat,
+    double toLon, {
+    Set<String> modes = const {'bike'},
+    bool roll = false,
+    bool bcycle = false,
+    String? plan,
+  }) async =>
       Map<String, dynamic>.from(await _get('/map-layers/route', {
         'from': '$fromLat,$fromLon',
         'to': '$toLat,$toLon',
-        'mode': mode,
+        'modes': (modes.isEmpty ? {'bike'} : modes).join(','),
+        if (roll) 'roll': '1',
+        if (bcycle) 'bcycle': '1',
+        'plan': ?plan,
       }));
+
+  /// Bike-share system metadata — the links that hand off to the BCycle app.
+  Future<Map<String, dynamic>> bcycleSystem() async =>
+      Map<String, dynamic>.from(await _get('/bcycle/system.json'));
 
   Future<List<dynamic>> walkAuditCategories() async {
     final data = await _get('/walk-audit/categories.json');

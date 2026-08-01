@@ -8,9 +8,11 @@ Inventory of `sql:bwg` (prod TimescaleDB behind `bwg.mrsm.io`), the pipes that f
 |---|---|---|
 | 4326 (WGS84) | app-ready | crash points (`SCDPS.*`, `Ped.*`), `SRT.*`, `public.srt`, `replica.*`; `BikeParking` is plain lat/lon floats |
 | 6570 (SC ft) | state plane | `Roads.*`, `pcc.*`, `county.*`, `gcgis.*`, `Boundaries.*`, `city.BusRoutes/BusStops` |
-| 3361 (SC m) | HARN | most `city.*` (Sidewalks, BicycleInfrastructure, Streets, Trails), `Parking.*` |
+| 3361 (SC **ft**) | HARN | most `city.*` (Sidewalks, BicycleInfrastructure, Streets, Trails), `Parking.*` |
 
 Anything served to the app must `ST_Transform(geom, 4326)`. `pcc.stress_levels.geojson` (jsonb) is pre-transformed. `geometry_columns` lies (`srid=0`) for several `Roads`/`Ped` tables — trust the data, not the view.
+
+**3361 is FEET, not metres** (`select proj4text from spatial_ref_sys where srid=3361` → `+units=ft`; `ST_Length` / geography ratio measures 3.28). Both projected regimes in this DB are ft-based, so a distance literal in `ST_DWithin` means the same thing in 6570 and 3361.
 
 ## Feature → data map
 
@@ -22,6 +24,7 @@ Anything served to the app must `ST_Transform(geom, 4326)`. `pcc.stress_levels.g
 | Sidewalks | `county.sidewalks` (18,493 lines), `Sidewalks.sidewalks` (5,325 city **polygons**), `Sidewalks.streets_with_sidewalks` (3,103) | | `Sidewalks.county_sidewalks` is EMPTY (dead) |
 | Bus/transit | `transit.routes` (16), `transit.stops` (997, w/ routes-served + Point 4326), `transit.route_shapes` (31 LineString 4326 w/ official colors) | | Greenlink GTFS (`plugins/gtfs.py`, `projects/transit.yaml`, feed `gtfs.greenlink.cadavl.com`); supersedes stale `city.BusRoutes`/`BusStops`. Schedules (stop_times) not yet ingested — headways/frequency a future step. Synced daily in prod by the `transit` job inside `mrsm-api-bwg-1`. |
 | Bike parking | `BikeParking.parking_locations` | 283 | OSM Overpass `amenity=bicycle_parking`; lat/lon floats |
+| Bike share | `BCycle.stations` | 13 | Greenville BCycle; **locations only** (outage fallback) — live availability is read straight from GBFS by `plugins/bcycle.py`, never stored |
 | Bike repair stations | `BikeParking.repair_stations` | ~few | OSM `amenity=bicycle_repair_station` (added 2026-07) |
 | Roads/ownership (WOTR) | `Roads.roads` | 35,204 | Owner + Email/Phone/Online Form denormalized per segment; `Roads.contact_info` (20) is the municipal contact lookup (Greenville Cares `cares@greenvillesc.gov`, SCDOT MWRO, six cities, GCPRT…) |
 | Speed limits | `county.TRA_STREETCL.SPEED` (35,185), `city.Streets.SPEED` (5,745) | | **No lane-count column anywhere**; observed speeds in `replica."annual-speeds"` (66k, OSM-keyed p50/p85/p95) |
@@ -31,10 +34,22 @@ Anything served to the app must `ST_Transform(geom, 4326)`. `pcc.stress_levels.g
 
 ## HTTP endpoints (served by Meerschaum Web plugins at bwg.mrsm.io)
 
+### `plugins/bcycle.py`
+- `GET /bcycle/stations.geojson` — Greenville BCycle docks with **live** availability, merged from the system's GBFS 1.1 feed (`bcycle_greenville`: `station_information` + `station_status`). 13 stations, all downtown-ish. Props: `name`, `address`, `bikes`, `ebikes`, `docks`, `is_renting`, `availability` (pre-formatted line), `rental_uri` (per-station Android deep link), `short_id` (the number on the kiosk). Cached 45 s in-process, served `Cache-Control: no-store`, and serves stale-over-empty if GBFS blips. Falls back to the `BCycle.stations` pipe (locations only, `projects/bcycle.yaml`) when the feed is unreachable.
+- `GET /bcycle/system.json` — system name/url/phone/email plus `app_discovery_uri` (`bcycle://`) and `app_store_uri`, the chain the app walks to hand a rider off to the BCycle app.
+- `get_stations()` is also imported by `map-layers.py` for the `bcycle` routing plan.
+
 ### `plugins/map-layers.py`
 - `GET /map-layers/index.json` — layer registry (bus-routes, bus-stops, bike-lanes, sidewalks-city, sidewalks-county, srt, bike-stress)
 - `GET /map-layers/{layer}.geojson` — dissolved overview; `?bbox=&zoom=` → per-feature detail (limit 4000)
-- `GET /map-layers/route?from=lat,lon&to=lat,lon&mode=bike|walk|transit` — in-process A* over SRT + bike lanes + PCC stress; `route-stats.json`. Per-mode edge weights (`MODE_FACTORS`: bike leans hard on stress, walk is near-flat) and speeds (`MODE_SPEED_M_S` 4.2 / 1.35 m/s). `mode=transit` = walk to a Greenlink stop → ride the route shape → walk to destination (`_route_transit`): stop pairs share a route (`transit.stops.routes`), ride geometry sliced from `transit.route_shapes`, flat `TRANSIT_WAIT_MIN` (8 min — no stop_times yet), adds `board`/`ride`/`alight` maneuvers plus `route`, `board_stop`, `alight_stop`, `route_color` props. Response `properties.steps[]` is the turn-by-turn list the app narrates: `{maneuver, instruction, name, distance_m, duration_min, start_index, location, bearing}`. Street names come from `pcc.stress_levels.street_name` / `city.BicycleInfrastructure.STREET_NAM` (SRT legs are named "Swamp Rabbit Trail") and are title-cased; legs merge into one step unless the name changes or the bearing swings (`STEP_TURN_MIN_DEG` / `STEP_SAME_STREET_TURN_DEG`).
+- `GET /map-layers/route?from=lat,lon&to=lat,lon&modes=bike,walk,transit[&roll=1][&bcycle=1][&plan=<key>]` — **multi-modal** directions over an in-process A* graph (SRT + bike lanes + PCC stress); `route-stats.json` for graph health. The legacy single `?mode=bike|walk|transit` still works.
+  - **Plans.** `_plan_keys()` turns the selected modes into itineraries: `bike`, `walk`, `roll`, `bcycle`, `bike-transit`, `walk-transit`, `roll-transit`. Every viable one is computed (~40 ms each for a plain A*, ~0.4 s for transit) and the **fastest wins**; the rest come back in `properties.alternatives[]` with real distance/duration, and failures in `properties.unavailable[]`. `plan=<key>` pins one. Results are memoized per (plan, from, to) for `_ROUTE_CACHE_TTL_SECONDS` (120 s) so the app's alternatives chips are instant. Transit access is by bike whenever bike is selected (Greenlink racks; `TRANSIT_BIKE_MAX_M` 5 km catchment vs `TRANSIT_WALK_MAX_M` 1.5 km) and the board step says to load the rack.
+  - **Weights.** `MODE_FACTORS` per mode (bike leans hard on stress, walk near-flat, `roll` flatter still) + `MODE_SPEED_M_S` (4.2 / 1.35 / 1.0 m/s). `NO_SIDEWALK_FACTOR` multiplies street edges with no sidewalk beside them: 1.6× walking, **8× rolling**, so a wheelchair route takes a longer sidewalked detour.
+  - **Sidewalk presence** is computed at graph-build time, per source segment, by `_sidewalk_exists_sql()`: an indexed `ST_DWithin` (80 ft) against `county.sidewalks` and `city."Sidewalks"`. The street side of the comparison is what gets `ST_Transform`ed so both GiST indexes stay usable — transforming the sidewalk column instead turns this into a 28k × 24k nested loop. City sidewalks needed an index (`IX_city_Sidewalks_geometry`, created 2026-08-01). Coverage: 12.1k of 28.4k stress segments have a sidewalk; by graph edge 16.7k yes / 26.5k no / 1.2k unknown (synthetic connectors).
+  - **Disclosure, not silence.** `properties.warn_ranges[]` = `{kind, start, end, distance_m}` index ranges into the LineString where the mode's infrastructure is missing (`no_sidewalk` for walk/roll, `no_bike_lane` for medium-or-worse stress with no lane/trail); `properties.warnings[]` is the per-kind total with a ready-made sentence; each step carries `warn` + `warn_m`. The app draws those ranges dashed red over the route and banners the sentence.
+  - **Street fallback.** When the mode's own network can't reach (snap > `ROUTE_SNAP_MAX_M` 400 m, or no connected path), `_route()` retries with flat street weights and a `ROUTE_SNAP_RELAXED_M` (2.5 km) snap, setting `fallback: 'street'` + `fallback_note`. The disclosure stays in the *requested* mode, so the caveats are still about sidewalks/bike lanes.
+  - **Bike share** (`_route_bikeshare`): walk → nearest dock with bikes → ride → dock with space → walk, adding `rent`/`dock` maneuvers and `rent_station*` / `dock_station*` props. Stations come from `plugins/bcycle.py` via `mrsm.Plugin('bcycle').module`, so a GBFS outage disables the plan instead of breaking routing.
+  - `properties.steps[]` is the turn-by-turn list the app narrates: `{maneuver, instruction, name, distance_m, duration_min, start_index, location, bearing, warn, warn_m}`. Maneuvers: the turn set plus `depart`/`arrive`/`board`/`ride`/`alight`/`rent`/`dock`. Street names come from `pcc.stress_levels.street_name` / `city.BicycleInfrastructure.STREET_NAM` (SRT legs are named "Swamp Rabbit Trail") and are title-cased; legs merge into one step unless the name changes or the bearing swings (`STEP_TURN_MIN_DEG` / `STEP_SAME_STREET_TURN_DEG`).
 - `GET /map-layers/search?q=` — bike parking ∪ bus stops ∪ `city."Addresses"` ∪ PCC street names, Nominatim fallback
 - `POST /map-layers/feedback` — generic report → `MapLayers.layer_feedback` (photos → `<root>/uploads/map-layers/`)
 

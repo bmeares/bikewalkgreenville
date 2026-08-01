@@ -1,6 +1,6 @@
 # Handoff — work continues on host `omega` (repo at `~/projects/bikewalkgreenville`)
 
-Updated 2026-07-30 (second session on omega). Read this + `DATA.md` before touching anything.
+Updated 2026-08-01 (third session on omega). Read this + `DATA.md` before touching anything.
 
 ## ⚠️ Repo is PUBLIC on GitHub
 
@@ -8,15 +8,27 @@ Updated 2026-07-30 (second session on omega). Read this + `DATA.md` before touch
 
 ## State (all TESTED; backend DEPLOYED)
 
-- **`app-native/`** — native Flutter app (map-first, MapLibre GL), v**1.2.0+32**, applicationId `org.bikewalkgreenville.app`. `flutter analyze` clean, `flutter test` 10/10 green, signed release APK + AAB built on omega (signer SHA-1 `537F9A88…A843`, the shared SRA upload key).
-  - `build/app/outputs/flutter-apk/app-release.apk` (86 MB)
-  - `build/app/outputs/bundle/release/app-release.aab` (58 MB)
-- **Backend live on bwg.mrsm.io**: `plugins/walk-audit.py`, `plugins/map-layers.py` (now serving turn-by-turn `steps`), `plugins/bike-parking.py`, `plugins/gtfs.py`.
+- **`app-native/`** — native Flutter app (map-first, MapLibre GL), v**1.3.0+33**, applicationId `org.bikewalkgreenville.app`. `flutter analyze` clean, `flutter test` 21/21 green, signed release APK + AAB built on omega (signer SHA-1 `537F9A88…A843`, the shared SRA upload key).
+  - `build/app/outputs/flutter-apk/app-release.apk`
+  - `build/app/outputs/bundle/release/app-release.aab`
+- **Backend live on bwg.mrsm.io**: `plugins/walk-audit.py`, `plugins/map-layers.py` (v0.3.0 — multi-modal routing, see below), `plugins/bike-parking.py`, `plugins/gtfs.py`, `plugins/bcycle.py`.
 - **Prod jobs registered** inside `mrsm-api-bwg-1`: `transit` (daily GTFS sync) and `bike-parking` (daily Overpass sync), alongside `annex-watch`, `trails-output`, `duke`, `who-owns-the-roads`, `parking`. Both verified running with successful first syncs (`mrsm show logs <job>`).
 - **walk-audit config** moved off env vars onto Meerschaum config (`plugins:walk-audit:{smtp,notify}`). Prod values live in the container volume at `/meerschaum/config/plugins.json` (chmod 600); the `/meerschaum/.env` hack has been **deleted**.
 - `WalkAudit.reports` is empty (the deploy-check row was removed).
 
-### Shipped this session
+### Shipped 2026-08-01 (third session) — v1.3.0+33
+
+1. **Multi-modal routing.** `/map-layers/route` takes `?modes=bike,walk,transit` (plus `roll=1`, `bcycle=1`, `plan=<key>`); every itinerary the selection allows is costed and the fastest returned, the rest in `properties.alternatives[]`. Plan keys: `bike`, `walk`, `roll`, `bcycle`, `bike-transit`, `walk-transit`, `roll-transit`. Transit access is by bike when bike is selected (5 km catchment, "load your bike on the front rack" at boarding). Legacy `?mode=` still works. Full parameter/behaviour notes in `DATA.md`.
+2. **Sidewalk-aware walking + wheelchair mode.** Graph edges now carry `has_sidewalk`, computed at build time by an indexed `ST_DWithin` (80 ft) against `county.sidewalks` + `city."Sidewalks"` (created `IX_city_Sidewalks_geometry` — the city table had no spatial index and the join was a nested loop without it). `roll` weights penalize a sidewalk-less street 8×, so a wheelchair route takes the longer sidewalked way. Graph build went 4.8 s → ~5.7 s.
+3. **The route tells you what it's missing.** `properties.warn_ranges[]` / `warnings[]` / per-step `warn` mark every stretch with no sidewalk (walk/roll) or no bike lane (medium-plus stress, no facility). The app draws those spans **dashed red over the route line**, banners the sentence in the preview, flags them in the steps sheet and in the maneuver card mid-turn.
+4. **Street fallback, disclosed.** If the mode's network can't reach, `_route()` retries with flat street weights + a 2.5 km snap and sets `fallback: 'street'` + `fallback_note`; the warnings stay written for the *requested* mode.
+5. **BCycle bike share** (`plugins/bcycle.py`, new): live GBFS availability at `/bcycle/stations.geojson`, `bcycle` map layer with dock pins, a feature sheet showing bikes/e-bikes/open docks, and an "Open the BCycle app" handoff (per-station deep link → `bcycle://` → Play Store). Also a routing plan: walk → unlock → ride → dock → walk, with `rent`/`dock` maneuvers. `BCycle.stations` pipe (`projects/bcycle.yaml`) is the outage fallback for pin locations only.
+6. **Trip planner with a start point** (`lib/screens/directions_sheet.dart`): From (your location by default) / To, each searchable or pickable by tapping the map, swap button, mode multi-select chips, and the roll / BCycle sub-toggles. Reachable from the search bar's ⌗ directions button, the map-tap actions sheet, and the ⚙ on a searched place card.
+7. **Nav view reads like Google Maps.** Thematic overlays come off while navigating so the basemap street grid and labels are legible; arrowheads land on the map at every upcoming turn (rotated to the heading, dropping off as they're passed); an always-on horizontal strip lists the turns still ahead; alternatives chips re-route in one tap; rerouting keeps the same itinerary instead of silently switching modes.
+8. **Modes are a set, persisted.** `AppState.modes` is a `Set<TravelMode>` in shared_preferences with `roll` / `useBcycle`; layer visibility is the union across selected modes; the top segmented control is `multiSelectionEnabled`.
+9. `DATA.md` corrected: **SRID 3361 is feet, not metres** (`+units=ft`) — the old note would have made every distance literal 3.28× off.
+
+### Shipped earlier (first session on omega)
 
 1. **No more forwarding language.** Reports are stored and shown on the map; only a staff notification email goes out (to `data@…`, never to an office). Owner resolution is still stored per report. Banner in `report_sheet.dart`, post-submit toast, `RoadInfoSheet` note and the `tools_screen.dart` blurb all reworded.
 2. **Reports layer is prominent**: `defaultOn: true`, always drawn (`iconAllowOverlap`), larger pin, and `_refreshReports()` re-fetches the layer right after a submit — the server now writes the row synchronously so the new pin appears immediately.
@@ -49,10 +61,13 @@ Updated 2026-07-30 (second session on omega). Read this + `DATA.md` before touch
 
 ## NOT yet done / next up
 
-1. **On-device testing of everything above.** No Android device was attached to omega this session, so pins, haptics, highlight, voice guidance and the follow camera are untested on hardware. Sideload the APK and ride/walk a route before promoting. `adb uninstall org.bikewalkgreenville.app` first if a debug build is installed.
-2. **Jasmine's call on forwarding** — the app no longer promises forwarding anywhere. If BWG decides to forward after all, the owner contact info is still stored per report.
-3. **Play upload** when ready: the AAB above; `gplay release --package org.bikewalkgreenville.app --bundle build/app/outputs/bundle/release/app-release.aab --track internal --wait`; listing assets pattern in trail-counter `app-native/play/`.
-4. Optional: `stop_times` ingest for headways; moderation/rate limiting on the public POST endpoints (still none — see DATA.md "Gaps").
+1. **On-device testing of everything above.** No Android device has been attached to omega for any of these sessions, so pins, haptics, highlight, voice guidance, the follow camera, the turn arrows, the dashed warning spans and the trip planner are all untested on hardware. Sideload the APK and ride/walk a route before promoting. `adb uninstall org.bikewalkgreenville.app` first if a debug build is installed.
+2. **Judgement call on the sidewalk data.** The `no_sidewalk` warnings are only as good as `county.sidewalks` + `city."Sidewalks"`: 57% of stress segments have no sidewalk within 80 ft, which is plausible for greater Greenville but includes genuinely unmapped sidewalks outside the city. The wording ("no sidewalk **mapped**") is deliberately hedged. If it reads as too alarmist on the ground, raise `SIDEWALK_NEAR_FT` or soften `WARNING_LABELS` rather than dropping the disclosure.
+3. **Bike-share plan rarely wins.** With 13 downtown docks, walking to one usually costs more than it saves, so `bcycle` mostly shows up as a slower alternative. That's honest; don't tune `BIKESHARE_*` to force it.
+4. **Transit wait is still a flat 8 min** (`TRANSIT_WAIT_MIN`) — `stop_times` isn't ingested, so transit durations are estimates and there is no departure time anywhere in the UI.
+5. **Jasmine's call on forwarding** — the app no longer promises forwarding anywhere. If BWG decides to forward after all, the owner contact info is still stored per report.
+6. **Play upload** when ready: the AAB above; `gplay release --package org.bikewalkgreenville.app --bundle build/app/outputs/bundle/release/app-release.aab --track internal --wait`; listing assets pattern in trail-counter `app-native/play/`.
+7. Optional: moderation/rate limiting on the public POST endpoints (still none — see DATA.md "Gaps"); a `bcycle` daily job in prod if the station-location fallback should stay fresh (`docker exec mrsm-api-bwg-1 mrsm sync pipes -c plugin:bcycle -s daily --name bcycle -d -y`).
 
 ## Secrets (present on omega, all gitignored, chmod 600)
 

@@ -37,12 +37,21 @@ class RouteStep {
   final double distanceM;
   final int startIndex;
 
+  /// `no_sidewalk` / `no_bike_lane` when this step travels on a street missing
+  /// the infrastructure the mode needs, else null.
+  final String? warn;
+
+  /// How much of [distanceM] is missing that infrastructure.
+  final double warnM;
+
   RouteStep({
     required this.maneuver,
     required this.instruction,
     required this.name,
     required this.distanceM,
     required this.startIndex,
+    this.warn,
+    this.warnM = 0.0,
   });
 
   factory RouteStep.fromJson(Map<String, dynamic> j) => RouteStep(
@@ -51,6 +60,8 @@ class RouteStep {
         name: j['name']?.toString(),
         distanceM: (j['distance_m'] as num?)?.toDouble() ?? 0.0,
         startIndex: (j['start_index'] as num?)?.toInt() ?? 0,
+        warn: j['warn']?.toString(),
+        warnM: (j['warn_m'] as num?)?.toDouble() ?? 0.0,
       );
 
   IconData get icon {
@@ -79,10 +90,94 @@ class RouteStep {
         return Icons.directions_bus;
       case 'alight':
         return Icons.pin_drop;
+      case 'rent':
+        return Icons.pedal_bike;
+      case 'dock':
+        return Icons.lock_outline;
       default:
         return Icons.straight;
     }
   }
+}
+
+/// A stretch of the route that lacks the infrastructure the mode needs, as an
+/// index range into [NavRoute.points].
+class WarnRange {
+  final String kind; // no_sidewalk | no_bike_lane
+  final int start;
+  final int end;
+  final double distanceM;
+
+  const WarnRange({
+    required this.kind,
+    required this.start,
+    required this.end,
+    required this.distanceM,
+  });
+
+  factory WarnRange.fromJson(Map<String, dynamic> j) => WarnRange(
+        kind: (j['kind'] ?? 'unknown').toString(),
+        start: (j['start'] as num?)?.toInt() ?? 0,
+        end: (j['end'] as num?)?.toInt() ?? 0,
+        distanceM: (j['distance_m'] as num?)?.toDouble() ?? 0.0,
+      );
+}
+
+/// One kind of gap, totalled across the route — what the banner says.
+class RouteWarning {
+  final String kind;
+  final double distanceM;
+  final String label; // "0.4 mi with no sidewalk"
+  final String message; // full sentence for the banner / detail sheet
+
+  const RouteWarning({
+    required this.kind,
+    required this.distanceM,
+    required this.label,
+    required this.message,
+  });
+
+  factory RouteWarning.fromJson(Map<String, dynamic> j) => RouteWarning(
+        kind: (j['kind'] ?? 'unknown').toString(),
+        distanceM: (j['distance_m'] as num?)?.toDouble() ?? 0.0,
+        label: (j['label'] ?? '').toString(),
+        message: (j['message'] ?? '').toString(),
+      );
+
+  IconData get icon => kind == 'no_sidewalk'
+      ? Icons.no_transfer_outlined
+      : Icons.directions_bike_outlined;
+}
+
+/// A different way to make the same trip, priced by the router.
+class RouteAlternative {
+  final String plan; // bike | walk | roll | bcycle | bike-transit | ...
+  final String label;
+  final String iconMode;
+  final double distanceM;
+  final double durationMin;
+  final List<RouteWarning> warnings;
+
+  const RouteAlternative({
+    required this.plan,
+    required this.label,
+    required this.iconMode,
+    required this.distanceM,
+    required this.durationMin,
+    required this.warnings,
+  });
+
+  factory RouteAlternative.fromJson(Map<String, dynamic> j) =>
+      RouteAlternative(
+        plan: (j['plan'] ?? '').toString(),
+        label: (j['label'] ?? '').toString(),
+        iconMode: (j['icon_mode'] ?? '').toString(),
+        distanceM: (j['distance_m'] as num?)?.toDouble() ?? 0.0,
+        durationMin: (j['duration_min'] as num?)?.toDouble() ?? 0.0,
+        warnings: ((j['warnings'] as List?) ?? [])
+            .map((w) => RouteWarning.fromJson(Map<String, dynamic>.from(w)))
+            .toList(),
+      );
 }
 
 /// A computed route: the line, its steps and the cumulative distance table
@@ -93,14 +188,54 @@ class NavRoute {
   final List<double> cumulative; // meters from start to points[i]
   final double distanceM;
   final double durationMin;
-  final String mode; // bike | walk | transit
+  final String mode; // bike | walk | roll | transit | bcycle
   final String? transitRoute; // Greenlink short name, transit only
   final String? boardStop;
   final String? routeColor; // official route color, transit only
 
-  NavRoute._(this.points, this.steps, this.cumulative, this.distanceM,
-      this.durationMin, this.mode, this.transitRoute, this.boardStop,
-      this.routeColor);
+  /// Router plan key (`bike`, `bike-transit`, `bcycle`, …) and its label.
+  final String plan;
+  final String planLabel;
+
+  /// Stretches missing the infrastructure this mode needs, plus the per-kind
+  /// totals the banner reads from.
+  final List<WarnRange> warnRanges;
+  final List<RouteWarning> warnings;
+
+  /// Set when the mode's own network couldn't get there and the route fell back
+  /// to plain streets; [fallbackNote] is the sentence to show.
+  final String? fallback;
+  final String? fallbackNote;
+
+  /// Other itineraries the router costed for the same trip.
+  final List<RouteAlternative> alternatives;
+
+  /// Bike-share specifics, when [plan] is `bcycle`.
+  final String? rentStation;
+  final String? dockStation;
+  final String? rentStationUri;
+
+  NavRoute._({
+    required this.points,
+    required this.steps,
+    required this.cumulative,
+    required this.distanceM,
+    required this.durationMin,
+    required this.mode,
+    required this.transitRoute,
+    required this.boardStop,
+    required this.routeColor,
+    required this.plan,
+    required this.planLabel,
+    required this.warnRanges,
+    required this.warnings,
+    required this.fallback,
+    required this.fallbackNote,
+    required this.alternatives,
+    required this.rentStation,
+    required this.dockStation,
+    required this.rentStationUri,
+  });
 
   factory NavRoute.fromFeature(Map<String, dynamic> feature) {
     final coords = (feature['geometry']?['coordinates'] as List? ?? [])
@@ -117,23 +252,106 @@ class NavRoute {
     for (var i = 1; i < coords.length; i++) {
       cumulative.add(cumulative[i - 1] + metersBetween(coords[i - 1], coords[i]));
     }
+    final mode = (props['mode'] ?? 'bike').toString();
     return NavRoute._(
-      coords,
-      steps,
-      cumulative,
-      (props['distance_m'] as num?)?.toDouble() ??
+      points: coords,
+      steps: steps,
+      cumulative: cumulative,
+      distanceM: (props['distance_m'] as num?)?.toDouble() ??
           (cumulative.isEmpty ? 0.0 : cumulative.last),
-      (props['duration_min'] as num?)?.toDouble() ?? 0.0,
-      (props['mode'] ?? 'bike').toString(),
-      props['route']?.toString(),
-      props['board_stop']?.toString(),
-      props['route_color']?.toString(),
+      durationMin: (props['duration_min'] as num?)?.toDouble() ?? 0.0,
+      mode: mode,
+      transitRoute: props['route']?.toString(),
+      boardStop: props['board_stop']?.toString(),
+      routeColor: props['route_color']?.toString(),
+      plan: (props['plan'] ?? mode).toString(),
+      planLabel: (props['plan_label'] ?? '').toString(),
+      warnRanges: ((props['warn_ranges'] as List?) ?? [])
+          .map((r) => WarnRange.fromJson(Map<String, dynamic>.from(r)))
+          .toList(),
+      warnings: ((props['warnings'] as List?) ?? [])
+          .map((w) => RouteWarning.fromJson(Map<String, dynamic>.from(w)))
+          .toList(),
+      fallback: props['fallback']?.toString(),
+      fallbackNote: props['fallback_note']?.toString(),
+      alternatives: ((props['alternatives'] as List?) ?? [])
+          .map((a) => RouteAlternative.fromJson(Map<String, dynamic>.from(a)))
+          .toList(),
+      rentStation: props['rent_station']?.toString(),
+      dockStation: props['dock_station']?.toString(),
+      rentStationUri: props['rent_station_uri']?.toString(),
     );
   }
 
   bool get isEmpty => points.length < 2;
 
   LatLng get destination => points.last;
+
+  bool get isTransit => mode == 'transit';
+
+  /// GeoJSON for the "watch out here" overlay: one LineString per gap, drawn
+  /// dashed on top of the route so a rider can see before starting exactly
+  /// which blocks have no sidewalk or no bike lane.
+  Map<String, dynamic> warnCollection() => {
+        'type': 'FeatureCollection',
+        'features': [
+          for (final r in warnRanges)
+            if (r.end > r.start && r.start >= 0 && r.end < points.length)
+              {
+                'type': 'Feature',
+                'geometry': {
+                  'type': 'LineString',
+                  'coordinates': [
+                    for (final p in points.sublist(r.start, r.end + 1))
+                      [p.longitude, p.latitude],
+                  ],
+                },
+                'properties': {'kind': r.kind},
+              },
+        ],
+      };
+
+  /// GeoJSON for the maneuver markers: one rotated chevron per turn, so the
+  /// upcoming turns are visible on the map itself and not only in the card.
+  /// [fromStep] skips maneuvers already behind the rider.
+  Map<String, dynamic> stepCollection({int fromStep = 0}) => {
+        'type': 'FeatureCollection',
+        'features': [
+          for (var i = fromStep; i < steps.length; i++)
+            if (_isTurn(steps[i]) && steps[i].startIndex < points.length)
+              {
+                'type': 'Feature',
+                'geometry': {
+                  'type': 'Point',
+                  'coordinates': [
+                    points[steps[i].startIndex].longitude,
+                    points[steps[i].startIndex].latitude,
+                  ],
+                },
+                'properties': {
+                  'bearing': _bearingAt(steps[i].startIndex),
+                  'first': i == fromStep,
+                },
+              },
+        ],
+      };
+
+  static bool _isTurn(RouteStep s) => const {
+        'left',
+        'right',
+        'slight-left',
+        'slight-right',
+        'sharp-left',
+        'sharp-right',
+        'uturn',
+      }.contains(s.maneuver);
+
+  /// Heading of the route as it leaves [index] — the chevron's rotation.
+  double _bearingAt(int index) {
+    if (points.length < 2) return 0.0;
+    final i = index.clamp(0, points.length - 2);
+    return bearingBetween(points[i], points[i + 1]);
+  }
 }
 
 /// Where the rider is relative to [NavRoute] right now.

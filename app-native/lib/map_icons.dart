@@ -72,3 +72,54 @@ Future<Uint8List> renderPin({
   image.dispose();
   return bytes!.buffer.asUint8List();
 }
+
+/// Size of the turn marker bitmap, in dp.
+const turnMarkerSize = 22.0;
+
+/// Paints the arrowhead dropped on the map at every upcoming turn.
+///
+/// The symbol layer rotates it with `icon-rotate` against the route's heading
+/// (`icon-rotation-alignment: map`), so the arrow points the way the rider will
+/// be travelling after the turn — the map itself shows the upcoming turns,
+/// instead of the maneuver card being the only place they exist. Painted
+/// pointing north (up) because `icon-rotate: 0` means north.
+Future<Uint8List> renderTurnMarker({
+  required Color color,
+  required double devicePixelRatio,
+  double scale = 1.0,
+}) async {
+  final ratio = devicePixelRatio * scale;
+  final recorder = ui.PictureRecorder();
+  final canvas = Canvas(recorder);
+  canvas.scale(ratio);
+
+  const c = turnMarkerSize / 2;
+  final disc = Rect.fromCircle(center: const Offset(c, c), radius: c - 1.5);
+  canvas.drawShadow(
+      Path()..addOval(disc), Colors.black.withValues(alpha: 0.4), 1.5, false);
+  canvas.drawOval(disc, Paint()..color = Colors.white..isAntiAlias = true);
+  canvas.drawOval(
+    disc,
+    Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0
+      ..isAntiAlias = true,
+  );
+
+  final arrow = Path()
+    ..moveTo(c, c - 6.0)
+    ..lineTo(c + 4.6, c + 5.0)
+    ..lineTo(c, c + 2.4)
+    ..lineTo(c - 4.6, c + 5.0)
+    ..close();
+  canvas.drawPath(arrow, Paint()..color = color..isAntiAlias = true);
+
+  final image = await recorder.endRecording().toImage(
+        (turnMarkerSize * ratio).ceil(),
+        (turnMarkerSize * ratio).ceil(),
+      );
+  final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+  image.dispose();
+  return bytes!.buffer.asUint8List();
+}

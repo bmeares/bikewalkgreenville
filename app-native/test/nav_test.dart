@@ -110,6 +110,97 @@ void main() {
     expect(route.transitRoute, isNull);
   });
 
+  test('warning ranges become dashed overlay geometry', () {
+    final f = _feature();
+    final props = f['properties'] as Map<String, dynamic>;
+    props['mode'] = 'walk';
+    props['warn_ranges'] = [
+      {'kind': 'no_sidewalk', 'start': 1, 'end': 2, 'distance_m': 222.0},
+      // Out of range and degenerate entries must not produce features.
+      {'kind': 'no_sidewalk', 'start': 2, 'end': 2, 'distance_m': 0.0},
+      {'kind': 'no_sidewalk', 'start': 5, 'end': 9, 'distance_m': 10.0},
+    ];
+    props['warnings'] = [
+      {
+        'kind': 'no_sidewalk',
+        'distance_m': 222.0,
+        'label': '700 ft with no sidewalk',
+        'message': 'About 700 ft of this route has no sidewalk.',
+      },
+    ];
+    final route = NavRoute.fromFeature(f);
+    expect(route.warnRanges.length, 3);
+    expect(route.warnings.single.kind, 'no_sidewalk');
+    expect(route.warnings.single.label, '700 ft with no sidewalk');
+
+    final collection = route.warnCollection();
+    final features = collection['features'] as List;
+    expect(features.length, 1, reason: 'only the in-range, non-empty span');
+    final coords = features.first['geometry']['coordinates'] as List;
+    expect(coords.length, 2);
+    expect(coords.first, [-82.3980, 34.8500]);
+  });
+
+  test('street fallback and plan metadata parse', () {
+    final f = _feature();
+    final props = f['properties'] as Map<String, dynamic>;
+    props['plan'] = 'bike-transit';
+    props['plan_label'] = 'Bike + bus';
+    props['fallback'] = 'street';
+    props['fallback_note'] = 'No bikeable route was available.';
+    props['alternatives'] = [
+      {
+        'plan': 'bike',
+        'label': 'Bike',
+        'icon_mode': 'bike',
+        'distance_m': 4000.0,
+        'duration_min': 16.0,
+        'warnings': [],
+      },
+    ];
+    final route = NavRoute.fromFeature(f);
+    expect(route.plan, 'bike-transit');
+    expect(route.planLabel, 'Bike + bus');
+    expect(route.fallback, 'street');
+    expect(route.fallbackNote, contains('No bikeable route'));
+    expect(route.alternatives.single.plan, 'bike');
+    expect(route.alternatives.single.durationMin, 16.0);
+  });
+
+  test('turn markers are emitted only for turns, ahead of the rider', () {
+    final route = NavRoute.fromFeature(_feature());
+    // depart / left / arrive -> one marker, for the left turn.
+    final all = route.stepCollection()['features'] as List;
+    expect(all.length, 1);
+    expect(all.first['properties']['bearing'], isA<double>());
+    // Once the turn is behind us it drops off the map.
+    final ahead = route.stepCollection(fromStep: 2)['features'] as List;
+    expect(ahead, isEmpty);
+  });
+
+  test('per-step warnings parse and bike-share maneuvers have icons', () {
+    final step = RouteStep.fromJson({
+      'maneuver': 'straight',
+      'instruction': 'Continue on Elm St',
+      'distance_m': 300.0,
+      'start_index': 0,
+      'warn': 'no_bike_lane',
+      'warn_m': 180.0,
+    });
+    expect(step.warn, 'no_bike_lane');
+    expect(step.warnM, 180.0);
+
+    RouteStep m(String maneuver) => RouteStep.fromJson({
+          'maneuver': maneuver,
+          'instruction': 'x',
+          'distance_m': 0.0,
+          'start_index': 0,
+        });
+    expect(m('rent').icon, Icons.pedal_bike);
+    expect(m('dock').icon, Icons.lock_outline);
+    expect(m('straight').warn, isNull);
+  });
+
   test('distances format imperially', () {
     expect(formatDistance(30), '100 ft');
     expect(formatDistance(1609.344), '1.0 mi');

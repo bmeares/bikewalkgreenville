@@ -15,6 +15,7 @@ import '../app_state.dart';
 import '../map_icons.dart';
 import '../nav.dart';
 import '../theme.dart';
+import 'directions_sheet.dart';
 import 'report_sheet.dart';
 import 'tools_screen.dart';
 
@@ -39,11 +40,18 @@ class _MapScreenState extends State<MapScreen> {
   /// Destination picked from search — drives the bottom place card.
   Map<String, dynamic>? _place;
 
+  // Trip planning: both ends of the trip, so a route doesn't have to start
+  // where the rider is standing.
+  TripEndpoint _from = TripEndpoint.myLocation;
+  TripEndpoint? _to;
+
+  /// `from` / `to` while the user is picking that end by tapping the map.
+  String? _pickField;
+
   // Route + turn-by-turn navigation state.
   bool _routing = false;
   NavRoute? _navRoute;
   LatLng? _destination;
-  TravelMode _routeMode = TravelMode.cyclist;
   bool _navigating = false;
   NavProgress? _progress;
   StreamSubscription<Position>? _posSub;
@@ -203,6 +211,55 @@ class _MapScreenState extends State<MapScreen> {
           lineJoin: 'round'),
       enableInteraction: false,
     );
+
+    // Gaps in the network, drawn dashed ON TOP of the route: the stretches with
+    // no sidewalk (walk/roll) or no bike lane (bike). The route still goes
+    // there — this is the disclosure, not a detour.
+    await map.addSource(
+        'route-warn', GeojsonSourceProperties(data: _emptyCollection));
+    await map.addLineLayer(
+      'route-warn',
+      'lyr-route-warn',
+      const LineLayerProperties(
+        lineColor: '#D32F2F',
+        lineWidth: 5.0,
+        lineDasharray: [2.0, 1.6],
+        lineCap: 'butt',
+        lineJoin: 'round',
+      ),
+      enableInteraction: false,
+    );
+
+    // Upcoming turns, on the map itself: an arrowhead at each maneuver rotated
+    // to the heading the rider leaves it on.
+    await map.addImage(
+      'turn-marker',
+      await renderTurnMarker(color: brandDark, devicePixelRatio: ratio),
+    );
+    await map.addSource(
+        'route-steps', GeojsonSourceProperties(data: _emptyCollection));
+    await map.addSymbolLayer(
+      'route-steps',
+      'lyr-route-steps',
+      const SymbolLayerProperties(
+        iconImage: 'turn-marker',
+        iconRotate: ['get', 'bearing'],
+        iconRotationAlignment: 'map',
+        iconAllowOverlap: true,
+        iconIgnorePlacement: true,
+        iconSize: [
+          'interpolate',
+          ['linear'],
+          ['zoom'],
+          12.0,
+          0.6,
+          16.0,
+          1.0,
+        ],
+      ),
+      enableInteraction: false,
+    );
+
     await map.addSource('pin', GeojsonSourceProperties(data: _emptyCollection));
     await map.addCircleLayer(
       'pin',
@@ -218,6 +275,7 @@ class _MapScreenState extends State<MapScreen> {
 
     _styleReady = true;
     _applyVisibility();
+    _refreshLive();
   }
 
   static const _emptyCollection = {
@@ -229,7 +287,24 @@ class _MapScreenState extends State<MapScreen> {
     if (!_styleReady || _map == null) return;
     final state = context.read<AppState>();
     for (final def in layerDefs) {
-      _map!.setLayerVisibility('lyr-${def.id}', state.layerVisible(def));
+      // While navigating, every thematic overlay comes off: what a rider needs
+      // mid-turn is the street grid and its labels, not the stress colouring.
+      final visible = _navigating ? false : state.layerVisible(def);
+      _map!.setLayerVisibility('lyr-${def.id}', visible);
+    }
+  }
+
+  /// Re-pull a layer whose contents go stale (bike-share availability).
+  Future<void> _refreshLive() async {
+    if (!_styleReady || _map == null) return;
+    final state = context.read<AppState>();
+    for (final def in layerDefs.where((d) => d.live)) {
+      if (!state.layerVisible(def)) continue;
+      try {
+        await _map!.setGeoJsonSource(def.id, await api.layerGeoJson(def.path));
+      } catch (_) {
+        // Keep whatever the map already has.
+      }
     }
   }
 
@@ -292,6 +367,11 @@ class _MapScreenState extends State<MapScreen> {
       _searchFocus.unfocus();
       return;
     }
+    // A tap while picking a trip endpoint means "there", not "what's here?".
+    if (_pickField != null) {
+      await _applyPick(latLng);
+      return;
+    }
     await _showPlaceActions(latLng);
   }
 
@@ -301,7 +381,7 @@ class _MapScreenState extends State<MapScreen> {
   Future<void> _showPlaceActions(LatLng latLng) async {
     await _setPin(latLng);
     if (!mounted) return;
-    final mode = app.mode;
+    final state = context.read<AppState>();
     showModalBottomSheet(
       context: context,
       showDragHandle: true,
@@ -310,12 +390,23 @@ class _MapScreenState extends State<MapScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: Icon(modeIcons[mode], color: brandGreen),
-              title: Text(modeVerbs[mode]!),
+              leading: Icon(state.iconFor(state.mode), color: brandGreen),
+              title: Text(state.directionsVerb),
               subtitle: const Text('Turn-by-turn directions to this spot'),
               onTap: () {
                 Navigator.pop(ctx);
                 _routeTo(latLng);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.alt_route, color: brandGreen),
+              title: const Text('Plan a trip from here'),
+              subtitle: const Text('Pick a start point and travel modes'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _openDirections(
+                  to: TripEndpoint(label: 'Dropped pin', latLng: latLng),
+                );
               },
             ),
             ListTile(
@@ -401,7 +492,15 @@ class _MapScreenState extends State<MapScreen> {
       if (lvl.isNotEmpty) title = '$title — $lvl';
     }
 
-    final skip = {'name', 'label', 'street_name', 'geojson', 'color', 'id'};
+    final isBcycle = def?.id == 'bcycle';
+    final skip = {
+      'name', 'label', 'street_name', 'geojson', 'color', 'id',
+      // BCycle internals: the availability line already says it better.
+      if (isBcycle) ...{
+        'short_id', 'rental_uri', 'bikes', 'ebikes', 'docks',
+        'is_renting', 'is_returning', 'last_reported',
+      },
+    };
     final rows = props.entries
         .where((e) =>
             !skip.contains(e.key) &&
@@ -418,7 +517,7 @@ class _MapScreenState extends State<MapScreen> {
       final c = geom['coordinates'] as List;
       target = LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble());
     }
-    final mode = app.mode;
+    final state = context.read<AppState>();
 
     showModalBottomSheet(
       context: context,
@@ -430,30 +529,42 @@ class _MapScreenState extends State<MapScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(children: [
-                Icon(def?.icon ?? Icons.place, color: brandGreen),
+                Icon(def?.icon ?? Icons.place,
+                    color: isBcycle ? hexColor(bcycleRed) : brandGreen),
                 const SizedBox(width: 8),
                 Expanded(
                     child: Text(title,
                         style: Theme.of(ctx).textTheme.titleMedium)),
               ]),
               const SizedBox(height: 8),
+              if (isBcycle) _bcycleAvailability(ctx, props),
               for (final e in rows)
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 2),
                   child: Text('${_prettyKey(e.key)}: ${e.value}'),
                 ),
               const SizedBox(height: 8),
+              if (isBcycle)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.open_in_new, size: 18),
+                    label: const Text('Open the BCycle app to unlock'),
+                    onPressed: () =>
+                        _openBcycleApp(props['rental_uri']?.toString()),
+                  ),
+                ),
               Row(children: [
                 FilledButton.icon(
                   style: FilledButton.styleFrom(
                     backgroundColor: brandGreen,
                     foregroundColor: Colors.white,
                   ),
-                  icon: Icon(modeIcons[mode], size: 18),
+                  icon: Icon(state.iconFor(state.mode), size: 18),
                   label: const Text('Directions'),
                   onPressed: () {
                     Navigator.pop(ctx);
-                    _routeTo(target);
+                    _routeTo(target, label: title);
                   },
                 ),
                 const Spacer(),
@@ -485,6 +596,61 @@ class _MapScreenState extends State<MapScreen> {
   String _prettyKey(String k) =>
       k.replaceAll('_', ' ').replaceAll('-', ' ').trim();
 
+  /// Live dock counts, the one thing a rider needs before walking to a station.
+  Widget _bcycleAvailability(BuildContext ctx, Map<String, dynamic> props) {
+    final bikes = (props['bikes'] as num?)?.toInt();
+    final ebikes = (props['ebikes'] as num?)?.toInt() ?? 0;
+    final docks = (props['docks'] as num?)?.toInt();
+    final renting = props['is_renting'] != false;
+    if (bikes == null && docks == null) {
+      return const Padding(
+        padding: EdgeInsets.only(bottom: 8),
+        child: Text('Live availability unavailable right now.',
+            style: TextStyle(color: Colors.black54)),
+      );
+    }
+    final color = !renting || (bikes ?? 0) == 0 ? warnRed : brandGreen;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          Icon(Icons.pedal_bike, color: color, size: 20),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              !renting
+                  ? 'Not renting right now'
+                  : '${bikes ?? 0} bike${bikes == 1 ? '' : 's'} available'
+                      '${ebikes > 0 ? ' ($ebikes electric)' : ''}'
+                      '${docks != null ? ' · $docks open dock${docks == 1 ? '' : 's'}' : ''}',
+              style: TextStyle(color: color, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Hand off to the BCycle app: the station's own deep link when GBFS gave us
+  /// one, then the app's discovery scheme, then the Play Store listing.
+  Future<void> _openBcycleApp(String? stationUri) async {
+    final candidates = <String>[
+      if (stationUri != null && stationUri.isNotEmpty) stationUri,
+      'bcycle://',
+      'https://play.google.com/store/apps/details?id=com.bcycle',
+    ];
+    for (final uri in candidates) {
+      try {
+        if (await launchUrlString(uri, mode: LaunchMode.externalApplication)) {
+          return;
+        }
+      } catch (_) {
+        // Try the next fallback.
+      }
+    }
+    if (mounted) toast(context, 'Could not open the BCycle app.');
+  }
+
   Future<void> _showRoadInfo(LatLng latLng) async {
     try {
       final info = await api.roadInfo(latLng.latitude, latLng.longitude);
@@ -500,21 +666,49 @@ class _MapScreenState extends State<MapScreen> {
 
   // ---------------------------------------------------------------- routing
 
-  Future<void> _routeTo(LatLng dest,
-      {bool silent = false, TravelMode? mode}) async {
-    final travelMode = mode ?? app.mode;
-    final origin = await _bestOrigin();
-    if (origin == null) {
+  /// One-tap "directions to here": keeps whatever start is currently set
+  /// (your location unless the planner says otherwise).
+  Future<void> _routeTo(LatLng dest, {String? label}) => _planTrip(
+        to: TripEndpoint(label: label ?? 'Dropped pin', latLng: dest),
+      );
+
+  /// Route between the two trip endpoints with the rider's selected modes.
+  ///
+  /// [plan] pins a specific itinerary (the alternatives chips); otherwise the
+  /// router picks the fastest of everything the modes allow.
+  Future<void> _planTrip({
+    TripEndpoint? from,
+    TripEndpoint? to,
+    String? plan,
+    bool silent = false,
+  }) async {
+    final state = context.read<AppState>();
+    final startPoint = from ?? _from;
+    final endPoint = to ?? _to;
+    if (endPoint == null) return;
+
+    final origin = startPoint.isMyLocation
+        ? await _bestOrigin()
+        : startPoint.latLng;
+    final dest = endPoint.isMyLocation ? await _bestOrigin() : endPoint.latLng;
+    if (origin == null || dest == null) {
       if (mounted) {
-        toast(context, 'Turn on location (or tap a start point) first.');
+        toast(context, 'Turn on location, or pick a start point on the map.');
       }
       return;
     }
     if (!silent) setState(() => _routing = true);
     try {
       final feature = await api.route(
-          origin.latitude, origin.longitude, dest.latitude, dest.longitude,
-          mode: modeApiNames[travelMode]!);
+        origin.latitude,
+        origin.longitude,
+        dest.latitude,
+        dest.longitude,
+        modes: state.apiModes,
+        roll: state.roll,
+        bcycle: state.useBcycle,
+        plan: plan,
+      );
       final route = NavRoute.fromFeature(feature);
       // Transit routes draw in the official Greenlink route color.
       final props = Map<String, dynamic>.from(feature['properties'] ?? {});
@@ -524,13 +718,16 @@ class _MapScreenState extends State<MapScreen> {
         'type': 'FeatureCollection',
         'features': [feature],
       });
+      await _map?.setGeoJsonSource('route-warn', route.warnCollection());
+      await _map?.setGeoJsonSource('route-steps', route.stepCollection());
       await _setPin(dest);
       if (!mounted) return;
       setState(() {
         _routing = true;
         _navRoute = route;
         _destination = dest;
-        _routeMode = travelMode;
+        _from = startPoint;
+        _to = endPoint;
         _place = null;
       });
       if (!_navigating) await _fitRoute(route);
@@ -539,6 +736,58 @@ class _MapScreenState extends State<MapScreen> {
       setState(() => _routing = _navRoute != null);
       toast(context, e.toString());
     }
+  }
+
+  // ------------------------------------------------------------- trip planner
+
+  /// Open the planner, then act on what it returns: route the trip, or drop
+  /// into map-pick mode for whichever end the user wants to tap out.
+  Future<void> _openDirections({TripEndpoint? to}) async {
+    final result = await showModalBottomSheet<DirectionsResult>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => DirectionsSheet(
+        from: _from,
+        to: to ?? _to ?? const TripEndpoint(label: ''),
+      ),
+    );
+    if (result == null || !mounted) return;
+    setState(() {
+      _from = result.from ?? _from;
+      _to = (result.to?.isEmpty ?? true) ? _to : result.to;
+    });
+    if (result.isPick) {
+      setState(() => _pickField = result.pickField);
+      toast(
+        context,
+        result.pickField == 'from'
+            ? 'Tap the map to set your start point.'
+            : 'Tap the map to set your destination.',
+      );
+      return;
+    }
+    await _planTrip();
+  }
+
+  /// Map tap while picking a trip endpoint.
+  Future<void> _applyPick(LatLng latLng) async {
+    final field = _pickField;
+    if (field == null) return;
+    final endpoint = TripEndpoint(
+      label: field == 'from' ? 'Point on the map' : 'Dropped pin',
+      latLng: latLng,
+    );
+    setState(() {
+      _pickField = null;
+      if (field == 'from') {
+        _from = endpoint;
+      } else {
+        _to = endpoint;
+      }
+    });
+    await _setPin(latLng);
+    await _openDirections();
   }
 
   Future<void> _fitRoute(NavRoute route) async {
@@ -570,6 +819,8 @@ class _MapScreenState extends State<MapScreen> {
   Future<void> _clearRoute() async {
     await _stopNav();
     await _map?.setGeoJsonSource('route', _emptyCollection);
+    await _map?.setGeoJsonSource('route-warn', _emptyCollection);
+    await _map?.setGeoJsonSource('route-steps', _emptyCollection);
     await _map?.setGeoJsonSource('pin', _emptyCollection);
     if (!mounted) return;
     setState(() {
@@ -578,6 +829,8 @@ class _MapScreenState extends State<MapScreen> {
       _destination = null;
       _progress = null;
       _place = null;
+      _to = null;
+      _from = TripEndpoint.myLocation;
     });
     await _map?.animateCamera(CameraUpdate.tiltTo(0.0));
   }
@@ -603,6 +856,8 @@ class _MapScreenState extends State<MapScreen> {
       _spokenImminent = false;
       _offRouteHits = 0;
     });
+    // Strip the thematic overlays so the street layout underneath is legible.
+    _applyVisibility();
     await _posSub?.cancel();
     _posSub = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
@@ -623,6 +878,7 @@ class _MapScreenState extends State<MapScreen> {
       _navigating = false;
       _progress = null;
     });
+    _applyVisibility();
     final here = _map?.cameraPosition?.target;
     if (here != null) {
       await _map?.animateCamera(CameraUpdate.newCameraPosition(
@@ -638,7 +894,16 @@ class _MapScreenState extends State<MapScreen> {
     final here = LatLng(pos.latitude, pos.longitude);
     final progress = NavProgress.of(route, here);
     if (progress == null || !mounted) return;
+    final advanced = progress.stepIndex != _progress?.stepIndex;
     setState(() => _progress = progress);
+    // Drop the arrows for turns already made, so what's on the map is only
+    // what's still ahead.
+    if (advanced) {
+      await _map?.setGeoJsonSource(
+        'route-steps',
+        route.stepCollection(fromStep: progress.stepIndex),
+      );
+    }
 
     // Course-up camera: GPS heading while moving, else the route's own bearing.
     final bearing =
@@ -693,7 +958,14 @@ class _MapScreenState extends State<MapScreen> {
     _offRouteHits = 0;
     await _speak('Rerouting.');
     if (mounted) toast(context, 'Off route — recalculating…');
-    await _routeTo(_destination!, silent: true, mode: _routeMode);
+    // Recompute from where the rider actually is, keeping the same itinerary
+    // (no silent switch from "bike + bus" to "walk" mid-trip).
+    await _planTrip(
+      from: TripEndpoint(label: 'Current position', latLng: p.snapped),
+      to: TripEndpoint(label: 'Destination', latLng: _destination!),
+      plan: _navRoute?.plan,
+      silent: true,
+    );
     _spokenStep = -1;
     _spokenImminent = false;
     _rerouting = false;
@@ -796,11 +1068,12 @@ class _MapScreenState extends State<MapScreen> {
   /// Bottom card for the searched destination — big enough to actually hit.
   Widget _placeCard() {
     final r = _place!;
-    final mode = context.watch<AppState>().mode;
+    final state = context.watch<AppState>();
     final target = LatLng(
       (r['lat'] as num).toDouble(),
       (r['lon'] as num).toDouble(),
     );
+    final label = (r['label'] ?? 'Destination').toString();
     final sublabel = (r['sublabel'] ?? '').toString();
     return Positioned(
       left: 12,
@@ -819,7 +1092,7 @@ class _MapScreenState extends State<MapScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      (r['label'] ?? 'Destination').toString(),
+                      label,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
@@ -840,6 +1113,8 @@ class _MapScreenState extends State<MapScreen> {
                 ),
               ),
               const SizedBox(width: 10),
+              // Tap the label to route straight away; the ⋮ opens the planner
+              // when the trip doesn't start where you're standing.
               FilledButton.icon(
                 style: FilledButton.styleFrom(
                   backgroundColor: Colors.white,
@@ -847,13 +1122,20 @@ class _MapScreenState extends State<MapScreen> {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                 ),
-                icon: Icon(modeIcons[mode], size: 20),
+                icon: Icon(state.iconFor(state.mode), size: 20),
                 label: Text(
-                  modeVerbs[mode]!,
+                  state.directionsVerb,
                   style: const TextStyle(
                       fontSize: 15, fontWeight: FontWeight.w600),
                 ),
-                onPressed: () => _routeTo(target),
+                onPressed: () => _routeTo(target, label: label),
+              ),
+              IconButton(
+                tooltip: 'Change start point or modes',
+                icon: const Icon(Icons.tune, color: Colors.white70),
+                onPressed: () => _openDirections(
+                  to: TripEndpoint(label: label, latLng: target),
+                ),
               ),
               IconButton(
                 icon: const Icon(Icons.close, color: Colors.white70),
@@ -979,6 +1261,12 @@ class _MapScreenState extends State<MapScreen> {
                                 },
                               ),
                             IconButton(
+                              icon: const Icon(Icons.directions),
+                              tooltip: 'Plan a trip',
+                              color: brandGreen,
+                              onPressed: () => _openDirections(),
+                            ),
+                            IconButton(
                               icon: const Icon(Icons.menu),
                               tooltip: 'Dashboards & more',
                               onPressed: () => Navigator.push(
@@ -1018,21 +1306,26 @@ class _MapScreenState extends State<MapScreen> {
                     ),
                   ),
                 const SizedBox(height: 8),
+                // Multi-select on purpose: bike AND bus means "cost me a
+                // bike-to-the-bus trip", not "pick one".
                 SegmentedButton<TravelMode>(
+                  multiSelectionEnabled: true,
+                  emptySelectionAllowed: false,
+                  showSelectedIcon: false,
                   segments: [
                     for (final m in TravelMode.values)
                       ButtonSegment(
                         value: m,
-                        icon: Icon(modeIcons[m]),
-                        label: Text(modeLabels[m]!),
+                        icon: Icon(state.iconFor(m)),
+                        label: Text(state.labelFor(m)),
                       ),
                   ],
-                  selected: {state.mode},
+                  selected: state.modes,
                   onSelectionChanged: (s) {
-                    state.setMode(s.first);
+                    state.setModes(s);
                     // A drawn route follows the mode switch.
-                    if (_navRoute != null && !_navigating && _destination != null) {
-                      _routeTo(_destination!, mode: s.first);
+                    if (_navRoute != null && !_navigating && _to != null) {
+                      _planTrip();
                     }
                   },
                   style: ButtonStyle(
@@ -1048,6 +1341,7 @@ class _MapScreenState extends State<MapScreen> {
                     ),
                   ),
                 ),
+                if (_pickField != null) _pickBanner(),
                 if (_navRoute != null) _routePreview(),
               ],
             ),
@@ -1097,76 +1391,195 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  /// Route summary before the trip starts: distance, time, upcoming turns,
-  /// Start.
-  Widget _routePreview() {
-    final route = _navRoute!;
-    final isTransit = route.mode == 'transit';
-    final color =
-        isTransit ? const Color(0xFF7B1FA2) : const Color(0xFF1565C0);
-    final subtitle = isTransit && route.transitRoute != null
-        ? 'Greenlink Route ${route.transitRoute}'
-            '${route.boardStop != null ? ' · board at ${route.boardStop}' : ''}'
-        : (modeRouteLabels[_routeMode] ?? 'Route');
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-      child: Material(
-        elevation: 4,
-        borderRadius: BorderRadius.circular(16),
-        color: color,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 8, 6, 8),
-          child: Row(
-            children: [
-              Icon(modeIcons[_routeMode], color: Colors.white, size: 20),
+  /// "Tap the map" banner while a trip endpoint is being picked.
+  Widget _pickBanner() => Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+        child: Material(
+          elevation: 3,
+          borderRadius: BorderRadius.circular(14),
+          color: brandDark,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 10, 6, 10),
+            child: Row(children: [
+              const Icon(Icons.touch_app, color: Colors.white, size: 20),
               const SizedBox(width: 10),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '${formatDistance(route.distanceM)} · '
-                      '${formatDuration(route.durationMin)}',
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 16),
-                    ),
-                    Text(subtitle,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            color: Colors.white70, fontSize: 12)),
-                  ],
+                child: Text(
+                  _pickField == 'from'
+                      ? 'Tap the map to set your start point'
+                      : 'Tap the map to set your destination',
+                  style: const TextStyle(color: Colors.white),
                 ),
               ),
-              if (route.steps.isNotEmpty)
-                IconButton(
-                  tooltip: 'Upcoming turns',
-                  icon: const Icon(Icons.list_alt, color: Colors.white),
-                  onPressed: _openStepsSheet,
-                ),
-              if (route.steps.isNotEmpty)
-                FilledButton.icon(
-                  style: FilledButton.styleFrom(
-                    backgroundColor: Colors.white,
-                    foregroundColor: color,
-                    visualDensity: VisualDensity.compact,
-                  ),
-                  icon: const Icon(Icons.navigation, size: 18),
-                  label: const Text('Start'),
-                  onPressed: _startNav,
-                ),
               IconButton(
-                icon: const Icon(Icons.close, color: Colors.white, size: 20),
-                onPressed: _clearRoute,
+                icon: const Icon(Icons.close, color: Colors.white70, size: 20),
+                onPressed: () => setState(() => _pickField = null),
               ),
-            ],
+            ]),
+          ),
+        ),
+      );
+
+  /// Route summary before the trip starts: distance, time, the trip's caveats,
+  /// the other itineraries, upcoming turns, Start.
+  Widget _routePreview() {
+    final route = _navRoute!;
+    final color = route.isTransit
+        ? const Color(0xFF7B1FA2)
+        : (route.plan == 'bcycle'
+            ? hexColor(bcycleRed)
+            : const Color(0xFF1565C0));
+    final subtitle = route.isTransit && route.transitRoute != null
+        ? 'Greenlink Route ${route.transitRoute}'
+            '${route.boardStop != null ? ' · board at ${route.boardStop}' : ''}'
+        : (route.plan == 'bcycle' && route.rentStation != null
+            ? 'BCycle from ${route.rentStation}'
+            : (route.planLabel.isNotEmpty ? route.planLabel : 'Route'));
+    final icon = planIcons[route.plan] ?? Icons.directions;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      child: Column(
+        children: [
+          Material(
+            elevation: 4,
+            borderRadius: BorderRadius.circular(16),
+            color: color,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 8, 6, 8),
+              child: Row(
+                children: [
+                  Icon(icon, color: Colors.white, size: 20),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${formatDistance(route.distanceM)} · '
+                          '${formatDuration(route.durationMin)}',
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 16),
+                        ),
+                        Text(subtitle,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                color: Colors.white70, fontSize: 12)),
+                      ],
+                    ),
+                  ),
+                  if (route.steps.isNotEmpty)
+                    IconButton(
+                      tooltip: 'Upcoming turns',
+                      icon: const Icon(Icons.list_alt, color: Colors.white),
+                      onPressed: _openStepsSheet,
+                    ),
+                  if (route.steps.isNotEmpty)
+                    FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: color,
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      icon: const Icon(Icons.navigation, size: 18),
+                      label: const Text('Start'),
+                      onPressed: _startNav,
+                    ),
+                  IconButton(
+                    icon:
+                        const Icon(Icons.close, color: Colors.white, size: 20),
+                    onPressed: _clearRoute,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (route.fallbackNote != null || route.warnings.isNotEmpty)
+            _warningBanner(route),
+          if (route.alternatives.isNotEmpty) _alternativesRow(route),
+        ],
+      ),
+    );
+  }
+
+  /// The honest bit: what this route is missing, and why it looks like this.
+  Widget _warningBanner(NavRoute route) {
+    final lines = <String>[
+      if (route.fallbackNote != null) route.fallbackNote!,
+      for (final w in route.warnings) w.message,
+    ];
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Material(
+        elevation: 2,
+        borderRadius: BorderRadius.circular(14),
+        color: const Color(0xFFFFF3E0),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: _openStepsSheet,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.warning_amber_rounded,
+                    color: Color(0xFFE65100), size: 20),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (final line in lines)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 2),
+                          child: Text(line,
+                              style: const TextStyle(
+                                  fontSize: 12.5, color: Color(0xFF6D3B00))),
+                        ),
+                      const Text(
+                        'Those stretches are dashed red on the map.',
+                        style: TextStyle(
+                            fontSize: 11.5,
+                            color: Color(0xFF8D5A1B),
+                            fontStyle: FontStyle.italic),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
+
+  /// The other itineraries the router costed — one tap swaps to them.
+  Widget _alternativesRow(NavRoute route) => Padding(
+        padding: const EdgeInsets.only(top: 6),
+        child: SizedBox(
+          height: 38,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            children: [
+              for (final alt in route.alternatives)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: ActionChip(
+                    avatar: Icon(planIcons[alt.plan] ?? Icons.directions,
+                        size: 18),
+                    label: Text(
+                        '${alt.label} · ${formatDuration(alt.durationMin)}'),
+                    backgroundColor: Colors.white,
+                    onPressed: () => _planTrip(plan: alt.plan),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      );
 
   /// Turn-by-turn chrome: maneuver card on top, trip bar on the bottom.
   List<Widget> _navChrome() {
@@ -1187,7 +1600,10 @@ class _MapScreenState extends State<MapScreen> {
 
     return [
       SafeArea(
-        child: Padding(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+        Padding(
           padding: const EdgeInsets.fromLTRB(10, 8, 10, 0),
           child: Material(
             elevation: 6,
@@ -1238,6 +1654,26 @@ class _MapScreenState extends State<MapScreen> {
                       ),
                     ],
                   ),
+                  if (step.warn != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6, left: 2),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.warning_amber_rounded,
+                              color: Color(0xFFFFB74D), size: 16),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              step.warn == 'no_sidewalk'
+                                  ? 'No sidewalk mapped on this stretch'
+                                  : 'No bike lane on this stretch',
+                              style: const TextStyle(
+                                  color: Color(0xFFFFB74D), fontSize: 12.5),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   if (after != null)
                     Padding(
                       padding: const EdgeInsets.only(top: 6, left: 4),
@@ -1262,6 +1698,11 @@ class _MapScreenState extends State<MapScreen> {
               ),
             ),
           ),
+        ),
+        // Everything still to come, in order — the "upcoming turns" list Google
+        // keeps a swipe away, here always on screen.
+        _upcomingStrip(route, nextIndex),
+          ],
         ),
       ),
       Positioned(
@@ -1311,6 +1752,63 @@ class _MapScreenState extends State<MapScreen> {
     ];
   }
 
+  /// Horizontal ribbon of the turns still ahead. Scrollable, so a long trip is
+  /// all there without a sheet, and each chip shows how far to that maneuver.
+  Widget _upcomingStrip(NavRoute route, int nextIndex) {
+    final ahead = <int>[
+      for (var i = nextIndex + 1; i < route.steps.length; i++) i,
+    ];
+    if (ahead.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(10, 6, 10, 0),
+      child: SizedBox(
+        height: 34,
+        child: ListView(
+          scrollDirection: Axis.horizontal,
+          children: [
+            for (final i in ahead.take(8))
+              Padding(
+                padding: const EdgeInsets.only(right: 6),
+                child: Material(
+                  color: Colors.white.withValues(alpha: 0.92),
+                  borderRadius: BorderRadius.circular(17),
+                  elevation: 2,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    child: Row(
+                      children: [
+                        Icon(route.steps[i].icon,
+                            size: 18,
+                            color: route.steps[i].warn != null
+                                ? warnRed
+                                : brandDark),
+                        const SizedBox(width: 5),
+                        Text(
+                          route.steps[i].name ??
+                              (route.steps[i].maneuver == 'arrive'
+                                  ? 'Arrive'
+                                  : 'Continue'),
+                          style: const TextStyle(fontSize: 12.5),
+                        ),
+                        if (route.steps[i].distanceM > 0) ...[
+                          const SizedBox(width: 6),
+                          Text(
+                            formatDistance(route.steps[i].distanceM),
+                            style: const TextStyle(
+                                fontSize: 11.5, color: Colors.black54),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _openStepsSheet() {
     final route = _navRoute;
     if (route == null) return;
@@ -1324,17 +1822,46 @@ class _MapScreenState extends State<MapScreen> {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-              child: Text(
-                '${formatDistance(route.distanceM)} · '
-                '${formatDuration(route.durationMin)}',
-                style: Theme.of(ctx).textTheme.titleMedium,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${formatDistance(route.distanceM)} · '
+                    '${formatDuration(route.durationMin)}'
+                    '${route.planLabel.isNotEmpty ? ' · ${route.planLabel}' : ''}',
+                    style: Theme.of(ctx).textTheme.titleMedium,
+                  ),
+                  if (route.fallbackNote != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(route.fallbackNote!,
+                          style: const TextStyle(
+                              fontSize: 12.5, color: Color(0xFF6D3B00))),
+                    ),
+                  for (final w in route.warnings)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Row(children: [
+                        const Icon(Icons.warning_amber_rounded,
+                            size: 16, color: Color(0xFFE65100)),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(w.message,
+                              style: const TextStyle(
+                                  fontSize: 12.5, color: Color(0xFF6D3B00))),
+                        ),
+                      ]),
+                    ),
+                ],
               ),
             ),
             for (var i = 0; i < route.steps.length; i++)
               ListTile(
                 dense: true,
                 leading: Icon(route.steps[i].icon,
-                    color: i < current ? Colors.black26 : brandGreen),
+                    color: i < current
+                        ? Colors.black26
+                        : (route.steps[i].warn != null ? warnRed : brandGreen)),
                 title: Text(
                   route.steps[i].instruction,
                   style: TextStyle(
@@ -1342,6 +1869,14 @@ class _MapScreenState extends State<MapScreen> {
                     fontWeight: i == current ? FontWeight.w600 : null,
                   ),
                 ),
+                subtitle: route.steps[i].warn == null
+                    ? null
+                    : Text(
+                        route.steps[i].warn == 'no_sidewalk'
+                            ? '${formatDistance(route.steps[i].warnM)} with no sidewalk'
+                            : '${formatDistance(route.steps[i].warnM)} with no bike lane',
+                        style: const TextStyle(fontSize: 12, color: warnRed),
+                      ),
                 trailing: route.steps[i].distanceM > 0
                     ? Text(formatDistance(route.steps[i].distanceM))
                     : null,
@@ -1363,11 +1898,12 @@ class _MapScreenState extends State<MapScreen> {
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                child: Text('Map layers — ${modeLabels[state.mode]} mode',
+                child: Text(
+                    'Map layers — '
+                    '${TravelMode.values.where(state.modes.contains).map(state.labelFor).join(' + ')}',
                     style: Theme.of(ctx).textTheme.titleMedium),
               ),
-              for (final def in layerDefs.where(
-                  (d) => d.modes.contains(state.mode)))
+              for (final def in state.relevantLayers)
                 SwitchListTile(
                   dense: true,
                   secondary: def.colorByStress
@@ -1378,9 +1914,12 @@ class _MapScreenState extends State<MapScreen> {
                       ? const Text('Zoom in to see these')
                       : null,
                   value: state.overrideFor(def),
-                  onChanged: (v) => state.toggleLayer(def.id, v),
+                  onChanged: (v) {
+                    state.toggleLayer(def.id, v);
+                    if (v && def.live) _refreshLive();
+                  },
                 ),
-              if (state.mode == TravelMode.cyclist) _stressLegend(),
+              if (state.modes.contains(TravelMode.cyclist)) _stressLegend(),
             ],
           ),
         ),

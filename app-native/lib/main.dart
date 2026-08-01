@@ -9,7 +9,9 @@ void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(
     ChangeNotifierProvider(
-      create: (_) => AppState(),
+      // Saved travel preferences land a frame or two after first paint; the
+      // defaults render fine in the meantime.
+      create: (_) => AppState()..load(),
       child: MaterialApp(
         title: 'Bike Walk Greenville',
         theme: buildTheme(),

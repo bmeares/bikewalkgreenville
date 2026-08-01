@@ -1,0 +1,27 @@
+project_name: bcycle
+
+root_dir: ../root
+
+plugins_dir:
+- ../.installed_plugins
+- ../plugins
+
+pipes:
+
+# Station locations only — live availability is read straight from GBFS by
+# `plugins/bcycle.py`; this pipe is the outage fallback for the map layer.
+- connector: "plugin:bcycle"
+  metric: "stations"
+  location: "greenville"
+  parameters:
+    schema: "BCycle"
+    target: "stations"
+    columns:
+      primary: "id"
+    dtypes:
+      id: "string"
+      name: "string"
+      address: "string"
+      lat: "float"
+      lon: "float"
+      rental_uri: "string"

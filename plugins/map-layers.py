@@ -10,6 +10,9 @@ Routes (mounted on the Meerschaum API FastAPI app, i.e. https://bwg.mrsm.io):
   GET /map-layers/index.json        -> catalog of available layers + style hints
   GET /map-layers/{layer}.geojson   -> FeatureCollection (pregenerated file if
                                        present, else generated on demand)
+  GET /map-layers/route             -> multi-modal directions; see
+                                       `map_layers_route` for the parameters
+                                       and `_route_multimodal` for the plans
 
 Pregeneration (run nightly after the source pipes sync):
 
@@ -32,7 +35,7 @@ from meerschaum.actions import make_action
 from meerschaum.plugins import api_plugin
 from meerschaum.utils.warnings import info, warn
 
-__version__ = '0.2.0'
+__version__ = '0.3.0'
 
 bwg = mrsm.Plugin('bwg')
 
@@ -443,7 +446,9 @@ def _search_nominatim(q: str) -> list[dict[str, Any]]:
 
 #: Edge weight multiplier per category and mode. Bike leans hard on stress
 #: (trail < bike lane < LTS levels); walking mostly cares about distance with
-#: a mild preference for the trail and calmer streets.
+#: a mild preference for the trail and calmer streets. `roll` is walking in a
+#: wheelchair: the distance math is the same, but a street with no sidewalk is
+#: close to unusable rather than merely unpleasant (see NO_SIDEWALK_FACTOR).
 MODE_FACTORS = {
     'bike': {
         'srt': 0.4,
@@ -463,15 +468,58 @@ MODE_FACTORS = {
         'MH': 1.25,
         'H': 1.5,
     },
+    'roll': {
+        'srt': 0.6,
+        'bike-lane': 1.0,
+        'L': 1.0,
+        'ML': 1.0,
+        'M': 1.05,
+        'MH': 1.15,
+        'H': 1.3,
+    },
+    # Last-resort weights: distance only. Used when the mode's own preferences
+    # can't produce a route and we fall back to "just use the streets".
+    'street': {},
 }
-MODE_DEFAULT_FACTOR = {'bike': 2.5, 'walk': 1.1}
-MODE_SPEED_M_S = {'bike': 4.2, 'walk': 1.35}  # casual cycling / walking pace
-MODE_NETWORK_NOUN = {'bike': 'bikeable', 'walk': 'walkable'}
+MODE_DEFAULT_FACTOR = {'bike': 2.5, 'walk': 1.1, 'roll': 1.1, 'street': 1.0}
+#: Casual cycling / walking / wheelchair pace.
+MODE_SPEED_M_S = {'bike': 4.2, 'walk': 1.35, 'roll': 1.0, 'street': 1.35}
+MODE_NETWORK_NOUN = {
+    'bike': 'bikeable',
+    'walk': 'walkable',
+    'roll': 'wheelchair-accessible',
+    'street': 'routable',
+}
+#: Extra cost for a street segment with no sidewalk beside it. Walking one is
+#: unpleasant; rolling one means riding in the traffic lane, so the penalty is
+#: severe enough that a much longer sidewalked detour wins.
+NO_SIDEWALK_FACTOR = {'walk': 1.6, 'roll': 8.0}
+#: Categories that ARE the walking/rolling surface, sidewalk data or not.
+OWN_SURFACE_CATEGORIES = ('srt',)
+#: Bike-stress levels that need a bike facility to feel safe.
+STRESSFUL_CATEGORIES = ('M', 'MH', 'H')
+#: Categories that ARE a bike facility.
+BIKE_FACILITY_CATEGORIES = ('srt', 'bike-lane')
+
 ROUTE_SNAP_MAX_M = 400      # reject termini farther than this from the network
+ROUTE_SNAP_RELAXED_M = 2500  # street-fallback snap: warn, don't refuse
 ROUTE_SUBDIVIDE_M = 120.0   # split long lines so they're enterable mid-way
 ROUTE_GRID_M = 12.0         # endpoint snap cell (stitches segment breaks)
 ROUTE_STITCH_M = 60.0       # max connector length between components
 ROUTE_CONNECT_M = 120.0     # max trail/lane -> street junction connector
+
+#: How close a sidewalk has to run to a street centerline to count as that
+#: street's sidewalk. Both sidewalk CRSes are `+units=ft` (3361 and 6570 alike
+#: -- verified against spatial_ref_sys, DON'T assume 3361 is meters), so this
+#: is feet: ~24 m covers a wide right-of-way plus digitizing slop.
+SIDEWALK_NEAR_FT = 80.0
+#: (schema, table) of every sidewalk source, with the SRID of its geometry so
+#: the street side of ST_DWithin can be transformed to match (keeps the GiST
+#: index usable -- the sidewalk geometry must stay untouched).
+SIDEWALK_SOURCES = (
+    ('county', 'sidewalks', 6570),
+    ('city', 'Sidewalks', 3361),
+)
 
 # Transit tuning: how far someone will walk to/from a stop, how close a stop
 # must sit to its route shape to count as "on" it, minimum useful ride, an
@@ -481,6 +529,15 @@ TRANSIT_STOP_SNAP_M = 100.0
 TRANSIT_MIN_RIDE_M = 250.0
 TRANSIT_BUS_SPEED_M_S = 6.5
 TRANSIT_WAIT_MIN = 8.0
+#: Greenlink buses carry front-load racks, so a bike widens the catchment
+#: around a stop a long way past walking distance.
+TRANSIT_BIKE_MAX_M = 5000.0
+
+# Bike share (Greenville BCycle): how far someone will walk to a dock, how
+# long a ride has to be to justify the trip to one, and the unlock overhead.
+BIKESHARE_WALK_MAX_M = 1200.0
+BIKESHARE_MIN_RIDE_M = 500.0
+BIKESHARE_UNLOCK_MIN = 3.0
 
 M_PER_DEG_LAT = 111320.0
 _COSLAT = math.cos(math.radians(34.85))  # Greenville-latitude lon scale
@@ -496,21 +553,48 @@ def _equirect_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return (dx * dx + dy * dy) ** 0.5
 
 
-def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str]]:
-    """Pull (coords, category, street name) rows for every routable segment.
-    Geography-cast lengths sidestep per-CRS units; simplification preserves
-    endpoints, so connectivity is unaffected. The name feeds turn-by-turn
-    instructions ("Turn right onto Main St")."""
+def _sidewalk_exists_sql(alias: str, srid: int) -> str:
+    """SQL boolean: does a sidewalk run alongside this segment?
+
+    One indexed `ST_DWithin` per sidewalk source. The street geometry is what
+    gets transformed (never the sidewalk column) so each source's GiST index
+    still applies -- without that this is a 28k x 24k nested loop.
+    """
+    tests = []
+    for i, (sw_schema, sw_table, sw_srid) in enumerate(SIDEWALK_SOURCES):
+        street_geom = (
+            f'{alias}."geometry"'
+            if srid == sw_srid
+            else f'ST_Transform({alias}."geometry", {sw_srid})'
+        )
+        tests.append(
+            f'EXISTS (SELECT 1 FROM "{sw_schema}"."{sw_table}" AS sw{i} '
+            f'WHERE ST_DWithin(sw{i}."geometry", {street_geom}, {SIDEWALK_NEAR_FT}))'
+        )
+    return '(' + ' OR '.join(tests) + ')'
+
+
+def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str, bool]]:
+    """Pull (coords, category, street name, has_sidewalk) rows for every
+    routable segment. Geography-cast lengths sidestep per-CRS units;
+    simplification preserves endpoints, so connectivity is unaffected. The
+    name feeds turn-by-turn instructions ("Turn right onto Main St"); the
+    sidewalk flag feeds walk/roll weighting and the "this stretch may have no
+    sidewalk" disclosure.
+    """
     import json
 
     sources = [
-        # (layer, category, SQL expression for the street name)
-        ('bike-stress', None, '"street_name"'),   # category = stress_level per row
-        ('bike-lanes', 'bike-lane', '"STREET_NAM"'),
-        ('srt', 'srt', "'Swamp Rabbit Trail'"),
+        # (layer, category, SQL expression for the street name, check sidewalks?)
+        # category = stress_level per row for bike-stress:
+        ('bike-stress', None, '"street_name"', True),
+        ('bike-lanes', 'bike-lane', '"STREET_NAM"', True),
+        # The trail IS the walking surface; asking whether it has a sidewalk
+        # is a category error.
+        ('srt', 'srt', "'Swamp Rabbit Trail'", False),
     ]
     rows = []
-    for layer_id, category, name_expr in sources:
+    for layer_id, category, name_expr, check_sidewalks in sources:
         layer = LAYERS[layer_id]
         pipe = _layer_pipe(layer)
         conn = pipe.instance_connector
@@ -523,20 +607,26 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str]]:
             if layer_id == 'bike-stress'
             else f"'{category}' AS \"category\""
         )
+        sidewalk_col = (
+            f'{_sidewalk_exists_sql("src", srid)} AS "has_sidewalk"'
+            if check_sidewalks
+            else 'TRUE AS "has_sidewalk"'
+        )
         query = f'''
         SELECT
             ST_AsGeoJSON(
                 ST_Force2D(
                     ST_Transform(
-                        ST_SimplifyPreserveTopology("geometry", {tolerance}),
+                        ST_SimplifyPreserveTopology(src."geometry", {tolerance}),
                         4326
                     )
                 ),
                 5
             ) AS "gj",
             {cat_col},
-            {name_expr} AS "name"
-        FROM "{schema}"."{target}"
+            {name_expr} AS "name",
+            {sidewalk_col}
+        FROM "{schema}"."{target}" AS src
         '''
         df = conn.read(query, debug=debug)
         for rec in df.to_dict(orient='records'):
@@ -551,9 +641,10 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str]]:
             )
             name = rec.get('name')
             name = None if not name or str(name).strip() in ('', 'N/A', 'None') else str(name).strip()
+            has_sidewalk = bool(rec.get('has_sidewalk'))
             for part in parts:
                 if len(part) >= 2:
-                    rows.append((part, rec.get('category'), name))
+                    rows.append((part, rec.get('category'), name, has_sidewalk))
     return rows
 
 
@@ -583,8 +674,10 @@ def _subdivide(coords: list) -> list[list]:
 
 def _build_route_graph(debug: bool = False) -> dict[str, Any]:
     """nodes: cell -> (lat, lon); adj: cell -> list of
-    (nbr, weight, length_m, category, coords, reversed?, name). Largest
-    connected component only, so off-island termini snap to routable nodes."""
+    (nbr, weight, length_m, category, coords, reversed?, name, has_sidewalk).
+    `has_sidewalk` is None for synthetic connectors (unknown, and too short to
+    be worth warning about). Largest connected component only, so off-island
+    termini snap to routable nodes."""
     nodes: dict = {}
     adj: dict = {}
     street_nodes: set = set()
@@ -598,7 +691,7 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
         return cell
 
     bike_factors = MODE_FACTORS['bike']
-    for coords, category, name in _route_source_rows(debug=debug):
+    for coords, category, name, has_sidewalk in _route_source_rows(debug=debug):
         factor = bike_factors.get(category, MODE_DEFAULT_FACTOR['bike'])
         is_path = category in ('srt', 'bike-lane')
         for chunk in _subdivide(coords):
@@ -624,8 +717,12 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
             if existing is not None:
                 adj[u] = [e for e in adj[u] if e[0] != v]
                 adj[v] = [e for e in adj[v] if e[0] != u]
-            adj[u].append((v, weight, length_m, category, chunk, False, name))
-            adj[v].append((u, weight, length_m, category, chunk, True, name))
+            adj[u].append(
+                (v, weight, length_m, category, chunk, False, name, has_sidewalk)
+            )
+            adj[v].append(
+                (u, weight, length_m, category, chunk, True, name, has_sidewalk)
+            )
 
     def _add_connector(u, v):
         d = _equirect_m(*nodes[u], *nodes[v])
@@ -634,8 +731,8 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
             [nodes[v][1], nodes[v][0]],
         ]
         length = max(d, 1.0)
-        adj[u].append((v, length, length, 'connector', coords, False, None))
-        adj[v].append((u, length, length, 'connector', coords, True, None))
+        adj[u].append((v, length, length, 'connector', coords, False, None, None))
+        adj[v].append((u, length, length, 'connector', coords, True, None, None))
 
     def _spatial_hash(cells, cell_m):
         cell_lat = cell_m / M_PER_DEG_LAT
@@ -729,8 +826,9 @@ def _get_route_graph(debug: bool = False) -> dict[str, Any]:
             _GRAPH['nodes'] is None
             or (time.time() - _GRAPH['epoch']) > _GRAPH_TTL_SECONDS
         ):
-            info("Building low-stress routing graph...")
+            info("Building routing graph...")
             built = _build_route_graph(debug=debug)
+            _GRAPH.pop('nearest_index', None)  # stale after a rebuild
             _GRAPH.update(built)
             info(
                 f"Routing graph: {len(built['nodes'])} nodes, "
@@ -739,20 +837,78 @@ def _get_route_graph(debug: bool = False) -> dict[str, Any]:
     return _GRAPH
 
 
-def _nearest_node(graph: dict, lat: float, lon: float):
-    best, best_d = None, None
+#: Node lookup grid, ~250 m cells. A linear scan over 37k nodes is 20 ms and
+#: the multi-modal planner does a dozen lookups per request.
+_NEAREST_GRID_M = 250.0
+
+
+def _nearest_index(graph: dict) -> dict:
+    """Bucket every node into a coarse grid, memoized on the graph dict."""
+    index = graph.get('nearest_index')
+    if index is not None:
+        return index
+    cell_lat = _NEAREST_GRID_M / M_PER_DEG_LAT
+    cell_lon = cell_lat / _COSLAT
+    buckets: dict = {}
     for cell, (nlat, nlon) in graph['nodes'].items():
-        d = _equirect_m(lat, lon, nlat, nlon)
-        if best_d is None or d < best_d:
-            best, best_d = cell, d
+        buckets.setdefault(
+            (int(nlat / cell_lat), int(nlon / cell_lon)), [],
+        ).append(cell)
+    index = {'buckets': buckets, 'cell_lat': cell_lat, 'cell_lon': cell_lon}
+    graph['nearest_index'] = index
+    return index
+
+
+def _nearest_node(graph: dict, lat: float, lon: float):
+    """(node, meters) nearest to (lat, lon). Searches outward in grid rings and
+    stops as soon as the next ring can't beat the best hit."""
+    if not graph.get('nodes'):
+        return None, None
+    index = _nearest_index(graph)
+    buckets = index['buckets']
+    cell_lat, cell_lon = index['cell_lat'], index['cell_lon']
+    home = (int(lat / cell_lat), int(lon / cell_lon))
+    best, best_d = None, None
+    for ring in range(0, 40):
+        # Everything outside this ring is at least (ring-1) cells away.
+        if best_d is not None and best_d <= (ring - 1) * _NEAREST_GRID_M:
+            break
+        for dy in range(-ring, ring + 1):
+            for dx in range(-ring, ring + 1):
+                if ring and max(abs(dy), abs(dx)) != ring:
+                    continue  # interior already searched
+                for cell in buckets.get((home[0] + dy, home[1] + dx), []):
+                    d = _equirect_m(lat, lon, *graph['nodes'][cell])
+                    if best_d is None or d < best_d:
+                        best, best_d = cell, d
     return best, best_d
+
+
+def _edge_deficiency(edge, mode: str) -> str | None:
+    """The infrastructure this edge is missing for `mode`, or None.
+
+    `no_sidewalk` -- a street with no sidewalk mapped beside it (walk/roll).
+    `no_bike_lane` -- a medium-or-worse stress street with no bike facility.
+    """
+    category = edge[3]
+    if category == 'connector':
+        return None
+    if mode in ('walk', 'roll'):
+        if category in OWN_SURFACE_CATEGORIES:
+            return None
+        return 'no_sidewalk' if edge[7] is False else None
+    if mode in ('bike', 'street'):
+        if category in BIKE_FACILITY_CATEGORIES:
+            return None
+        return 'no_bike_lane' if category in STRESSFUL_CATEGORIES else None
+    return None
 
 
 def _astar(graph: dict, start, goal, mode: str = 'bike'):
     """Returns list of (node, edge) from start to goal, or None. edge is the
     adjacency tuple taken to arrive at node (None for start). Edge weights are
-    recomputed per mode from length x category factor (the stored weight is
-    the bike one, kept for stats/dedup)."""
+    recomputed per mode from length x category factor x missing-sidewalk
+    penalty (the stored weight is the bike one, kept for stats/dedup)."""
     import heapq
 
     nodes = graph['nodes']
@@ -760,7 +916,9 @@ def _astar(graph: dict, start, goal, mode: str = 'bike'):
     glat, glon = nodes[goal]
     factors = MODE_FACTORS[mode]
     default_factor = MODE_DEFAULT_FACTOR[mode]
-    min_factor = min(min(factors.values()), 1.0)  # connectors weigh 1.0
+    no_sidewalk_factor = NO_SIDEWALK_FACTOR.get(mode, 1.0)
+    # Connectors weigh 1.0, so the heuristic can never assume better than that.
+    min_factor = min(list(factors.values()) + [1.0])
 
     def h(cell):
         lat, lon = nodes[cell]
@@ -770,7 +928,10 @@ def _astar(graph: dict, start, goal, mode: str = 'bike'):
         category = edge[3]
         if category == 'connector':
             return edge[2]
-        return edge[2] * factors.get(category, default_factor)
+        weight = edge[2] * factors.get(category, default_factor)
+        if no_sidewalk_factor != 1.0 and _edge_deficiency(edge, mode) == 'no_sidewalk':
+            weight *= no_sidewalk_factor
+        return weight
 
     dist = {start: 0.0}
     prev: dict = {start: (None, None)}
@@ -915,8 +1076,12 @@ def _build_steps(
         )
         # A street that curves stays one step; only a real corner splits it.
         limit = STEP_SAME_STREET_TURN_DEG if continues else STEP_TURN_MIN_DEG
+        warn = leg.get('warn')
         if steps and continues and abs(delta) < limit:
             steps[-1]['distance_m'] += leg['length_m']
+            if warn:
+                steps[-1]['warn'] = steps[-1].get('warn') or warn
+                steps[-1]['warn_m'] += leg['length_m']
         else:
             steps.append({
                 'maneuver': maneuver,
@@ -930,6 +1095,8 @@ def _build_steps(
                 'start_index': leg['start_index'],
                 'location': list(coords[0]),
                 'bearing': round(in_bearing, 1),
+                'warn': warn,
+                'warn_m': leg['length_m'] if warn else 0.0,
             })
         prev_out_bearing = out_bearing
 
@@ -939,6 +1106,8 @@ def _build_steps(
     for step in steps:
         if merged and step['distance_m'] < STEP_MIN_M and step['maneuver'] != 'depart':
             merged[-1]['distance_m'] += step['distance_m']
+            merged[-1]['warn_m'] = merged[-1].get('warn_m', 0.0) + step.get('warn_m', 0.0)
+            merged[-1]['warn'] = merged[-1].get('warn') or step.get('warn')
             continue
         merged.append(step)
     steps = merged
@@ -972,26 +1141,104 @@ def _build_steps(
         step['duration_min'] = round(
             step['distance_m'] / speed_m_s / 60, 2
         )
+        step['warn_m'] = round(step.get('warn_m') or 0.0, 1)
+        step.setdefault('warn', None)
     return steps
 
 
-def _route(
+#: kind -> (short label template, spoken/banner sentence template). `{d}` is
+#: the formatted distance.
+WARNING_LABELS = {
+    'no_sidewalk': (
+        '{d} with no sidewalk',
+        'About {d} of this route runs along streets with no sidewalk mapped — '
+        'you may be walking on the shoulder.',
+    ),
+    'no_bike_lane': (
+        '{d} with no bike lane',
+        'About {d} of this route is on streets with no bike lane — '
+        'expect to share the lane with traffic.',
+    ),
+}
+
+
+def _format_mi(meters: float) -> str:
+    """Imperial, because Greenville. Feet under a quarter mile."""
+    if meters < 400:
+        return f"{int(round(meters * FT_PER_M / 50.0) * 50)} ft"
+    return f"{meters / 1609.344:.1f} mi"
+
+
+def _summarize_warnings(ranges: list[dict]) -> list[dict]:
+    """Collapse per-segment gaps into one entry per kind, for the banner."""
+    totals: dict[str, float] = {}
+    for r in ranges:
+        totals[r['kind']] = totals.get(r['kind'], 0.0) + r['distance_m']
+    out = []
+    for kind, meters in sorted(totals.items(), key=lambda kv: -kv[1]):
+        short, sentence = WARNING_LABELS.get(kind, ('{d}', '{d}'))
+        pretty = _format_mi(meters)
+        out.append({
+            'kind': kind,
+            'distance_m': round(meters, 1),
+            'label': short.format(d=pretty),
+            'message': sentence.format(d=pretty),
+        })
+    return out
+
+
+def _warn_ranges(legs: list[dict]) -> list[dict]:
+    """Merge consecutive deficient legs into coordinate index ranges so the app
+    can redraw exactly those stretches in the "watch out" style."""
+    ranges: list[dict] = []
+    for leg in legs:
+        warn = leg.get('warn')
+        if not warn:
+            continue
+        start = leg['start_index']
+        end = start + max(len(leg['coords']) - 1, 1)
+        if ranges and ranges[-1]['kind'] == warn and ranges[-1]['end'] >= start:
+            ranges[-1]['end'] = max(ranges[-1]['end'], end)
+            ranges[-1]['distance_m'] += leg['length_m']
+            continue
+        ranges.append({
+            'kind': warn,
+            'start': start,
+            'end': end,
+            'distance_m': leg['length_m'],
+        })
+    for r in ranges:
+        r['distance_m'] = round(r['distance_m'], 1)
+    return ranges
+
+
+def _route_core(
     from_lat: float,
     from_lon: float,
     to_lat: float,
     to_lon: float,
     mode: str = 'bike',
+    snap_max_m: float = ROUTE_SNAP_MAX_M,
+    warn_mode: str | None = None,
 ) -> dict[str, Any]:
-    """Compute a bike or walk route; raises ValueError with a user-facing
-    message when no route is possible."""
+    """One A* pass with `mode`'s weights; raises ValueError with a user-facing
+    message when no route is possible.
+
+    `warn_mode` is the mode the DISCLOSURE is written for. It differs from
+    `mode` on the street fallback: routed with flat street weights, but still
+    told "you're walking, and this bit has no sidewalk".
+    """
     graph = _get_route_graph()
     if not graph['nodes']:
         raise ValueError("Routing network is unavailable.")
+    warn_mode = warn_mode or mode
 
     start, start_d = _nearest_node(graph, from_lat, from_lon)
     goal, goal_d = _nearest_node(graph, to_lat, to_lon)
-    if start_d > ROUTE_SNAP_MAX_M or goal_d > ROUTE_SNAP_MAX_M:
-        noun = MODE_NETWORK_NOUN.get(mode, 'routable')
+    if start is None or goal is None:
+        raise ValueError("Routing network is unavailable.")
+    if start_d > snap_max_m or goal_d > snap_max_m:
+        noun = MODE_NETWORK_NOUN.get(warn_mode, 'routable')
         raise ValueError(f"No {noun} network near that point.")
 
     legs: list[dict] = []
@@ -1006,6 +1253,7 @@ def _route(
             'category': None,
             'length_m': distance_m,
             'start_index': 0,
+            'warn': None,
         })
     else:
         path = _astar(graph, start, goal, mode=mode)
@@ -1017,7 +1265,7 @@ def _route(
         for _node, edge in path:
             if edge is None:
                 continue
-            _nbr, _w, length_m, category, coords, is_reversed, name = edge
+            _nbr, _w, length_m, category, coords, is_reversed, name = edge[:7]
             seg = list(reversed(coords)) if is_reversed else list(coords)
             start_index = max(len(coordinates) - 1, 0)
             leg_coords = [coordinates[-1]] + seg if coordinates else list(seg)
@@ -1034,24 +1282,68 @@ def _route(
                 'category': category,
                 'length_m': length_m,
                 'start_index': start_index,
+                'warn': _edge_deficiency(edge, warn_mode),
             })
         coordinates.append([to_lon, to_lat])
 
-    speed = MODE_SPEED_M_S[mode]
+    speed = MODE_SPEED_M_S[warn_mode]
+    ranges = _warn_ranges(legs)
     return {
         'type': 'Feature',
         'geometry': {'type': 'LineString', 'coordinates': coordinates},
         'properties': {
-            'mode': mode,
+            'mode': warn_mode,
             'distance_m': round(distance_m, 1),
             'distance_mi': round(distance_m / 1609.344, 2),
             'duration_min': round(distance_m / speed / 60, 1),
             'stress_breakdown': {k: round(v, 1) for k, v in breakdown.items()},
             'from_snap_m': round(start_d, 1),
             'to_snap_m': round(goal_d, 1),
+            'warn_ranges': ranges,
+            'warnings': _summarize_warnings(ranges),
             'steps': _build_steps(legs, coordinates, speed_m_s=speed),
         },
     }
+
+
+def _route(
+    from_lat: float,
+    from_lon: float,
+    to_lat: float,
+    to_lon: float,
+    mode: str = 'bike',
+    street_fallback: bool = True,
+) -> dict[str, Any]:
+    """A bike / walk / roll route, falling back to plain streets when the
+    mode's own network can't get there.
+
+    The graph is the street grid plus the trail and bike lanes, so the fallback
+    isn't a different network -- it's the same one with the mode's preferences
+    switched off and the snap radius widened. What makes it honest is that the
+    disclosure stays in the requested mode: the response still marks every
+    stretch missing a sidewalk (walk/roll) or a bike facility (bike), and says
+    `fallback: 'street'` so the app can lead with the caveat.
+    """
+    try:
+        return _route_core(from_lat, from_lon, to_lat, to_lon, mode=mode)
+    except ValueError as first_error:
+        if not street_fallback or mode == 'street':
+            raise
+        feature = _route_core(
+            from_lat, from_lon, to_lat, to_lon,
+            mode='street',
+            snap_max_m=ROUTE_SNAP_RELAXED_M,
+            warn_mode=mode,
+        )
+        props = feature['properties']
+        props['fallback'] = 'street'
+        props['fallback_reason'] = str(first_error)
+        noun = MODE_NETWORK_NOUN.get(mode, 'routable')
+        props['fallback_note'] = (
+            f"No {noun} route was available, so this follows regular streets. "
+            "Check the highlighted stretches before you go."
+        )
+        return feature
 
 
 # ------------------------------------------------------------------ transit
@@ -1160,31 +1452,45 @@ def _shape_slice(shape: dict, a: tuple, b: tuple) -> list[list]:
     return [c for i, c in enumerate(out) if i == 0 or c != out[i - 1]]
 
 
+#: Verb used in the synthetic "just head that way" step, per access mode.
+_ACCESS_VERB = {'bike': 'Ride', 'walk': 'Walk', 'roll': 'Roll', 'street': 'Head'}
+
+
 def _walk_or_direct(
-    from_lat, from_lon, to_lat, to_lon, toward: str = 'your stop',
+    from_lat, from_lon, to_lat, to_lon,
+    toward: str = 'your stop',
+    mode: str = 'walk',
 ) -> dict[str, Any]:
-    """Walk route, falling back to a straight line when off-network."""
+    """Access/egress leg for a multi-leg trip (transit, bike share), falling
+    back to a straight line when the leg is too short or too far off-network to
+    route. `mode` is the rider's own mode for that leg."""
     try:
-        return _route(from_lat, from_lon, to_lat, to_lon, mode='walk')
+        return _route(from_lat, from_lon, to_lat, to_lon, mode=mode)
     except ValueError:
         coords = [[from_lon, from_lat], [to_lon, to_lat]]
         dist = _equirect_m(from_lat, from_lon, to_lat, to_lon)
+        speed = MODE_SPEED_M_S.get(mode, MODE_SPEED_M_S['walk'])
+        verb = _ACCESS_VERB.get(mode, 'Head')
         return {
             'type': 'Feature',
             'geometry': {'type': 'LineString', 'coordinates': coords},
             'properties': {
                 'distance_m': round(dist, 1),
-                'duration_min': round(dist / MODE_SPEED_M_S['walk'] / 60, 1),
+                'duration_min': round(dist / speed / 60, 1),
+                'warn_ranges': [],
+                'warnings': [],
                 'steps': [{
                     'maneuver': 'depart',
                     'name': None,
                     'category': None,
-                    'instruction': f'Walk toward {toward}',
+                    'instruction': f'{verb} toward {toward}',
                     'distance_m': round(dist, 1),
-                    'duration_min': round(dist / MODE_SPEED_M_S['walk'] / 60, 2),
+                    'duration_min': round(dist / speed / 60, 2),
                     'start_index': 0,
                     'location': coords[0],
                     'bearing': 0.0,
+                    'warn': None,
+                    'warn_m': 0.0,
                 }],
             },
         }
@@ -1195,23 +1501,33 @@ def _route_transit(
     from_lon: float,
     to_lat: float,
     to_lon: float,
+    access_mode: str = 'walk',
 ) -> dict[str, Any]:
-    """Walk -> ride a Greenlink route -> walk. No schedules yet (stop_times
-    isn't ingested), so the wait is a flat estimate and the ride follows the
-    route shape between the boarding and alighting stops."""
+    """Access leg -> ride a Greenlink route -> egress leg. No schedules yet
+    (stop_times isn't ingested), so the wait is a flat estimate and the ride
+    follows the route shape between the boarding and alighting stops.
+
+    `access_mode` is how the rider gets to and from the stops. Greenlink buses
+    carry front-load racks, so `bike` both widens the catchment around a stop
+    (TRANSIT_BIKE_MAX_M) and adds a "load your bike" cue at boarding.
+    """
     data = _get_transit_data()
     stops, shapes = data['stops'], data['shapes']
     if not stops or not shapes:
         raise ValueError("Transit network is unavailable.")
+    access_max_m = (
+        TRANSIT_BIKE_MAX_M if access_mode == 'bike' else TRANSIT_WALK_MAX_M
+    )
+    access_speed = MODE_SPEED_M_S.get(access_mode, MODE_SPEED_M_S['walk'])
 
     def _near(lat, lon):
-        """Candidate stops within walking distance — the nearest few PER
-        ROUTE, not overall (downtown the 25 nearest stops are all trolley
-        stops and the transit center never makes the cut)."""
+        """Candidate stops within reach — the nearest few PER ROUTE, not
+        overall (downtown the 25 nearest stops are all trolley stops and the
+        transit center never makes the cut)."""
         ranked = []
         for s in stops:
             d = _equirect_m(lat, lon, s['lat'], s['lon'])
-            if d <= TRANSIT_WALK_MAX_M:
+            if d <= access_max_m:
                 ranked.append((d, s))
         ranked.sort(key=lambda x: x[0])
         out = []
@@ -1226,7 +1542,8 @@ def _route_transit(
     near_from = _near(from_lat, from_lon)
     near_to = _near(to_lat, to_lon)
     if not near_from or not near_to:
-        raise ValueError("No bus stops within walking distance.")
+        reach = 'biking' if access_mode == 'bike' else 'walking'
+        raise ValueError(f"No bus stops within {reach} distance.")
 
     shapes_by_route: dict[str, list] = {}
     for sh in shapes:
@@ -1241,7 +1558,7 @@ def _route_transit(
         return proj_cache[key]
 
     shape_index = {id(sh): i for i, sh in enumerate(shapes)}
-    walk_speed = MODE_SPEED_M_S['walk']
+    walk_speed = access_speed
     best = None  # (total_s, d1, s1, d2, s2, shape, p1, p2)
     for d1, s1 in near_from:
         for d2, s2 in near_to:
@@ -1272,15 +1589,19 @@ def _route_transit(
         )
     _total_s, _d1, s1, _d2, s2, shape, p1, p2 = best
 
-    walk1 = _walk_or_direct(from_lat, from_lon, s1['lat'], s1['lon'])
+    walk1 = _walk_or_direct(
+        from_lat, from_lon, s1['lat'], s1['lon'], mode=access_mode,
+    )
     walk2 = _walk_or_direct(
-        s2['lat'], s2['lon'], to_lat, to_lon, toward='your destination',
+        s2['lat'], s2['lon'], to_lat, to_lon,
+        toward='your destination', mode=access_mode,
     )
     ride_coords = _shape_slice(shape, p1, p2)
     ride_m = p2[0] - p1[0]
 
     coordinates: list = []
     steps: list[dict] = []
+    ranges: list[dict] = []
 
     def _append_leg(feature, drop_arrive: bool):
         offset = max(len(coordinates) - 1, 0)
@@ -1296,6 +1617,14 @@ def _route_transit(
             step = dict(step)
             step['start_index'] = step['start_index'] + offset
             steps.append(step)
+        # Access legs carry their own missing-sidewalk stretches; shift them
+        # into the combined line's coordinate space.
+        for r in feature['properties'].get('warn_ranges') or []:
+            ranges.append({
+                **r,
+                'start': r['start'] + offset,
+                'end': r['end'] + offset,
+            })
 
     _append_leg(walk1, drop_arrive=True)
 
@@ -1310,12 +1639,15 @@ def _route_transit(
             f"Board Greenlink {route_name}"
             + (f' ({long_name})' if long_name else '')
             + f" at {s1['name']}"
+            + (' — load your bike on the front rack' if access_mode == 'bike' else '')
         ),
         'distance_m': 0.0,
         'duration_min': round(TRANSIT_WAIT_MIN, 1),
         'start_index': board_index,
         'location': [s1['lon'], s1['lat']],
         'bearing': 0.0,
+        'warn': None,
+        'warn_m': 0.0,
     })
     ride_start_index = len(coordinates) - 1 if coordinates else 0
     if coordinates and coordinates[-1] == ride_coords[0]:
@@ -1333,6 +1665,8 @@ def _route_transit(
         'start_index': ride_start_index,
         'location': [s1['lon'], s1['lat']],
         'bearing': 0.0,
+        'warn': None,
+        'warn_m': 0.0,
     })
     steps.append({
         'maneuver': 'alight',
@@ -1344,6 +1678,8 @@ def _route_transit(
         'start_index': max(len(coordinates) - 1, 0),
         'location': [s2['lon'], s2['lat']],
         'bearing': 0.0,
+        'warn': None,
+        'warn_m': 0.0,
     })
     _append_leg(walk2, drop_arrive=False)
     if not steps or steps[-1]['maneuver'] != 'arrive':
@@ -1356,6 +1692,8 @@ def _route_transit(
             'duration_min': 0.0,
             'start_index': max(len(coordinates) - 1, 0),
             'location': list(coordinates[-1]),
+            'warn': None,
+            'warn_m': 0.0,
         })
 
     walk_m = (
@@ -1373,6 +1711,7 @@ def _route_transit(
         'geometry': {'type': 'LineString', 'coordinates': coordinates},
         'properties': {
             'mode': 'transit',
+            'access_mode': access_mode,
             'distance_m': round(distance_m, 1),
             'distance_mi': round(distance_m / 1609.344, 2),
             'duration_min': round(duration_min, 1),
@@ -1384,9 +1723,367 @@ def _route_transit(
             'board_stop': s1['name'],
             'alight_stop': s2['name'],
             'wait_min': TRANSIT_WAIT_MIN,
+            'warn_ranges': ranges,
+            'warnings': _summarize_warnings(ranges),
             'steps': steps,
         },
     }
+
+
+# ---------------------------------------------------------------- bike share
+
+
+def _bcycle_stations() -> list[dict[str, Any]]:
+    """Greenville BCycle docks with live availability, via `plugins/bcycle.py`.
+    Returns [] if the plugin or the GBFS feed is unavailable -- bike share is
+    an option, never a dependency."""
+    try:
+        module = mrsm.Plugin('bcycle').module
+        return module.get_stations()
+    except Exception as e:
+        warn(f"BCycle stations unavailable: {e}")
+        return []
+
+
+def _route_bikeshare(
+    from_lat: float,
+    from_lon: float,
+    to_lat: float,
+    to_lon: float,
+    foot_mode: str = 'walk',
+) -> dict[str, Any]:
+    """Walk to a BCycle dock -> ride a share bike -> dock it -> walk on.
+
+    Same shape as the transit plan, with docks instead of stops. Stations with
+    no bikes (or that aren't renting) are skipped, so the plan reflects what's
+    actually available right now rather than where the kiosks are.
+    """
+    stations = _bcycle_stations()
+    if not stations:
+        raise ValueError("Bike share availability is unavailable right now.")
+
+    def _reachable(lat, lon, want: str):
+        out = []
+        for st in stations:
+            # A count of None means station_status didn't load; don't refuse
+            # the plan over missing telemetry, only over a known-empty dock.
+            if want == 'bikes':
+                if st.get('is_renting') is False:
+                    continue
+                bikes = st.get('bikes')
+                if bikes is not None and bikes < 1:
+                    continue
+            else:
+                if st.get('is_returning') is False:
+                    continue
+                docks = st.get('docks')
+                if docks is not None and docks < 1:
+                    continue
+            d = _equirect_m(lat, lon, st['lat'], st['lon'])
+            if d <= BIKESHARE_WALK_MAX_M:
+                out.append((d, st))
+        out.sort(key=lambda x: x[0])
+        return out[:4]
+
+    from_docks = _reachable(from_lat, from_lon, 'bikes')
+    to_docks = _reachable(to_lat, to_lon, 'docks')
+    if not from_docks:
+        raise ValueError("No BCycle bikes available within walking distance.")
+    if not to_docks:
+        raise ValueError("No open BCycle dock near your destination.")
+
+    foot_speed = MODE_SPEED_M_S.get(foot_mode, MODE_SPEED_M_S['walk'])
+    best = None
+    for d1, rent in from_docks:
+        for d2, dock in to_docks:
+            if rent['id'] == dock['id']:
+                continue
+            ride_m = _equirect_m(rent['lat'], rent['lon'], dock['lat'], dock['lon'])
+            if ride_m < BIKESHARE_MIN_RIDE_M:
+                continue
+            total_s = (
+                (d1 + d2) / foot_speed
+                + ride_m / MODE_SPEED_M_S['bike']
+                + BIKESHARE_UNLOCK_MIN * 60
+            )
+            if best is None or total_s < best[0]:
+                best = (total_s, rent, dock)
+    if best is None:
+        raise ValueError(
+            "You're closer to your destination than to a BCycle dock — "
+            "try walking or your own bike."
+        )
+    _total_s, rent, dock = best
+
+    leg1 = _walk_or_direct(
+        from_lat, from_lon, rent['lat'], rent['lon'],
+        toward='the BCycle dock', mode=foot_mode,
+    )
+    ride = _route(rent['lat'], rent['lon'], dock['lat'], dock['lon'], mode='bike')
+    leg3 = _walk_or_direct(
+        dock['lat'], dock['lon'], to_lat, to_lon,
+        toward='your destination', mode=foot_mode,
+    )
+
+    coordinates: list = []
+    steps: list[dict] = []
+    ranges: list[dict] = []
+
+    def _append(feature, drop_arrive: bool, drop_depart: bool = False):
+        offset = max(len(coordinates) - 1, 0)
+        coords = feature['geometry']['coordinates']
+        if coordinates and coordinates[-1] == coords[0]:
+            coords = coords[1:]
+        else:
+            offset = len(coordinates)
+        coordinates.extend(coords)
+        for step in feature['properties']['steps']:
+            if drop_arrive and step['maneuver'] == 'arrive':
+                continue
+            if drop_depart and step['maneuver'] == 'depart':
+                drop_depart = False
+                continue
+            step = dict(step)
+            step['start_index'] = step['start_index'] + offset
+            steps.append(step)
+        for r in feature['properties'].get('warn_ranges') or []:
+            ranges.append({
+                **r, 'start': r['start'] + offset, 'end': r['end'] + offset,
+            })
+
+    _append(leg1, drop_arrive=True)
+    bikes = rent.get('bikes')
+    steps.append({
+        'maneuver': 'rent',
+        'name': rent['name'],
+        'category': 'bikeshare',
+        'instruction': (
+            f"Unlock a BCycle at {rent['name']}"
+            + (
+                f" ({bikes} available)"
+                if bikes is not None else ''
+            )
+        ),
+        'distance_m': 0.0,
+        'duration_min': round(BIKESHARE_UNLOCK_MIN, 1),
+        'start_index': max(len(coordinates) - 1, 0),
+        'location': [rent['lon'], rent['lat']],
+        'bearing': 0.0,
+        'warn': None,
+        'warn_m': 0.0,
+    })
+    _append(ride, drop_arrive=True)
+    steps.append({
+        'maneuver': 'dock',
+        'name': dock['name'],
+        'category': 'bikeshare',
+        'instruction': f"Dock the bike at {dock['name']}",
+        'distance_m': 0.0,
+        'duration_min': 1.0,
+        'start_index': max(len(coordinates) - 1, 0),
+        'location': [dock['lon'], dock['lat']],
+        'bearing': 0.0,
+        'warn': None,
+        'warn_m': 0.0,
+    })
+    _append(leg3, drop_arrive=False, drop_depart=True)
+    if not steps or steps[-1]['maneuver'] != 'arrive':
+        steps.append({
+            'maneuver': 'arrive',
+            'name': None,
+            'category': None,
+            'instruction': 'Arrive at your destination',
+            'distance_m': 0.0,
+            'duration_min': 0.0,
+            'start_index': max(len(coordinates) - 1, 0),
+            'location': list(coordinates[-1]),
+            'warn': None,
+            'warn_m': 0.0,
+        })
+
+    foot_m = leg1['properties']['distance_m'] + leg3['properties']['distance_m']
+    ride_m = ride['properties']['distance_m']
+    duration_min = (
+        leg1['properties']['duration_min']
+        + leg3['properties']['duration_min']
+        + ride['properties']['duration_min']
+        + BIKESHARE_UNLOCK_MIN
+        + 1.0  # docking
+    )
+    distance_m = foot_m + ride_m
+    return {
+        'type': 'Feature',
+        'geometry': {'type': 'LineString', 'coordinates': coordinates},
+        'properties': {
+            'mode': 'bcycle',
+            'access_mode': foot_mode,
+            'distance_m': round(distance_m, 1),
+            'distance_mi': round(distance_m / 1609.344, 2),
+            'duration_min': round(duration_min, 1),
+            'walk_m': round(foot_m, 1),
+            'ride_m': round(ride_m, 1),
+            'rent_station': rent['name'],
+            'rent_station_bikes': rent.get('bikes'),
+            'rent_station_uri': rent.get('rental_uri'),
+            'dock_station': dock['name'],
+            'dock_station_docks': dock.get('docks'),
+            'dock_station_uri': dock.get('rental_uri'),
+            'warn_ranges': ranges,
+            'warnings': _summarize_warnings(ranges),
+            'steps': steps,
+        },
+    }
+
+
+# ------------------------------------------------------------- multi-modal
+
+
+#: plan key -> (human label, the mode whose icon/color the app should use).
+PLAN_LABELS = {
+    'bike': ('Bike', 'bike'),
+    'walk': ('Walk', 'walk'),
+    'roll': ('Roll', 'roll'),
+    'bcycle': ('BCycle', 'bcycle'),
+    'walk-transit': ('Walk + bus', 'transit'),
+    'roll-transit': ('Roll + bus', 'transit'),
+    'bike-transit': ('Bike + bus', 'transit'),
+}
+#: A trip this short isn't worth waiting for a bus, whatever the math says.
+TRANSIT_MIN_TRIP_M = 1200.0
+
+#: Recently computed plans, so flipping between them in the app is instant.
+_ROUTE_CACHE: dict[tuple, tuple[float, dict]] = {}
+_ROUTE_CACHE_TTL_SECONDS = 120
+_ROUTE_CACHE_MAX = 256
+
+
+def _plan_keys(modes: set[str], roll: bool, bcycle: bool) -> list[str]:
+    """Which itineraries the selected modes make possible.
+
+    Transit access is by bike whenever the rider said they have a bike (racks
+    on every Greenlink bus), which is both faster and a wider catchment than
+    walking to the stop -- so `bike + transit` supersedes `walk + transit`
+    rather than doubling the work.
+    """
+    foot = 'roll' if roll else 'walk'
+    plans: list[str] = []
+    if 'bike' in modes:
+        plans.append('bike')
+        if bcycle:
+            plans.append('bcycle')
+    if 'walk' in modes:
+        plans.append(foot)
+    if 'transit' in modes:
+        plans.append('bike-transit' if 'bike' in modes else f'{foot}-transit')
+    return plans or [foot]
+
+
+def _compute_plan(
+    plan: str,
+    from_lat: float,
+    from_lon: float,
+    to_lat: float,
+    to_lon: float,
+) -> dict[str, Any]:
+    """One itinerary, memoized briefly. Raises ValueError when impossible."""
+    key = (
+        plan,
+        round(from_lat, 5), round(from_lon, 5),
+        round(to_lat, 5), round(to_lon, 5),
+    )
+    hit = _ROUTE_CACHE.get(key)
+    if hit is not None and (time.time() - hit[0]) < _ROUTE_CACHE_TTL_SECONDS:
+        return hit[1]
+
+    if plan.endswith('-transit'):
+        access = plan.split('-', 1)[0]
+        straight = _equirect_m(from_lat, from_lon, to_lat, to_lon)
+        if straight < TRANSIT_MIN_TRIP_M:
+            raise ValueError("That trip is too short to be worth the bus.")
+        feature = _route_transit(
+            from_lat, from_lon, to_lat, to_lon, access_mode=access,
+        )
+    elif plan == 'bcycle':
+        feature = _route_bikeshare(from_lat, from_lon, to_lat, to_lon)
+    else:
+        feature = _route(from_lat, from_lon, to_lat, to_lon, mode=plan)
+
+    label, icon_mode = PLAN_LABELS.get(plan, (plan.title(), plan))
+    feature['properties']['plan'] = plan
+    feature['properties']['plan_label'] = label
+    feature['properties']['icon_mode'] = icon_mode
+    if len(_ROUTE_CACHE) > _ROUTE_CACHE_MAX:
+        _ROUTE_CACHE.clear()
+    _ROUTE_CACHE[key] = (time.time(), feature)
+    return feature
+
+
+def _route_multimodal(
+    from_lat: float,
+    from_lon: float,
+    to_lat: float,
+    to_lon: float,
+    modes: set[str],
+    roll: bool = False,
+    bcycle: bool = False,
+    plan: str | None = None,
+) -> dict[str, Any]:
+    """Pick the best itinerary across everything the rider is willing to use.
+
+    Every viable plan is computed (each is well under a second) and the
+    fastest wins, unless the app asked for a specific `plan`. The rest ride
+    along in `properties.alternatives` with real numbers, so switching is a
+    labelled choice rather than a guess.
+    """
+    keys = _plan_keys(modes, roll, bcycle)
+    if plan and plan not in keys:
+        keys = keys + [plan]
+
+    computed: dict[str, dict] = {}
+    failures: list[dict[str, str]] = []
+    for key in keys:
+        try:
+            computed[key] = _compute_plan(
+                key, from_lat, from_lon, to_lat, to_lon,
+            )
+        except ValueError as e:
+            failures.append({'plan': key, 'reason': str(e)})
+        except Exception as e:
+            warn(f"Plan {key} failed: {e}")
+            failures.append({'plan': key, 'reason': 'Routing failed.'})
+
+    if not computed:
+        # Lead with a reason that isn't "the bus doesn't go there".
+        reason = next(
+            (f['reason'] for f in failures if not f['plan'].endswith('-transit')),
+            failures[0]['reason'] if failures else 'No route found.',
+        )
+        raise ValueError(reason)
+
+    chosen_key = (
+        plan if plan in computed
+        else min(computed, key=lambda k: computed[k]['properties']['duration_min'])
+    )
+    # The plans are cached and shared; annotate a copy so a later request
+    # doesn't inherit this one's alternatives list.
+    feature = dict(computed[chosen_key])
+    props = dict(feature['properties'])
+    feature['properties'] = props
+    props['alternatives'] = [
+        {
+            'plan': k,
+            'label': PLAN_LABELS.get(k, (k.title(), k))[0],
+            'icon_mode': PLAN_LABELS.get(k, (k.title(), k))[1],
+            'distance_m': v['properties']['distance_m'],
+            'duration_min': v['properties']['duration_min'],
+            'warnings': v['properties'].get('warnings') or [],
+        }
+        for k, v in computed.items()
+        if k != chosen_key
+    ]
+    props['alternatives'].sort(key=lambda a: a['duration_min'])
+    props['unavailable'] = failures
+    return feature
 
 
 # User feedback on any map feature (bus stop, sidewalk segment, bike lane, ...).
@@ -1542,17 +2239,36 @@ def init_app(app):
         to: str = '',
         from_: str = Query('', alias='from'),
         mode: str = 'bike',
+        modes: str = '',
+        roll: bool = False,
+        bcycle: bool = False,
+        plan: str = '',
     ):
+        """Multi-modal directions.
+
+        `?modes=bike,walk,transit` is the current form: every itinerary those
+        modes allow gets costed and the fastest is returned, the rest listed in
+        `properties.alternatives`. `roll=1` swaps walking for wheelchair
+        weighting; `bcycle=1` adds a bike-share itinerary. `plan=<key>` pins a
+        specific alternative. The older single `?mode=` is still honored.
+        """
         # Sync def on purpose: FastAPI runs it in the threadpool, so the
         # multi-second first-call graph build never blocks the event loop.
         def _parse_latlon(value: str):
             lat_s, lon_s = value.split(',', 1)
             return float(lat_s), float(lon_s)
 
-        mode = (mode or 'bike').strip().lower()
-        if mode not in ('bike', 'walk', 'transit'):
+        raw = modes or mode or 'bike'
+        selected = {m.strip().lower() for m in raw.split(',') if m.strip()}
+        # `roll` arrives either as its own flag or as a mode name.
+        if 'roll' in selected:
+            selected.discard('roll')
+            selected.add('walk')
+            roll = True
+        unknown = selected - {'bike', 'walk', 'transit'}
+        if unknown or not selected:
             return JSONResponse(
-                {'error': "Expected mode=bike, walk or transit."},
+                {'error': "Expected modes from bike, walk (roll), transit."},
                 status_code=400,
             )
         try:
@@ -1569,10 +2285,13 @@ def init_app(app):
                 status_code=400,
             )
         try:
-            if mode == 'transit':
-                feature = _route_transit(from_lat, from_lon, to_lat, to_lon)
-            else:
-                feature = _route(from_lat, from_lon, to_lat, to_lon, mode=mode)
+            feature = _route_multimodal(
+                from_lat, from_lon, to_lat, to_lon,
+                modes=selected,
+                roll=roll,
+                bcycle=bcycle,
+                plan=(plan or '').strip().lower() or None,
+            )
         except ValueError as e:
             return JSONResponse({'error': str(e)}, status_code=422)
         except Exception as e:
