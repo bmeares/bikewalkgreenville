@@ -545,6 +545,15 @@ CLIMB_SEC_PER_M = {'bike': 7.0, 'ebike': 2.5, 'walk': 6.0, 'roll': 15.0, 'street
 #: ADA's maximum running slope (1:12). Steeper than this gets disclosed to
 #: people on foot and on wheels.
 STEEP_GRADE = 0.083
+#: Noise gates on that disclosure. Nearest-contour sampling quantizes each node
+#: to +/-2 ft, so two nodes on genuinely flat ground can differ by a whole 4 ft
+#: interval -- over a 10 m leg that reads as a 12% grade. Requiring a rise of
+#: more than TWO contour intervals puts the signal outside the error bound, and
+#: the minimum run keeps a short leg from turning rounding into a warning.
+#: Crying wolf here is worse than staying quiet: someone plans a wheelchair
+#: route around a hill that isn't there.
+STEEP_MIN_RISE_FT = 8.0
+STEEP_MIN_RUN_M = 25.0
 #: Contour source for per-node elevation. Already ingested by
 #: `projects/county.yaml`; 4 ft interval, so a nearest-contour lookup is good
 #: to +/-2 ft. Coverage stops at the county line -- outside it, legs are
@@ -1032,19 +1041,29 @@ def _srid_units_per_m(conn, srid: int, debug: bool = False) -> float:
     """
     probe = conn.read(
         f'''
-        SELECT ST_Distance(
-            ST_Transform(ST_SetSRID(ST_MakePoint(-82.4, 34.85), 4326), {srid}),
-            ST_Transform(ST_SetSRID(ST_MakePoint(-82.4, 34.86), 4326), {srid})
-        ) AS "d"
+        SELECT
+            ST_Distance(
+                ST_Transform(ST_SetSRID(ST_MakePoint(-82.4, 34.85), 4326), {srid}),
+                ST_Transform(ST_SetSRID(ST_MakePoint(-82.4, 34.86), 4326), {srid})
+            ) AS "ns",
+            ST_Distance(
+                ST_Transform(ST_SetSRID(ST_MakePoint(-82.4, 34.85), 4326), {srid}),
+                ST_Transform(ST_SetSRID(ST_MakePoint(-82.39, 34.85), 4326), {srid})
+            ) AS "ew"
         ''',
         debug=debug,
     )
-    #: 0.01 degrees of latitude on the ground.
-    ground_m = 0.01 * M_PER_DEG_LAT
-    distance = float(probe['d'].iloc[0])
-    if distance <= 0:
+    #: 0.01 degrees of latitude on the ground, and 0.01 degrees of longitude at
+    #: this latitude -- the same ground distance in each direction only for a
+    #: projected CRS. In a geographic one a degree of longitude is the shorter
+    #: of the two, so the axes disagree and the LARGER units-per-metre is what
+    #: guarantees the radius still covers CONTOUR_MAX_M the narrow way.
+    ns_ground_m = 0.01 * M_PER_DEG_LAT
+    ew_ground_m = 0.01 * M_PER_DEG_LAT * _COSLAT
+    ns, ew = float(probe['ns'].iloc[0]), float(probe['ew'].iloc[0])
+    if ns <= 0 or ew <= 0:
         raise ValueError(f"Could not measure the units of SRID {srid}.")
-    return distance / ground_m
+    return max(ns / ns_ground_m, ew / ew_ground_m)
 
 
 def _node_elevations(nodes: dict, debug: bool = False) -> dict:
@@ -1883,7 +1902,11 @@ def _route_core(
             if (
                 leg_warn is None
                 and _base_mode(warn_mode) in ('walk', 'roll')
-                and length_m > 0
+                # A connector is a synthetic straight line between two nodes,
+                # not a surface anyone walks; its "grade" means nothing.
+                and category != 'connector'
+                and length_m >= STEEP_MIN_RUN_M
+                and grade_m * FT_PER_M >= STEEP_MIN_RISE_FT
                 and grade_m / length_m > STEEP_GRADE
             ):
                 leg_warn = 'steep'

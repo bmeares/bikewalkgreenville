@@ -71,11 +71,30 @@ unroutable. ETAs rise across the board (the reported McHan → Other Lands bike
 trip goes 25.4 → 36.5 min on 312 ft of climb), which is the intended
 correction, not a regression — the old numbers assumed Greenville was flat.
 
-**Known limitation:** nearest-contour sampling quantizes to ±2 ft, so gross
-climb (and therefore ETA) is slightly over-counted on long routes — noise
-accumulates as phantom rise. Interpolating between the two nearest distinct
-contours would roughly halve it at the cost of a second KNN per node (~+10 s
-on the build). Worth doing if the ETAs read long on the ground.
+**The `steep` disclosure is noise-gated.** Nearest-contour sampling quantizes
+each node to ±2 ft, so two nodes on flat ground can differ by a whole 4 ft
+interval — over a 10 m leg that reads as a 12% grade. A leg is only announced
+as steep when it rises more than TWO contour intervals (`STEEP_MIN_RISE_FT`
+8 ft, outside the error bound) over at least `STEEP_MIN_RUN_M` (25 m), and
+never on a synthetic connector. Effect: edge-level steep flags 5.0% → 4.1%;
+28% of wheelchair routes mention a grade, averaging 82 m of it. Do not loosen
+these without ground-truthing — a wheelchair user planning around a hill that
+isn't there is a worse failure than silence.
+
+**Known limitation:** the same quantization means gross climb (and therefore
+ETA) is slightly over-counted on long routes — noise accumulates as phantom
+rise. Interpolating between the two nearest distinct contours would roughly
+halve it at the cost of a second KNN per node (~+10 s on the build). Worth
+doing if the ETAs read long on the ground. Deliberately NOT done blind: it
+trades bias for variance and deserves a real-world check first.
+
+**Reviewed by two independent readers** (Codex and Fable). Between them: five
+defects in the first cut, all fixed with failing-first tests (street fallback
+dropped hills; steep descents undisclosed; the app announced `steep` as "no
+bike lane"; step folding dropped climb; transit/BCycle omitted `climb_ft`),
+plus the two residuals above. Both cleared A* admissibility with the added
+climb term, virtual-node elevation, composite mode-key handling, feet/metres
+conversions, and the omitted-parameter defaults.
 
 ### Shipped 2026-08-01 (fifth session) — map-layers v0.4.1 (backend only)
 

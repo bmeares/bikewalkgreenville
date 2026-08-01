@@ -402,6 +402,52 @@ class TestHillReviewFindings(RouteGraphTestCase):
         )
 
 
+class TestSteepWarningNoiseGates(RouteGraphTestCase):
+    """Contour sampling quantizes each node to +/-2 ft, so two nodes on flat
+    ground can differ by a whole 4 ft interval. Over a short leg that reads as
+    a double-digit grade. Crying wolf is worse than staying quiet here --
+    someone plans a wheelchair route around a hill that isn't there.
+    """
+
+    # 20 m apart: past the 12 m grid cell, short of the 25 m minimum run.
+    SHORT_A = (34.8500, -82.4000)
+    SHORT_B = (34.8500 + 20 / 111320.0, -82.4000)
+    # 100 m apart at 30 ft of rise -> a genuine 9.1% grade. Kept under
+    # ROUTE_SUBDIVIDE_M so it stays one chunk with no unmapped midpoint.
+    LONG_A = (34.8600, -82.4000)
+    LONG_B = (34.8600 + 100 / 111320.0, -82.4000)
+
+    def test_a_quantization_jump_on_a_short_leg_is_not_called_steep(self):
+        """6 ft over 20 m is a 9.1% grade on paper, but 6 ft is inside the
+        sampling error of two adjacent nodes and 20 m is under the minimum
+        run. It must not be announced."""
+        graph = self._graph(
+            [(_line(self.SHORT_A, self.SHORT_B), 'L', 'SHORT ST', True)],
+            elevation={self.SHORT_A: 900.0, self.SHORT_B: 906.0},
+        )
+        feature = self._route(graph, self.SHORT_A, self.SHORT_B, mode='roll')
+        kinds = {w['kind'] for w in feature['properties']['warn_ranges']}
+        self.assertNotIn('steep', kinds,
+                         "quantization noise was reported as a steep grade")
+
+    def test_a_real_hill_is_still_called_steep(self):
+        """The gates must not silence an actual grade: 30 ft over 100 m."""
+        graph = self._graph(
+            [(_line(self.LONG_A, self.LONG_B), 'L', 'LONG HILL RD', True)],
+            elevation={self.LONG_A: 900.0, self.LONG_B: 930.0},
+        )
+        feature = self._route(graph, self.LONG_A, self.LONG_B, mode='roll')
+        kinds = {w['kind'] for w in feature['properties']['warn_ranges']}
+        self.assertIn('steep', kinds,
+                      "a genuine 9% grade must still be disclosed")
+
+    def test_the_gates_are_ordered_sanely(self):
+        """Two contour intervals puts the signal outside the +/-4 ft error
+        bound two adjacent nodes can carry between them."""
+        self.assertGreaterEqual(ml.STEEP_MIN_RISE_FT, 8.0)
+        self.assertGreaterEqual(ml.STEEP_MIN_RUN_M, 25.0)
+
+
 class TestModeKeyHelpers(unittest.TestCase):
     def test_family_base_and_level(self):
         self.assertEqual(ml._mode_family('ebike:quiet'), 'ebike')
