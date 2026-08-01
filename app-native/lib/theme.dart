@@ -254,6 +254,11 @@ Color hexColor(String hex) =>
 ThemeData buildTheme() => ThemeData(
       colorScheme: ColorScheme.fromSeed(seedColor: brandGreen),
       useMaterial3: true,
+      // Floating, so toasts ride above the system navigation bar instead of
+      // hiding behind 3-button nav.
+      snackBarTheme: const SnackBarThemeData(
+        behavior: SnackBarBehavior.floating,
+      ),
     );
 
 void toast(BuildContext context, String msg) {

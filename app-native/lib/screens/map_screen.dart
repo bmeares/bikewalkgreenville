@@ -86,38 +86,6 @@ class _MapScreenState extends State<MapScreen> {
     final map = _map!;
     final ratio = MediaQuery.of(context).devicePixelRatio;
 
-    for (final def in layerDefs) {
-      final url = await api.layerUrl(def.path);
-      await map.addSource(def.id, GeojsonSourceProperties(data: url));
-    }
-
-    // Lines first: pins, the tap highlight and the route all draw above them.
-    for (final def in layerDefs.where((d) => !d.isPoint)) {
-      await map.addLineLayer(
-        def.id,
-        'lyr-${def.id}',
-        LineLayerProperties(
-          lineColor: def.colorByStress
-              ? [
-                  'match',
-                  ['get', 'stress_level'],
-                  for (final e in stressColors.entries) ...[e.key, e.value],
-                  '#9e9e9e',
-                ]
-              // Per-feature color when the layer provides one (GTFS routes).
-              : [
-                  'coalesce',
-                  ['get', 'color'],
-                  def.color,
-                ],
-          lineWidth: def.width,
-          lineOpacity: 0.85,
-          lineCap: 'round',
-          lineJoin: 'round',
-        ),
-      );
-    }
-
     // Tap highlight: one source, two layers — the line layer renders when the
     // tapped feature is a line, the circle layer when it's a point. The
     // geometry-type filters matter: without them the circle layer draws a
@@ -151,43 +119,10 @@ class _MapScreenState extends State<MapScreen> {
       enableInteraction: false,
     );
 
-    // Point layers render as Material-icon pins (see map_icons.dart) so each
-    // layer is recognizable instead of another teal dot.
-    for (final def in layerDefs.where((d) => d.isPoint)) {
-      await map.addImage(
-        'pin-${def.id}',
-        await renderPin(
-          icon: def.icon,
-          color: hexColor(def.color),
-          devicePixelRatio: ratio,
-          scale: def.pinScale,
-        ),
-      );
-      await map.addSymbolLayer(
-        def.id,
-        'lyr-${def.id}',
-        SymbolLayerProperties(
-          iconImage: 'pin-${def.id}',
-          iconSize: [
-            'interpolate',
-            ['linear'],
-            ['zoom'],
-            11.0,
-            0.45 * def.pinScale,
-            14.0,
-            0.7 * def.pinScale,
-            17.0,
-            0.95 * def.pinScale,
-          ],
-          iconAnchor: 'bottom',
-          // Reports are the point of the app — never let them get decluttered.
-          iconAllowOverlap: def.id == 'reports',
-        ),
-        minzoom: def.minZoom > 0 ? def.minZoom : null,
-      );
-    }
-
     // Route line (casing + fill) and the selection pin, above everything.
+    // Thematic layers are added lazily (see _ensureLayer): line layers slot
+    // in below the highlight, symbol pins below the route casing, so draw
+    // order stays lines → highlight → pins → route → pin.
     await map.addSource(
         'route', GeojsonSourceProperties(data: _emptyCollection));
     await map.addLineLayer(
@@ -283,6 +218,83 @@ class _MapScreenState extends State<MapScreen> {
     'features': <dynamic>[],
   };
 
+  /// Layers already added to the style. Sources are only fetched when a layer
+  /// first becomes visible — the county sidewalk GeoJSON alone is megabytes,
+  /// and loading every layer up front made first paint network-bound.
+  final Set<String> _addedLayers = {};
+
+  Future<void> _ensureLayer(LayerDef def) async {
+    final map = _map;
+    if (map == null || _addedLayers.contains(def.id)) return;
+    _addedLayers.add(def.id); // claim before the first await (re-entrancy)
+    try {
+      final url = await api.layerUrl(def.path);
+      await map.addSource(def.id, GeojsonSourceProperties(data: url));
+      if (def.isPoint) {
+        if (!mounted) return;
+        await map.addImage(
+          'pin-${def.id}',
+          await renderPin(
+            icon: def.icon,
+            color: hexColor(def.color),
+            devicePixelRatio: MediaQuery.of(context).devicePixelRatio,
+            scale: def.pinScale,
+          ),
+        );
+        await map.addSymbolLayer(
+          def.id,
+          'lyr-${def.id}',
+          SymbolLayerProperties(
+            iconImage: 'pin-${def.id}',
+            iconSize: [
+              'interpolate',
+              ['linear'],
+              ['zoom'],
+              11.0,
+              0.45 * def.pinScale,
+              14.0,
+              0.7 * def.pinScale,
+              17.0,
+              0.95 * def.pinScale,
+            ],
+            iconAnchor: 'bottom',
+            // Reports are the point of the app — never declutter them.
+            iconAllowOverlap: def.id == 'reports',
+          ),
+          minzoom: def.minZoom > 0 ? def.minZoom : null,
+          belowLayerId: 'lyr-route-casing',
+        );
+      } else {
+        await map.addLineLayer(
+          def.id,
+          'lyr-${def.id}',
+          LineLayerProperties(
+            lineColor: def.colorByStress
+                ? [
+                    'match',
+                    ['get', 'stress_level'],
+                    for (final e in stressColors.entries) ...[e.key, e.value],
+                    '#9e9e9e',
+                  ]
+                // Per-feature color when the layer provides one (GTFS routes).
+                : [
+                    'coalesce',
+                    ['get', 'color'],
+                    def.color,
+                  ],
+            lineWidth: def.width,
+            lineOpacity: 0.85,
+            lineCap: 'round',
+            lineJoin: 'round',
+          ),
+          belowLayerId: 'lyr-highlight-line',
+        );
+      }
+    } catch (_) {
+      _addedLayers.remove(def.id); // retry on the next visibility pass
+    }
+  }
+
   void _applyVisibility() {
     if (!_styleReady || _map == null) return;
     final state = context.read<AppState>();
@@ -290,7 +302,13 @@ class _MapScreenState extends State<MapScreen> {
       // While navigating, every thematic overlay comes off: what a rider needs
       // mid-turn is the street grid and its labels, not the stress colouring.
       final visible = _navigating ? false : state.layerVisible(def);
-      _map!.setLayerVisibility('lyr-${def.id}', visible);
+      if (visible && !_addedLayers.contains(def.id)) {
+        _ensureLayer(def);
+        continue; // added visible; nothing to toggle yet
+      }
+      if (_addedLayers.contains(def.id)) {
+        _map!.setLayerVisibility('lyr-${def.id}', visible);
+      }
     }
   }
 
@@ -299,7 +317,7 @@ class _MapScreenState extends State<MapScreen> {
     if (!_styleReady || _map == null) return;
     final state = context.read<AppState>();
     for (final def in layerDefs.where((d) => d.live)) {
-      if (!state.layerVisible(def)) continue;
+      if (!state.layerVisible(def) || !_addedLayers.contains(def.id)) continue;
       try {
         await _map!.setGeoJsonSource(def.id, await api.layerGeoJson(def.path));
       } catch (_) {
@@ -1075,11 +1093,7 @@ class _MapScreenState extends State<MapScreen> {
     );
     final label = (r['label'] ?? 'Destination').toString();
     final sublabel = (r['sublabel'] ?? '').toString();
-    return Positioned(
-      left: 12,
-      right: 12,
-      bottom: 24,
-      child: Material(
+    return Material(
         elevation: 6,
         borderRadius: BorderRadius.circular(18),
         color: brandGreen,
@@ -1144,7 +1158,6 @@ class _MapScreenState extends State<MapScreen> {
             ],
           ),
         ),
-      ),
     );
   }
 
@@ -1175,6 +1188,7 @@ class _MapScreenState extends State<MapScreen> {
     const id = 'reports';
     final def = layerDefs.firstWhere((d) => d.id == id);
     if (mounted) context.read<AppState>().toggleLayer(id, true);
+    await _ensureLayer(def);
     try {
       final data = await api.layerGeoJson(def.path);
       await _map?.setGeoJsonSource(id, data);
@@ -1222,6 +1236,10 @@ class _MapScreenState extends State<MapScreen> {
             myLocationEnabled: _locationEnabled,
             trackCameraPosition: true,
             attributionButtonPosition: AttributionButtonPosition.bottomLeft,
+            // Lift the (i) clear of the system navigation bar (3-button nav
+            // phones put ~48 dp of buttons at the bottom edge).
+            attributionButtonMargins: math.Point(
+                8, MediaQuery.of(context).padding.bottom + 8),
           ),
 
           // Top chrome: search + mode switch (hidden while navigating).
@@ -1342,46 +1360,34 @@ class _MapScreenState extends State<MapScreen> {
                   ),
                 ),
                 if (_pickField != null) _pickBanner(),
-                if (_navRoute != null) _routePreview(),
               ],
             ),
           ),
 
-          if (_navigating) ..._navChrome(),
+          if (_navigating) _navChrome(),
 
-          if (_place != null && _navRoute == null && !_navigating) _placeCard(),
-
-          // FABs (trimmed to a recenter button while navigating).
+          // One bottom overlay: FABs stacked above whichever card is active
+          // (route preview, place card, or the nav trip bar), the whole thing
+          // lifted clear of the system navigation bar. Phones with 3-button
+          // nav have a ~48 dp inset here; gesture phones ~16 dp.
           Positioned(
+            left: 12,
             right: 12,
-            bottom: _navigating
-                ? 130
-                : (_place != null && _navRoute == null ? 120 : 28),
+            bottom: MediaQuery.of(context).padding.bottom + 12,
             child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                if (!_navigating) ...[
-                  FloatingActionButton.small(
-                    heroTag: 'layers',
-                    onPressed: _openLayersSheet,
-                    child: const Icon(Icons.layers),
-                  ),
+                _fabColumn(),
+                if (_navigating && _navRoute != null) ...[
                   const SizedBox(height: 10),
-                ],
-                FloatingActionButton.small(
-                  heroTag: 'locate',
-                  onPressed: _locateMe,
-                  child: const Icon(Icons.my_location),
-                ),
-                if (!_navigating) ...[
+                  _navTripBar(),
+                ] else if (_navRoute != null) ...[
                   const SizedBox(height: 10),
-                  FloatingActionButton.extended(
-                    heroTag: 'report',
-                    backgroundColor: brandGreen,
-                    foregroundColor: Colors.white,
-                    icon: const Icon(Icons.report_problem_outlined),
-                    label: const Text('Report'),
-                    onPressed: _reportAtMyLocation,
-                  ),
+                  _routePreview(),
+                ] else if (_place != null) ...[
+                  const SizedBox(height: 10),
+                  _placeCard(),
                 ],
               ],
             ),
@@ -1390,6 +1396,39 @@ class _MapScreenState extends State<MapScreen> {
       ),
     );
   }
+
+  /// FABs, right-aligned above the bottom card (recenter only while
+  /// navigating).
+  Widget _fabColumn() => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          if (!_navigating) ...[
+            FloatingActionButton.small(
+              heroTag: 'layers',
+              onPressed: _openLayersSheet,
+              child: const Icon(Icons.layers),
+            ),
+            const SizedBox(height: 10),
+          ],
+          FloatingActionButton.small(
+            heroTag: 'locate',
+            onPressed: _locateMe,
+            child: const Icon(Icons.my_location),
+          ),
+          if (!_navigating && _navRoute == null) ...[
+            const SizedBox(height: 10),
+            FloatingActionButton.extended(
+              heroTag: 'report',
+              backgroundColor: brandGreen,
+              foregroundColor: Colors.white,
+              icon: const Icon(Icons.report_problem_outlined),
+              label: const Text('Report'),
+              onPressed: _reportAtMyLocation,
+            ),
+          ],
+        ],
+      );
 
   /// "Tap the map" banner while a trip endpoint is being picked.
   Widget _pickBanner() => Padding(
@@ -1436,10 +1475,15 @@ class _MapScreenState extends State<MapScreen> {
             ? 'BCycle from ${route.rentStation}'
             : (route.planLabel.isNotEmpty ? route.planLabel : 'Route'));
     final icon = planIcons[route.plan] ?? Icons.directions;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-      child: Column(
+    // Bottom-anchored: the summary + Start sit closest to the thumb, the
+    // caveats and alternatives stack above them.
+    return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
         children: [
+          if (route.alternatives.isNotEmpty) _alternativesRow(route),
+          if (route.fallbackNote != null || route.warnings.isNotEmpty)
+            _warningBanner(route),
           Material(
             elevation: 4,
             borderRadius: BorderRadius.circular(16),
@@ -1496,11 +1540,7 @@ class _MapScreenState extends State<MapScreen> {
               ),
             ),
           ),
-          if (route.fallbackNote != null || route.warnings.isNotEmpty)
-            _warningBanner(route),
-          if (route.alternatives.isNotEmpty) _alternativesRow(route),
         ],
-      ),
     );
   }
 
@@ -1511,7 +1551,7 @@ class _MapScreenState extends State<MapScreen> {
       for (final w in route.warnings) w.message,
     ];
     return Padding(
-      padding: const EdgeInsets.only(top: 6),
+      padding: const EdgeInsets.only(bottom: 6),
       child: Material(
         elevation: 2,
         borderRadius: BorderRadius.circular(14),
@@ -1558,7 +1598,7 @@ class _MapScreenState extends State<MapScreen> {
 
   /// The other itineraries the router costed — one tap swaps to them.
   Widget _alternativesRow(NavRoute route) => Padding(
-        padding: const EdgeInsets.only(top: 6),
+        padding: const EdgeInsets.only(bottom: 6),
         child: SizedBox(
           height: 38,
           child: ListView(
@@ -1581,11 +1621,12 @@ class _MapScreenState extends State<MapScreen> {
         ),
       );
 
-  /// Turn-by-turn chrome: maneuver card on top, trip bar on the bottom.
-  List<Widget> _navChrome() {
+  /// Turn-by-turn top chrome: maneuver card + the upcoming-turns strip.
+  /// (The trip bar renders in the shared bottom overlay — see build().)
+  Widget _navChrome() {
     final route = _navRoute;
     final progress = _progress;
-    if (route == null || route.steps.isEmpty) return const [];
+    if (route == null || route.steps.isEmpty) return const SizedBox.shrink();
     final nextIndex =
         math.min((progress?.stepIndex ?? -1) + 1, route.steps.length - 1);
     final step = route.steps[nextIndex];
@@ -1593,13 +1634,8 @@ class _MapScreenState extends State<MapScreen> {
         ? route.steps[nextIndex + 1]
         : null;
     final toManeuver = progress?.distanceToManeuverM ?? step.distanceM;
-    final remaining = progress?.remainingM ?? route.distanceM;
-    final etaMin = route.durationMin <= 0 || route.distanceM <= 0
-        ? 0.0
-        : route.durationMin * (remaining / route.distanceM);
 
-    return [
-      SafeArea(
+    return SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -1704,52 +1740,56 @@ class _MapScreenState extends State<MapScreen> {
         _upcomingStrip(route, nextIndex),
           ],
         ),
-      ),
-      Positioned(
-        left: 10,
-        right: 10,
-        bottom: 20,
-        child: Material(
-          elevation: 6,
-          borderRadius: BorderRadius.circular(18),
-          color: Colors.white,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 10, 10, 10),
-            child: Row(
+      );
+  }
+
+  /// ETA + distance left + Steps/End, rendered inside the bottom overlay so it
+  /// clears the system navigation bar.
+  Widget _navTripBar() {
+    final route = _navRoute!;
+    final remaining = _progress?.remainingM ?? route.distanceM;
+    final etaMin = route.durationMin <= 0 || route.distanceM <= 0
+        ? 0.0
+        : route.durationMin * (remaining / route.distanceM);
+    return Material(
+      elevation: 6,
+      borderRadius: BorderRadius.circular(18),
+      color: Colors.white,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 10, 10),
+        child: Row(
+          children: [
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      formatDuration(etaMin),
-                      style: const TextStyle(
-                          fontSize: 20, fontWeight: FontWeight.w700),
-                    ),
-                    Text('${formatDistance(remaining)} left',
-                        style: const TextStyle(color: Colors.black54)),
-                  ],
+                Text(
+                  formatDuration(etaMin),
+                  style: const TextStyle(
+                      fontSize: 20, fontWeight: FontWeight.w700),
                 ),
-                const Spacer(),
-                TextButton.icon(
-                  icon: const Icon(Icons.list_alt),
-                  label: const Text('Steps'),
-                  onPressed: _openStepsSheet,
-                ),
-                const SizedBox(width: 4),
-                FilledButton.icon(
-                  style: FilledButton.styleFrom(
-                      backgroundColor: Colors.red.shade700),
-                  icon: const Icon(Icons.close),
-                  label: const Text('End'),
-                  onPressed: () => _stopNav(),
-                ),
+                Text('${formatDistance(remaining)} left',
+                    style: const TextStyle(color: Colors.black54)),
               ],
             ),
-          ),
+            const Spacer(),
+            TextButton.icon(
+              icon: const Icon(Icons.list_alt),
+              label: const Text('Steps'),
+              onPressed: _openStepsSheet,
+            ),
+            const SizedBox(width: 4),
+            FilledButton.icon(
+              style: FilledButton.styleFrom(
+                  backgroundColor: Colors.red.shade700),
+              icon: const Icon(Icons.close),
+              label: const Text('End'),
+              onPressed: () => _stopNav(),
+            ),
+          ],
         ),
       ),
-    ];
+    );
   }
 
   /// Horizontal ribbon of the turns still ahead. Scrollable, so a long trip is

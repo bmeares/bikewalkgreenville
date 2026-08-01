@@ -35,7 +35,7 @@ from meerschaum.actions import make_action
 from meerschaum.plugins import api_plugin
 from meerschaum.utils.warnings import info, warn
 
-__version__ = '0.3.0'
+__version__ = '0.4.0'
 
 bwg = mrsm.Plugin('bwg')
 
@@ -829,6 +829,7 @@ def _get_route_graph(debug: bool = False) -> dict[str, Any]:
             info("Building routing graph...")
             built = _build_route_graph(debug=debug)
             _GRAPH.pop('nearest_index', None)  # stale after a rebuild
+            _GRAPH.pop('edge_index', None)
             _GRAPH.update(built)
             info(
                 f"Routing graph: {len(built['nodes'])} nodes, "
@@ -884,6 +885,200 @@ def _nearest_node(graph: dict, lat: float, lon: float):
     return best, best_d
 
 
+def _edge_index(graph: dict) -> dict:
+    """Spatial index of real (non-connector) edges, memoized on the graph.
+
+    `edges[i]` is `(u, forward_edge_tuple)` — the canonical copy stored under
+    `u` with `is_reversed=False`. Every ~250 m cell an edge segment's bbox
+    overlaps maps to that edge's index, so a nearest-edge query only has to
+    project onto a handful of candidates.
+    """
+    index = graph.get('edge_index')
+    if index is not None:
+        return index
+    cell_lat = _NEAREST_GRID_M / M_PER_DEG_LAT
+    cell_lon = cell_lat / _COSLAT
+    edges: list = []
+    buckets: dict = {}
+    for u, lst in graph['adj'].items():
+        for e in lst:
+            if e[5] or e[3] == 'connector':
+                continue
+            ei = len(edges)
+            edges.append((u, e))
+            cells: set = set()
+            coords = e[4]
+            for a, b in zip(coords, coords[1:]):
+                r0 = int(min(a[1], b[1]) / cell_lat)
+                r1 = int(max(a[1], b[1]) / cell_lat)
+                c0 = int(min(a[0], b[0]) / cell_lon)
+                c1 = int(max(a[0], b[0]) / cell_lon)
+                for r in range(r0, r1 + 1):
+                    for c in range(c0, c1 + 1):
+                        cells.add((r, c))
+            for cell in cells:
+                buckets.setdefault(cell, []).append(ei)
+    index = {
+        'buckets': buckets, 'edges': edges,
+        'cell_lat': cell_lat, 'cell_lon': cell_lon,
+    }
+    graph['edge_index'] = index
+    return index
+
+
+def _project_seg(lat: float, lon: float, a: list, b: list):
+    """Project (lat, lon) onto segment [lon,lat] a->b.
+    Returns (meters, t in [0,1], [lon, lat] of the projection)."""
+    mx = M_PER_DEG_LAT * _COSLAT
+    my = M_PER_DEG_LAT
+    ax, ay = (a[0] - lon) * mx, (a[1] - lat) * my
+    bx, by = (b[0] - lon) * mx, (b[1] - lat) * my
+    dx, dy = bx - ax, by - ay
+    l2 = dx * dx + dy * dy
+    t = 0.0 if l2 <= 0 else max(0.0, min(1.0, -(ax * dx + ay * dy) / l2))
+    px, py = ax + t * dx, ay + t * dy
+    d = (px * px + py * py) ** 0.5
+    return d, t, [lon + px / mx, lat + py / my]
+
+
+def _poly_len_m(coords: list) -> float:
+    return sum(
+        _equirect_m(a[1], a[0], b[1], b[0])
+        for a, b in zip(coords, coords[1:])
+    )
+
+
+def _snap_edge(graph: dict, lat: float, lon: float):
+    """Nearest point on any real edge to (lat, lon), or None.
+    Returns (edge_i, seg_i, t, [lon, lat], meters)."""
+    index = _edge_index(graph)
+    if not index['edges']:
+        return None
+    buckets = index['buckets']
+    edges = index['edges']
+    cell_lat, cell_lon = index['cell_lat'], index['cell_lon']
+    home = (int(lat / cell_lat), int(lon / cell_lon))
+    best = None
+    seen: set = set()
+    for ring in range(0, 40):
+        if best is not None and best[4] <= (ring - 1) * _NEAREST_GRID_M:
+            break
+        for dy in range(-ring, ring + 1):
+            for dx in range(-ring, ring + 1):
+                if ring and max(abs(dy), abs(dx)) != ring:
+                    continue
+                for ei in buckets.get((home[0] + dy, home[1] + dx), []):
+                    if ei in seen:
+                        continue
+                    seen.add(ei)
+                    coords = edges[ei][1][4]
+                    for si, (a, b) in enumerate(zip(coords, coords[1:])):
+                        d, t, pt = _project_seg(lat, lon, a, b)
+                        if best is None or d < best[4]:
+                            best = (ei, si, t, pt, d)
+    return best
+
+
+def _snap_terminus(graph: dict, lat: float, lon: float, tag: str) -> dict:
+    """Snap a route terminus to the nearest point ON the network, not just the
+    nearest node. Termini that land mid-edge get a virtual node (the edge is
+    split for this request only), which is what stops the router from walking
+    to a node behind you and doubling back — the McHan St / Haynie St U-turn.
+    """
+    node, node_d = _nearest_node(graph, lat, lon)
+    hit = _snap_edge(graph, lat, lon)
+    if hit is None or (node_d is not None and node_d <= hit[4] + 0.01):
+        return {'node': node, 'dist': node_d, 'virtual': None}
+    ei, seg_i, t, pt, d = hit
+    u, edge = _edge_index(graph)['edges'][ei]
+    coords = edge[4]
+    # Landing on (or a hair from) a chunk endpoint IS that node.
+    if _equirect_m(pt[1], pt[0], coords[0][1], coords[0][0]) < 0.5:
+        return {'node': u, 'dist': d, 'virtual': None}
+    if _equirect_m(pt[1], pt[0], coords[-1][1], coords[-1][0]) < 0.5:
+        return {'node': edge[0], 'dist': d, 'virtual': None}
+    return {
+        'node': ('virt', tag),
+        'dist': d,
+        'virtual': {'ei': ei, 'seg_i': seg_i, 't': t, 'pt': pt},
+    }
+
+
+def _chunk_pos_m(coords: list, seg_i: int, t: float) -> float:
+    """Distance along `coords` of the point (seg_i, t)."""
+    pos = sum(
+        _equirect_m(coords[k][1], coords[k][0], coords[k + 1][1], coords[k + 1][0])
+        for k in range(seg_i)
+    )
+    return pos + t * _equirect_m(
+        coords[seg_i][1], coords[seg_i][0],
+        coords[seg_i + 1][1], coords[seg_i + 1][0],
+    )
+
+
+def _register_virtual(
+    graph: dict,
+    snap: dict,
+    extra_adj: dict,
+    extra_nodes: dict,
+):
+    """Split the snapped edge at the projection point: partial edges from the
+    virtual node to both real endpoints (and back), overlaid per-request."""
+    if snap['virtual'] is None:
+        return
+    v_info = snap['virtual']
+    vid = snap['node']
+    u, edge = _edge_index(graph)['edges'][v_info['ei']]
+    v, w, total, category, coords, _rev, name, hs = (
+        edge[0], edge[1], edge[2], edge[3], edge[4], edge[5], edge[6], edge[7],
+    )
+    seg_i, pt = v_info['seg_i'], v_info['pt']
+    part_a = coords[:seg_i + 1] + [pt]      # u -> virtual, forward
+    part_b = [pt] + coords[seg_i + 1:]      # virtual -> v, forward
+    len_a = max(_poly_len_m(part_a), 0.1)
+    len_b = max(_poly_len_m(part_b), 0.1)
+    fa = len_a / total if total > 0 else 0.5
+    fb = len_b / total if total > 0 else 0.5
+    extra_nodes[vid] = (pt[1], pt[0])
+    extra_adj.setdefault(vid, []).extend((
+        (u, w * fa, len_a, category, part_a, True, name, hs),
+        (v, w * fb, len_b, category, part_b, False, name, hs),
+    ))
+    extra_adj.setdefault(u, []).append(
+        (vid, w * fa, len_a, category, part_a, False, name, hs))
+    extra_adj.setdefault(v, []).append(
+        (vid, w * fb, len_b, category, part_b, True, name, hs))
+
+
+def _bridge_same_edge(
+    graph: dict,
+    snap_a: dict,
+    snap_b: dict,
+    extra_adj: dict,
+):
+    """Both termini split the SAME edge: connect them directly along it, or the
+    only path between them would detour to an endpoint and double back."""
+    va, vb = snap_a.get('virtual'), snap_b.get('virtual')
+    if not va or not vb or va['ei'] != vb['ei']:
+        return
+    _u, edge = _edge_index(graph)['edges'][va['ei']]
+    w, total, category, coords, name, hs = (
+        edge[1], edge[2], edge[3], edge[4], edge[6], edge[7],
+    )
+    pos_a = _chunk_pos_m(coords, va['seg_i'], va['t'])
+    pos_b = _chunk_pos_m(coords, vb['seg_i'], vb['t'])
+    lo, hi = (snap_a, snap_b) if pos_a <= pos_b else (snap_b, snap_a)
+    lo_v, hi_v = lo['virtual'], hi['virtual']
+    mid = coords[lo_v['seg_i'] + 1:hi_v['seg_i'] + 1]
+    bridge = [lo_v['pt']] + mid + [hi_v['pt']]
+    blen = max(abs(pos_b - pos_a), 0.1)
+    bw = w * (blen / total) if total > 0 else blen
+    extra_adj.setdefault(lo['node'], []).append(
+        (hi['node'], bw, blen, category, bridge, False, name, hs))
+    extra_adj.setdefault(hi['node'], []).append(
+        (lo['node'], bw, blen, category, bridge, True, name, hs))
+
+
 def _edge_deficiency(edge, mode: str) -> str | None:
     """The infrastructure this edge is missing for `mode`, or None.
 
@@ -904,16 +1099,33 @@ def _edge_deficiency(edge, mode: str) -> str | None:
     return None
 
 
-def _astar(graph: dict, start, goal, mode: str = 'bike'):
+def _astar(
+    graph: dict,
+    start,
+    goal,
+    mode: str = 'bike',
+    extra_adj: dict | None = None,
+    extra_nodes: dict | None = None,
+):
     """Returns list of (node, edge) from start to goal, or None. edge is the
     adjacency tuple taken to arrive at node (None for start). Edge weights are
     recomputed per mode from length x category factor x missing-sidewalk
-    penalty (the stored weight is the bike one, kept for stats/dedup)."""
+    penalty (the stored weight is the bike one, kept for stats/dedup).
+
+    `extra_adj` / `extra_nodes` overlay per-request virtual nodes (termini
+    snapped mid-edge) without mutating the shared graph."""
     import heapq
+    import itertools
 
     nodes = graph['nodes']
     adj = graph['adj']
-    glat, glon = nodes[goal]
+    extra_adj = extra_adj or {}
+    extra_nodes = extra_nodes or {}
+
+    def _pos(cell):
+        return extra_nodes.get(cell) or nodes[cell]
+
+    glat, glon = _pos(goal)
     factors = MODE_FACTORS[mode]
     default_factor = MODE_DEFAULT_FACTOR[mode]
     no_sidewalk_factor = NO_SIDEWALK_FACTOR.get(mode, 1.0)
@@ -921,7 +1133,7 @@ def _astar(graph: dict, start, goal, mode: str = 'bike'):
     min_factor = min(list(factors.values()) + [1.0])
 
     def h(cell):
-        lat, lon = nodes[cell]
+        lat, lon = _pos(cell)
         return _equirect_m(lat, lon, glat, glon) * min_factor
 
     def edge_weight(edge) -> float:
@@ -933,12 +1145,15 @@ def _astar(graph: dict, start, goal, mode: str = 'bike'):
             weight *= no_sidewalk_factor
         return weight
 
+    # Tiebreaker: virtual-node ids aren't comparable with grid cells, so the
+    # heap must never fall through to comparing nodes.
+    seq = itertools.count()
     dist = {start: 0.0}
     prev: dict = {start: (None, None)}
-    heap = [(h(start), 0.0, start)]
+    heap = [(h(start), 0.0, next(seq), start)]
     visited: set = set()
     while heap:
-        _f, g, cur = heapq.heappop(heap)
+        _f, g, _seq, cur = heapq.heappop(heap)
         if cur in visited:
             continue
         visited.add(cur)
@@ -950,13 +1165,13 @@ def _astar(graph: dict, start, goal, mode: str = 'bike'):
                 path.append((node, edge))
                 node = parent
             return list(reversed(path))
-        for edge in adj[cur]:
+        for edge in itertools.chain(adj.get(cur, ()), extra_adj.get(cur, ())):
             nbr, weight = edge[0], edge_weight(edge)
             ng = g + weight
             if nbr not in dist or ng < dist[nbr]:
                 dist[nbr] = ng
                 prev[nbr] = (cur, edge)
-                heapq.heappush(heap, (ng + h(nbr), ng, nbr))
+                heapq.heappush(heap, (ng + h(nbr), ng, next(seq), nbr))
     return None
 
 
@@ -1233,13 +1448,23 @@ def _route_core(
         raise ValueError("Routing network is unavailable.")
     warn_mode = warn_mode or mode
 
-    start, start_d = _nearest_node(graph, from_lat, from_lon)
-    goal, goal_d = _nearest_node(graph, to_lat, to_lon)
+    snap_s = _snap_terminus(graph, from_lat, from_lon, 'start')
+    snap_g = _snap_terminus(graph, to_lat, to_lon, 'goal')
+    start, start_d = snap_s['node'], snap_s['dist']
+    goal, goal_d = snap_g['node'], snap_g['dist']
     if start is None or goal is None:
         raise ValueError("Routing network is unavailable.")
     if start_d > snap_max_m or goal_d > snap_max_m:
         noun = MODE_NETWORK_NOUN.get(warn_mode, 'routable')
         raise ValueError(f"No {noun} network near that point.")
+
+    # Mid-edge termini become per-request virtual nodes so the route leaves
+    # from the snapped point itself instead of the nearest endpoint.
+    extra_adj: dict = {}
+    extra_nodes: dict = {}
+    _register_virtual(graph, snap_s, extra_adj, extra_nodes)
+    _register_virtual(graph, snap_g, extra_adj, extra_nodes)
+    _bridge_same_edge(graph, snap_s, snap_g, extra_adj)
 
     legs: list[dict] = []
     if start == goal:
@@ -1256,7 +1481,10 @@ def _route_core(
             'warn': None,
         })
     else:
-        path = _astar(graph, start, goal, mode=mode)
+        path = _astar(
+            graph, start, goal, mode=mode,
+            extra_adj=extra_adj, extra_nodes=extra_nodes,
+        )
         if path is None:
             raise ValueError("Couldn't find a connected route.")
         coordinates = [[from_lon, from_lat]]
@@ -2188,6 +2416,18 @@ def init_app(app):
     # App-wide (all bwg.mrsm.io routes): geojson payloads gzip ~8-10x.
     if not any(m.cls is GZipMiddleware for m in app.user_middleware):
         app.add_middleware(GZipMiddleware, minimum_size=2048)
+
+    # Warm the routing graph, its lookup indexes and the transit data in the
+    # background so the first route request doesn't pay the ~6 s build.
+    def _warm_routing():
+        try:
+            graph = _get_route_graph()
+            _nearest_index(graph)
+            _edge_index(graph)
+            _get_transit_data()
+        except Exception as e:
+            warn(f"Routing warm-up failed: {e}")
+    threading.Thread(target=_warm_routing, daemon=True).start()
 
     @app.get('/map-layers/index.json')
     def map_layers_index():

@@ -4,7 +4,7 @@ publish_to: 'none'
 
 # +N is the Android versionCode; both MUST increase every release or
 # in-place upgrades silently no-op on device. (Flet app ended at 29.)
-version: 1.3.0+33
+version: 1.4.0+34
 
 environment:
   sdk: ^3.10.7

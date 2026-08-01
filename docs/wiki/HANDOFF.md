@@ -1,6 +1,6 @@
 # Handoff — work continues on host `omega` (repo at `~/projects/bikewalkgreenville`)
 
-Updated 2026-08-01 (third session on omega). Read this + `DATA.md` before touching anything.
+Updated 2026-08-01 (fourth session on omega). Read this + `DATA.md` before touching anything.
 
 ## ⚠️ Repo is PUBLIC on GitHub
 
@@ -8,13 +8,42 @@ Updated 2026-08-01 (third session on omega). Read this + `DATA.md` before touchi
 
 ## State (all TESTED; backend DEPLOYED)
 
-- **`app-native/`** — native Flutter app (map-first, MapLibre GL), v**1.3.0+33**, applicationId `org.bikewalkgreenville.app`. `flutter analyze` clean, `flutter test` 21/21 green, signed release APK + AAB built on omega (signer SHA-1 `537F9A88…A843`, the shared SRA upload key).
+- **`app-native/`** — native Flutter app (map-first, MapLibre GL), v**1.4.0+34**, applicationId `org.bikewalkgreenville.app`. `flutter analyze` clean, `flutter test` 21/21 green, signed release APK + AAB built on omega (signer SHA-1 `537F9A88…A843`, the shared SRA upload key).
   - `build/app/outputs/flutter-apk/app-release.apk`
   - `build/app/outputs/bundle/release/app-release.aab`
-- **Backend live on bwg.mrsm.io**: `plugins/walk-audit.py`, `plugins/map-layers.py` (v0.3.0 — multi-modal routing, see below), `plugins/bike-parking.py`, `plugins/gtfs.py`, `plugins/bcycle.py`.
+- **Backend live on bwg.mrsm.io**: `plugins/walk-audit.py`, `plugins/map-layers.py` (v0.4.0 — edge-snap routing + multi-modal, see below), `plugins/bike-parking.py`, `plugins/gtfs.py`, `plugins/bcycle.py`.
 - **Prod jobs registered** inside `mrsm-api-bwg-1`: `transit` (daily GTFS sync) and `bike-parking` (daily Overpass sync), alongside `annex-watch`, `trails-output`, `duke`, `who-owns-the-roads`, `parking`. Both verified running with successful first syncs (`mrsm show logs <job>`).
 - **walk-audit config** moved off env vars onto Meerschaum config (`plugins:walk-audit:{smtp,notify}`). Prod values live in the container volume at `/meerschaum/config/plugins.json` (chmod 600); the `/meerschaum/.env` hack has been **deleted**.
 - `WalkAudit.reports` is empty (the deploy-check row was removed).
+
+### Shipped 2026-08-01 (fourth session) — v1.4.0+34, map-layers v0.4.0
+
+1. **Routing termini snap to the nearest point ON an edge, not the nearest
+   node** (`_snap_terminus` / `_snap_edge` / `_edge_index` in
+   `plugins/map-layers.py`). Mid-edge termini become per-request *virtual
+   nodes* (the edge is split at the projection; partial edges overlay the
+   shared graph via `_astar(extra_adj=, extra_nodes=)` — never mutated). This
+   fixes the McHan St → Haynie St U-turn: the old node snap walked ~45 m WEST
+   to the nearest chunk endpoint and doubled back east past the origin. Both
+   termini on the same edge get a direct bridge (`_bridge_same_edge`) or the
+   path would detour to an endpoint and back. Verified against a synthetic
+   graph reproducing the exact geometry.
+2. **Routing graph warms at API start** (background thread in `init_app`:
+   graph + nearest/edge indexes + transit data), so the first route request
+   doesn't pay the ~6 s build.
+3. **Bottom UI clears the system navigation bar.** Everything bottom-anchored
+   (FABs, place card, route preview, nav trip bar) now lives in ONE
+   `Positioned` overlay offset by `MediaQuery.padding.bottom` — 3-button-nav
+   phones (~48 dp inset) no longer draw under the buttons. Attribution (i)
+   margin lifted too; snackbars are `SnackBarBehavior.floating` via the theme.
+4. **Route preview moved from the top pile to the bottom** (summary + Start
+   closest to the thumb; warnings and alternative chips stack above it). Top
+   chrome is now just search + mode segments (+ pick banner).
+5. **Layers load lazily.** Sources are only fetched when a layer first turns
+   visible (`_ensureLayer`, `_addedLayers`); line layers insert
+   `belowLayerId: 'lyr-highlight-line'`, pins below `'lyr-route-casing'`, so
+   draw order is preserved. Cold start no longer downloads the multi-MB
+   county/city sidewalks GeoJSON when nobody is in walk mode.
 
 ### Shipped 2026-08-01 (third session) — v1.3.0+33
 
