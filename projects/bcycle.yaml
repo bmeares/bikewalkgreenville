@@ -14,6 +14,8 @@ pipes:
   metric: "stations"
   location: "greenville"
   parameters:
+    tags:
+    - "bcycle"
     schema: "BCycle"
     target: "stations"
     columns:
@@ -25,3 +27,16 @@ pipes:
       lat: "float"
       lon: "float"
       rental_uri: "string"
+
+# Without this the pipe registers on the compose project's local instance
+# instead of prod, and the container's `bcycle` job finds nothing to sync.
+config:
+  meerschaum:
+    instance: sql:bwg
+    connectors:
+      sql:
+        bwg: "{sql:bwg}"
+
+  plugins:
+    bwg:
+      data_path: '{MRSM_ROOT_DIR}/../data'
