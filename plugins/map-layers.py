@@ -35,7 +35,7 @@ from meerschaum.actions import make_action
 from meerschaum.plugins import api_plugin
 from meerschaum.utils.warnings import info, warn
 
-__version__ = '0.4.0'
+__version__ = '0.4.1'
 
 bwg = mrsm.Plugin('bwg')
 
@@ -725,6 +725,11 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
             )
 
     def _add_connector(u, v):
+        # A connector between nodes a real edge already joins is worse than
+        # useless: it weighs 1.0x its length, so the straight line undercuts
+        # the road it duplicates and the router cuts the corner.
+        if u == v or any(e[0] == v for e in adj[u]):
+            return
         d = _equirect_m(*nodes[u], *nodes[v])
         coords = [
             [nodes[u][1], nodes[u][0]],
@@ -759,15 +764,109 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
 
     # Junctions: the trail (and off-street greenway lanes) crosses dozens of
     # streets without ever sharing an endpoint with one -- left alone it's a
-    # long tube with one door, and routes can't get on or off. Connect every
-    # trail/lane-only node to its nearest street node (component-agnostic).
-    junction_targets = street_nodes - path_nodes
-    if junction_targets:
-        spatial, cl, cn = _spatial_hash(junction_targets, ROUTE_CONNECT_M)
-        for u in path_nodes - street_nodes:
-            best, best_d = _nearest_in_hash(spatial, cl, cn, *nodes[u])
-            if best is not None and best_d <= ROUTE_CONNECT_M:
-                _add_connector(u, best)
+    # long tube with one door, and routes can't get on or off. So every
+    # trail/lane-only node gets a connector to the street network
+    # (component-agnostic).
+    #
+    # The connector lands on the nearest point ON a street chunk, splitting
+    # that chunk there, NOT on the nearest street *node*. Nodes only exist
+    # where `_subdivide` happened to end a ~120 m chunk, so a node-targeted
+    # connector routinely points backwards: the Cleveland St bike lane's south
+    # end connected 48 m south down Jones Ave rather than to the junction 12 m
+    # away, and a bike route arriving at that junction had to ride south and
+    # U-turn to get on the lane. Splitting puts the door where the path
+    # actually meets the street. Same idea as `_snap_terminus`, applied at
+    # build time instead of per request.
+    street_chunks = [
+        (u, e)
+        for u, lst in adj.items()
+        for e in lst
+        if not e[5] and e[3] not in ('srt', 'bike-lane', 'connector')
+    ]
+    orphan_nodes = path_nodes - street_nodes
+    if street_chunks and orphan_nodes:
+        cell_lat = ROUTE_CONNECT_M / M_PER_DEG_LAT
+        cell_lon = cell_lat / _COSLAT
+        buckets: dict = {}
+        for ci, (_u, e) in enumerate(street_chunks):
+            cells: set = set()
+            for a, b in zip(e[4], e[4][1:]):
+                r0 = int(min(a[1], b[1]) / cell_lat)
+                r1 = int(max(a[1], b[1]) / cell_lat)
+                c0 = int(min(a[0], b[0]) / cell_lon)
+                c1 = int(max(a[0], b[0]) / cell_lon)
+                for r in range(r0, r1 + 1):
+                    for c in range(c0, c1 + 1):
+                        cells.add((r, c))
+            for cell in cells:
+                buckets.setdefault(cell, []).append(ci)
+
+        # chunk index -> [(position along chunk, seg_i, t, point, path node)]
+        splits: dict = {}
+        for u in orphan_nodes:
+            lat, lon = nodes[u]
+            home = (int(lat / cell_lat), int(lon / cell_lon))
+            best = None
+            seen: set = set()
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    for ci in buckets.get((home[0] + dy, home[1] + dx), ()):
+                        if ci in seen:
+                            continue
+                        seen.add(ci)
+                        coords = street_chunks[ci][1][4]
+                        for si, (a, b) in enumerate(zip(coords, coords[1:])):
+                            d, t, pt = _project_seg(lat, lon, a, b)
+                            if best is None or d < best[0]:
+                                best = (d, ci, si, t, pt)
+            if best is None or best[0] > ROUTE_CONNECT_M:
+                continue
+            _d, ci, si, t, pt = best
+            coords = street_chunks[ci][1][4]
+            splits.setdefault(ci, []).append(
+                (_chunk_pos_m(coords, si, t), si, t, pt, u)
+            )
+
+        for ci, requests in splits.items():
+            src, edge = street_chunks[ci]
+            dst = edge[0]
+            coords = edge[4]
+            category, name, has_sidewalk = edge[3], edge[6], edge[7]
+            factor = bike_factors.get(category, MODE_DEFAULT_FACTOR['bike'])
+            requests.sort()
+            # Cut the chunk at every projection, in order along it.
+            pieces = []
+            prev_si, prev_pt = 0, coords[0]
+            for _pos, si, _t, pt, _u in requests:
+                pieces.append([prev_pt] + coords[prev_si + 1:si + 1] + [pt])
+                prev_si, prev_pt = si, pt
+            pieces.append([prev_pt] + coords[prev_si + 1:])
+            # Drop the original chunk (identity on its coords, so a parallel
+            # edge between the same nodes is left alone) and re-add the parts.
+            adj[src] = [
+                x for x in adj[src] if not (x[0] == dst and x[4] is coords)
+            ]
+            adj[dst] = [
+                x for x in adj[dst] if not (x[0] == src and x[4] is coords)
+            ]
+            for piece in pieces:
+                length_m = _poly_len_m(piece)
+                if length_m <= 0:
+                    continue
+                pu = _node(piece[0][0], piece[0][1])
+                pv = _node(piece[-1][0], piece[-1][1])
+                street_nodes.update((pu, pv))
+                if pu == pv:
+                    continue
+                weight = length_m * factor
+                adj[pu].append(
+                    (pv, weight, length_m, category, piece, False, name, has_sidewalk)
+                )
+                adj[pv].append(
+                    (pu, weight, length_m, category, piece, True, name, has_sidewalk)
+                )
+            for _pos, _si, _t, pt, u in requests:
+                _add_connector(u, _node(pt[0], pt[1]))
 
     def _components() -> list[set]:
         seen: set = set()

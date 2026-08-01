@@ -11,10 +11,51 @@ Updated 2026-08-01 (fourth session on omega). Read this + `DATA.md` before touch
 - **`app-native/`** — native Flutter app (map-first, MapLibre GL), v**1.4.0+34**, applicationId `org.bikewalkgreenville.app`. `flutter analyze` clean, `flutter test` 21/21 green, signed release APK + AAB built on omega (signer SHA-1 `537F9A88…A843`, the shared SRA upload key).
   - `build/app/outputs/flutter-apk/app-release.apk`
   - `build/app/outputs/bundle/release/app-release.aab`
-- **Backend live on bwg.mrsm.io**: `plugins/walk-audit.py`, `plugins/map-layers.py` (v0.4.0 — edge-snap routing + multi-modal, see below), `plugins/bike-parking.py`, `plugins/gtfs.py`, `plugins/bcycle.py`.
+- **Backend live on bwg.mrsm.io**: `plugins/walk-audit.py`, `plugins/map-layers.py` (v0.4.1 — edge-snap routing + multi-modal, see below), `plugins/bike-parking.py`, `plugins/gtfs.py`, `plugins/bcycle.py`.
 - **Prod jobs registered** inside `mrsm-api-bwg-1`: `transit` (daily GTFS sync) and `bike-parking` (daily Overpass sync), alongside `annex-watch`, `trails-output`, `duke`, `who-owns-the-roads`, `parking`. Both verified running with successful first syncs (`mrsm show logs <job>`).
 - **walk-audit config** moved off env vars onto Meerschaum config (`plugins:walk-audit:{smtp,notify}`). Prod values live in the container volume at `/meerschaum/config/plugins.json` (chmod 600); the `/meerschaum/.env` hack has been **deleted**.
 - `WalkAudit.reports` is empty (the deploy-check row was removed).
+
+### Shipped 2026-08-01 (fifth session) — map-layers v0.4.1 (backend only)
+
+**Junction connectors land ON a street, not on the nearest street *node*.**
+Reported symptom: biking 4 McHan St → Other Lands turned right onto Jones Ave,
+rode 37 m south, then U-turned back north onto Cleveland St.
+
+Root cause: graph nodes only exist where `_subdivide` ended a ~120 m chunk, so
+the "connect every trail/lane-only node to the street grid" pass attached the
+Cleveland St bike lane's south end to a Jones Ave node 48 m SOUTH instead of
+the Pearl/Jones/Cleveland junction 12 m away. (The old pass also excluded
+*mixed* nodes — where a path already meets a street — from its target set,
+which is exactly what made it reach past that junction.) A route arriving at
+the junction had no edge onto the lane and had to ride south and double back.
+
+Fix, in `_build_route_graph`:
+1. Each trail/lane-only node now snaps to the nearest point **on** a street
+   chunk, splitting that chunk there — the build-time twin of what
+   `_snap_terminus` already does per request for route termini.
+2. `_add_connector` refuses a connector between nodes a real edge already
+   joins. Those weigh 1.0× length, so the straight line undercut the road it
+   duplicated and the router cut the corner.
+
+Measured over 180 synthetic routes (60 trips × bike/walk/roll), before → after:
+U-turn maneuvers **111 → 37**, metres travelled on synthetic connectors
+**24,550 → 7,943**, total distance −0.42%, zero change in what's routable.
+Graph build 5.7 s → 6.0 s; nodes 37,291 → 37,739. The reported trip now reads
+Pearl Av → Cleveland St with no U-turn in bike, walk *or* roll mode, and a
+separate mislabeled "Make a U-turn onto N Main St" on the same trip is gone.
+
+Tests: `tests/test_route_graph.py` (new, first Python tests in the repo) —
+runs the graph builder + A* + step builder against synthetic source rows with
+no database, reproducing the exact reported geometry. `python3
+tests/test_route_graph.py`. Verified non-vacuous: all 4 fail on the old code.
+
+Known residual: ~37/180 routes still contain a U-turn. Most are the mirror of
+the fixed case — a path node only exists at a chunk endpoint, so leaving the
+trail can mean riding past your exit and coming back. Splitting *trail*
+geometry from the street side would fix it but would fabricate SRT access
+points that don't exist on the ground; don't do it without checking real
+access points.
 
 ### Shipped 2026-08-01 (fourth session) — v1.4.0+34, map-layers v0.4.0
 
