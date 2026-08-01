@@ -725,6 +725,8 @@ class _MapScreenState extends State<MapScreen> {
         modes: state.apiModes,
         roll: state.roll,
         bcycle: state.useBcycle,
+        ebike: state.useEbike,
+        stress: state.stressApiName,
         plan: plan,
       );
       final route = NavRoute.fromFeature(feature);
@@ -1500,7 +1502,10 @@ class _MapScreenState extends State<MapScreen> {
                       children: [
                         Text(
                           '${formatDistance(route.distanceM)} · '
-                          '${formatDuration(route.durationMin)}',
+                          '${formatDuration(route.durationMin)}'
+                          // Climb is only worth the pixels once it is enough
+                          // to feel in your legs.
+                          '${route.climbFt >= 50 ? ' · ↑ ${route.climbFt} ft' : ''}',
                           style: const TextStyle(
                               color: Colors.white,
                               fontWeight: FontWeight.w600,

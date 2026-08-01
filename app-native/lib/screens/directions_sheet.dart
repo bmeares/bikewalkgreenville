@@ -276,6 +276,39 @@ class _DirectionsSheetState extends State<DirectionsSheet> {
                   value: state.useBcycle,
                   onChanged: state.setUseBcycle,
                 ),
+                if (state.showsBikeOptions) ...[
+                  SwitchListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    secondary: const Icon(Icons.electric_bike),
+                    title: const Text('I ride an e-bike'),
+                    subtitle: const Text(
+                        'Faster, and hills cost you a lot less'),
+                    value: state.useEbike,
+                    onChanged: state.setUseEbike,
+                  ),
+                  const SizedBox(height: 4),
+                  Text('How much traffic is OK?',
+                      style: Theme.of(context).textTheme.labelLarge),
+                  const SizedBox(height: 6),
+                  SegmentedButton<BikeStress>(
+                    segments: [
+                      for (final level in BikeStress.values)
+                        ButtonSegment(
+                          value: level,
+                          label: Text(bikeStressLabels[level]!),
+                        ),
+                    ],
+                    selected: {state.stress},
+                    showSelectedIcon: false,
+                    onSelectionChanged: (sel) => state.setStress(sel.first),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    bikeStressBlurbs[state.stress]!,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
                 const SizedBox(height: 12),
                 SizedBox(
                   width: double.infinity,

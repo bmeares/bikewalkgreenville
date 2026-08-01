@@ -68,6 +68,11 @@ class Api {
   /// Multi-modal directions. [modes] is any of `bike` / `walk` / `transit`;
   /// [roll] switches walking to wheelchair weighting, [bcycle] adds a
   /// bike-share itinerary, and [plan] pins one of the returned alternatives.
+  ///
+  /// [ebike] rides at e-bike pace and shrugs off hills; [stress] is how much
+  /// traffic the rider will accept (`quiet` / `balanced` / `direct`). Both
+  /// apply to every pedalling leg, including the ride to a bus stop. Omitting
+  /// them is the server's historical behaviour.
   Future<Map<String, dynamic>> route(
     double fromLat,
     double fromLon,
@@ -77,6 +82,8 @@ class Api {
     bool roll = false,
     bool bcycle = false,
     String? plan,
+    bool ebike = false,
+    String? stress,
   }) async =>
       Map<String, dynamic>.from(await _get('/map-layers/route', {
         'from': '$fromLat,$fromLon',
@@ -84,6 +91,8 @@ class Api {
         'modes': (modes.isEmpty ? {'bike'} : modes).join(','),
         if (roll) 'roll': '1',
         if (bcycle) 'bcycle': '1',
+        if (ebike) 'ebike': '1',
+        'stress': ?stress,
         'plan': ?plan,
       }));
 

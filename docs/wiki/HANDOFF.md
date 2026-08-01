@@ -1,6 +1,6 @@
 # Handoff — work continues on host `omega` (repo at `~/projects/bikewalkgreenville`)
 
-Updated 2026-08-01 (fourth session on omega). Read this + `DATA.md` before touching anything.
+Updated 2026-08-01 (sixth session on omega). Read this + `DATA.md` before touching anything.
 
 ## ⚠️ Repo is PUBLIC on GitHub
 
@@ -8,13 +8,65 @@ Updated 2026-08-01 (fourth session on omega). Read this + `DATA.md` before touch
 
 ## State (all TESTED; backend DEPLOYED)
 
-- **`app-native/`** — native Flutter app (map-first, MapLibre GL), v**1.4.0+34**, applicationId `org.bikewalkgreenville.app`. `flutter analyze` clean, `flutter test` 21/21 green, signed release APK + AAB built on omega (signer SHA-1 `537F9A88…A843`, the shared SRA upload key).
+- **`app-native/`** — native Flutter app (map-first, MapLibre GL), v**1.5.0+35**, applicationId `org.bikewalkgreenville.app`. `flutter analyze` clean, `flutter test` 27/27 green, signed release APK + AAB built on omega (signer SHA-1 `537F9A88…A843`, the shared SRA upload key).
   - `build/app/outputs/flutter-apk/app-release.apk`
   - `build/app/outputs/bundle/release/app-release.aab`
-- **Backend live on bwg.mrsm.io**: `plugins/walk-audit.py`, `plugins/map-layers.py` (v0.4.1 — edge-snap routing + multi-modal, see below), `plugins/bike-parking.py`, `plugins/gtfs.py`, `plugins/bcycle.py`.
+- **Backend live on bwg.mrsm.io**: `plugins/walk-audit.py`, `plugins/map-layers.py` (v0.5.0 — edge-snap routing + multi-modal, see below), `plugins/bike-parking.py`, `plugins/gtfs.py`, `plugins/bcycle.py`.
 - **Prod jobs registered** inside `mrsm-api-bwg-1`: `transit` (daily GTFS sync) and `bike-parking` (daily Overpass sync), alongside `annex-watch`, `trails-output`, `duke`, `who-owns-the-roads`, `parking`. Both verified running with successful first syncs (`mrsm show logs <job>`).
 - **walk-audit config** moved off env vars onto Meerschaum config (`plugins:walk-audit:{smtp,notify}`). Prod values live in the container volume at `/meerschaum/config/plugins.json` (chmod 600); the `/meerschaum/.env` hack has been **deleted**.
 - `WalkAudit.reports` is empty (the deploy-check row was removed).
+
+### Shipped 2026-08-01 (sixth session) — map-layers v0.5.0, app v1.5.0+35
+
+Bike sub-options and terrain. Design doc:
+`docs/superpowers/specs/2026-08-01-bike-suboptions-design.md`.
+
+1. **Acceptable stress level** — `?stress=quiet|balanced|direct`, three presets
+   that re-weight the bike penalties. A tolerance never removes an edge, so a
+   route always exists and the over-tolerance stretches stay disclosed. It also
+   sets what earns a "no bike lane" warning (quiet flags ML and up, direct only
+   MH/H). **`balanced` reproduces the historical numbers exactly**, and a test
+   pins that, so an old client sees no change.
+2. **E-bike** — `?ebike=1`. 6.7 m/s (15 mph) instead of 4.2, and a quarter of
+   the hill cost. No separate stress table: whether traffic is tolerable is the
+   rider's call and they have a control for it.
+3. **Hills, for every human-powered mode.** Elevation comes from
+   `county."TOP_CONTOUR"` (4 ft interval, SRID 6570, already a pipe in
+   `projects/county.yaml` — no new ETL). Sampled per graph NODE, not per edge,
+   because `_astar` already holds both endpoints of the edge it is relaxing —
+   so the edge tuple never changed and nothing downstream was re-indexed.
+   Climb costs `CLIMB_FACTOR` metres of flat per metre of rise (bike 8, e-bike
+   2, walk 4, roll 20) and adds `CLIMB_SEC_PER_M` to the ETA. Descents are free
+   but never bonused. Walk/roll legs steeper than ADA's 1:12 come back as
+   `warn: 'steep'`.
+4. **App**: `AppState.useEbike` + `AppState.stress` (persisted), an e-bike
+   switch and a Quiet/Balanced/Direct segmented control in the directions
+   sheet (shown only when a bike is selected), "E-bike" labelling on the
+   cyclist mode, and "↑ 210 ft" in the route preview once climb reaches 50 ft.
+
+Graph build 6.0 s → **16.0 s** (the contour lookup), still cached 24 h and
+warmed in a background thread at API start. 100% of the 37,739 nodes got an
+elevation; range 572–3180 ft.
+
+**Units — checked, because this repo has been bitten before.** The routing
+graph is 4326 throughout and every length is metres (`_equirect_m`); the feet
+CRSes never reach the router. `ELEVATION` is FEET, verified against landmarks
+(Falls Park 928 vs ~940 actual, downtown 976 vs ~966, Travelers Rest 1056 vs
+~1070) — if it were metres downtown would read 294. `_climb_m()` converts to
+metres before it meets any constant, and `climb_ft` converts back on the way
+out. `_srid_units_per_m()` **measures** a CRS's units instead of assuming, so
+the contour search radius is right whatever SRID the layer arrives in (3361
+and 6570 both measure ≈3.27 units/m — feet, including projection scale).
+
+Sanity of the resulting terrain: edge grades come out median 2.23%, p90 6.1%,
+max 23.8%, with 4.1% of edges above ADA's 8.3%. That is a believable Piedmont
+distribution.
+
+**Known limitation:** nearest-contour sampling quantizes to ±2 ft, so gross
+climb (and therefore ETA) is slightly over-counted on long routes — noise
+accumulates as phantom rise. Interpolating between the two nearest distinct
+contours would roughly halve it at the cost of a second KNN per node (~+10 s
+on the build). Worth doing if the ETAs read long on the ground.
 
 ### Shipped 2026-08-01 (fifth session) — map-layers v0.4.1 (backend only)
 

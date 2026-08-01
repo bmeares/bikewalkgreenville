@@ -35,7 +35,7 @@ from meerschaum.actions import make_action
 from meerschaum.plugins import api_plugin
 from meerschaum.utils.warnings import info, warn
 
-__version__ = '0.4.1'
+__version__ = '0.5.0'
 
 bwg = mrsm.Plugin('bwg')
 
@@ -501,6 +501,103 @@ STRESSFUL_CATEGORIES = ('M', 'MH', 'H')
 #: Categories that ARE a bike facility.
 BIKE_FACILITY_CATEGORIES = ('srt', 'bike-lane')
 
+#: How much traffic the rider is willing to put up with. A tolerance only
+#: RE-WEIGHTS; it never removes an edge, so a route always exists and the
+#: stretches above the rider's tolerance stay disclosed through `warnings[]`.
+#: `balanced` reproduces the historical numbers exactly -- a request that omits
+#: `?stress=` gets byte-identical output to before this option existed.
+STRESS_LEVELS = ('quiet', 'balanced', 'direct')
+DEFAULT_STRESS = 'balanced'
+BIKE_STRESS_FACTORS = {
+    'quiet': {
+        'srt': 0.35, 'bike-lane': 0.35,
+        'L': 1.0, 'ML': 2.0, 'M': 8.0, 'MH': 20.0, 'H': 40.0,
+    },
+    'balanced': {
+        'srt': 0.4, 'bike-lane': 0.4,
+        'L': 1.0, 'ML': 1.3, 'M': 2.5, 'MH': 6.0, 'H': 12.0,
+    },
+    # "Shortest ride": the facility discount shrinks too, or a direct route
+    # would still detour half a mile to pick up a bike lane.
+    'direct': {
+        'srt': 0.5, 'bike-lane': 0.6,
+        'L': 1.0, 'ML': 1.1, 'M': 1.4, 'MH': 2.0, 'H': 3.0,
+    },
+}
+BIKE_STRESS_DEFAULT_FACTOR = {'quiet': 8.0, 'balanced': 2.5, 'direct': 1.4}
+#: Which stress levels earn a "no bike lane here" warning. A rider who asked
+#: for the direct route does not want every medium block flagged.
+STRESS_WARN_CATEGORIES = {
+    'quiet': ('ML', 'M', 'MH', 'H'),
+    'balanced': STRESSFUL_CATEGORIES,
+    'direct': ('MH', 'H'),
+}
+#: Realistic trip average for a Class 1/2 e-bike (capped at 20 mph): 15 mph.
+EBIKE_SPEED_M_S = 6.7
+
+#: Cost of climbing, as a multiple of the metres climbed: 1 m of rise costs
+#: this many metres of flat travel. Descents are free but never bonused -- a
+#: downhill bonus invites routes that seek out hills to fall down.
+CLIMB_FACTOR = {'bike': 8.0, 'ebike': 2.0, 'walk': 4.0, 'roll': 20.0, 'street': 0.0}
+#: Seconds added per metre climbed. Bike ~500 m/h VAM; walking is Naismith's
+#: rule (+1 min per 10 m of ascent); a manual chair pays dearly for every rise.
+CLIMB_SEC_PER_M = {'bike': 7.0, 'ebike': 2.5, 'walk': 6.0, 'roll': 15.0, 'street': 6.0}
+#: ADA's maximum running slope (1:12). Steeper than this gets disclosed to
+#: people on foot and on wheels.
+STEEP_GRADE = 0.083
+#: Contour source for per-node elevation. Already ingested by
+#: `projects/county.yaml`; 4 ft interval, so a nearest-contour lookup is good
+#: to +/-2 ft. Coverage stops at the county line -- outside it, legs are
+#: treated as flat rather than guessed at.
+CONTOUR_SOURCE = ('county', 'TOP_CONTOUR')
+CONTOUR_BATCH = 4000
+#: How far from a node a contour may be and still describe it, in METRES. Two
+#: jobs: a node outside the county's coverage gets no elevation instead of one
+#: borrowed from miles away, and the nearest-neighbour scan stays bounded by
+#: the spatial index (unbounded, a point outside the data walks the whole
+#: index -- a single such lookup was measured at over two minutes).
+CONTOUR_MAX_M = 2000.0
+
+#: Bike profiles are composite mode keys -- `bike:quiet` ... `ebike:direct` --
+#: so every existing `MODE_FACTORS[mode]` lookup keeps working unchanged. Plain
+#: `bike` remains valid and means `bike:balanced`.
+for _family in ('bike', 'ebike'):
+    for _level in STRESS_LEVELS:
+        _key = f'{_family}:{_level}'
+        MODE_FACTORS[_key] = BIKE_STRESS_FACTORS[_level]
+        MODE_DEFAULT_FACTOR[_key] = BIKE_STRESS_DEFAULT_FACTOR[_level]
+        MODE_SPEED_M_S[_key] = (
+            EBIKE_SPEED_M_S if _family == 'ebike' else MODE_SPEED_M_S['bike']
+        )
+        MODE_NETWORK_NOUN[_key] = MODE_NETWORK_NOUN['bike']
+del _family, _level, _key
+
+
+def _mode_family(mode: str) -> str:
+    """`bike:quiet` -> `bike`, `ebike:direct` -> `ebike`. Picks the climb
+    constants and the speed, which differ between bike and e-bike."""
+    return mode.split(':', 1)[0]
+
+
+def _base_mode(mode: str) -> str:
+    """The mode as the rider thinks of it: an e-bike is a bike. Drives the
+    network nouns, access verbs, icons and plan labels."""
+    family = _mode_family(mode)
+    return 'bike' if family == 'ebike' else family
+
+
+def _stress_level(mode: str) -> str:
+    """The tolerance baked into a composite bike key."""
+    _, _, level = mode.partition(':')
+    return level if level in STRESS_LEVELS else DEFAULT_STRESS
+
+
+def _bike_mode(ebike: bool = False, stress: str = DEFAULT_STRESS) -> str:
+    """Compose the mode key for a bike request."""
+    level = stress if stress in STRESS_LEVELS else DEFAULT_STRESS
+    return f"{'ebike' if ebike else 'bike'}:{level}"
+
+
 ROUTE_SNAP_MAX_M = 400      # reject termini farther than this from the network
 ROUTE_SNAP_RELAXED_M = 2500  # street-fallback snap: warn, don't refuse
 ROUTE_SUBDIVIDE_M = 120.0   # split long lines so they're enterable mid-way
@@ -916,7 +1013,105 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
     best_comp = comps[0] if comps else set()
     nodes = {c: nodes[c] for c in best_comp}
     adj = {c: adj[c] for c in best_comp}
-    return {'epoch': time.time(), 'nodes': nodes, 'adj': adj}
+    return {
+        'epoch': time.time(),
+        'nodes': nodes,
+        'adj': adj,
+        'elev': _node_elevations(nodes, debug=debug),
+    }
+
+
+def _srid_units_per_m(conn, srid: int, debug: bool = False) -> float:
+    """How many of `srid`'s linear units make a metre, MEASURED rather than
+    assumed.
+
+    The county's layers are a mix of feet (3361, 6570) and degrees (4326), and
+    getting this backwards silently scales every threshold by 3.28. So: take
+    two points a known distance apart on the ground, transform both into the
+    target CRS, and see how long the line came out.
+    """
+    probe = conn.read(
+        f'''
+        SELECT ST_Distance(
+            ST_Transform(ST_SetSRID(ST_MakePoint(-82.4, 34.85), 4326), {srid}),
+            ST_Transform(ST_SetSRID(ST_MakePoint(-82.4, 34.86), 4326), {srid})
+        ) AS "d"
+        ''',
+        debug=debug,
+    )
+    #: 0.01 degrees of latitude on the ground.
+    ground_m = 0.01 * M_PER_DEG_LAT
+    distance = float(probe['d'].iloc[0])
+    if distance <= 0:
+        raise ValueError(f"Could not measure the units of SRID {srid}.")
+    return distance / ground_m
+
+
+def _node_elevations(nodes: dict, debug: bool = False) -> dict:
+    """cell -> elevation in FEET, from the county's 4 ft contours.
+
+    One indexed nearest-neighbour lookup per node (`<->` against the GiST index
+    on the contour geometry), batched so no single statement carries the whole
+    graph. Contours cover Greenville County only; a node outside it simply gets
+    no entry and every leg touching it is treated as flat.
+
+    Elevation is stored per NODE rather than per edge on purpose: `_astar`
+    already holds both endpoints of the edge it is relaxing, so climb costs
+    need no change to the edge tuple and nothing downstream is re-indexed.
+    """
+    if not nodes:
+        return {}
+    schema, table = CONTOUR_SOURCE
+    try:
+        conn = _layer_pipe(LAYERS['bike-stress']).instance_connector
+        srid_df = conn.read(
+            f'SELECT ST_SRID("geometry") AS "srid" '
+            f'FROM "{schema}"."{table}" LIMIT 1',
+            debug=debug,
+        )
+        srid = int(srid_df['srid'].iloc[0])
+        radius = CONTOUR_MAX_M * _srid_units_per_m(conn, srid, debug=debug)
+    except Exception as e:
+        warn(f"No contour data ({schema}.{table}): routing will ignore hills ({e})")
+        return {}
+
+    cells = list(nodes)
+    elev: dict = {}
+    try:
+        for start in range(0, len(cells), CONTOUR_BATCH):
+            batch = cells[start:start + CONTOUR_BATCH]
+            lons = ','.join(f'{nodes[c][1]!r}' for c in batch)
+            lats = ','.join(f'{nodes[c][0]!r}' for c in batch)
+            query = f'''
+            WITH pts AS (
+                SELECT
+                    ordinality AS "i",
+                    ST_Transform(
+                        ST_SetSRID(ST_MakePoint(lon, lat), 4326), {srid}
+                    ) AS "geom"
+                FROM unnest(ARRAY[{lons}]::float8[], ARRAY[{lats}]::float8[])
+                     WITH ORDINALITY AS t(lon, lat)
+            )
+            SELECT p."i", c."ELEVATION"
+            FROM pts p
+            CROSS JOIN LATERAL (
+                SELECT "ELEVATION"
+                FROM "{schema}"."{table}" src
+                WHERE ST_DWithin(src."geometry", p."geom", {radius})
+                ORDER BY src."geometry" <-> p."geom"
+                LIMIT 1
+            ) c
+            '''
+            df = conn.read(query, debug=debug)
+            for rec in df.to_dict(orient='records'):
+                value = rec.get('ELEVATION')
+                if value is None:
+                    continue
+                elev[batch[int(rec['i']) - 1]] = float(value)
+    except Exception as e:
+        warn(f"Contour lookup failed: routing will ignore hills ({e})")
+        return {}
+    return elev
 
 
 def _get_route_graph(debug: bool = False) -> dict[str, Any]:
@@ -1120,6 +1315,7 @@ def _register_virtual(
     snap: dict,
     extra_adj: dict,
     extra_nodes: dict,
+    extra_elev: dict | None = None,
 ):
     """Split the snapped edge at the projection point: partial edges from the
     virtual node to both real endpoints (and back), overlaid per-request."""
@@ -1139,6 +1335,13 @@ def _register_virtual(
     fa = len_a / total if total > 0 else 0.5
     fb = len_b / total if total > 0 else 0.5
     extra_nodes[vid] = (pt[1], pt[0])
+    # Give the virtual node an elevation interpolated along the edge it splits,
+    # or a terminus would read as a cliff against its own street.
+    if extra_elev is not None:
+        elev = graph.get('elev') or {}
+        eu, ev = elev.get(u), elev.get(v)
+        if eu is not None and ev is not None:
+            extra_elev[vid] = eu + (ev - eu) * min(max(fa, 0.0), 1.0)
     extra_adj.setdefault(vid, []).extend((
         (u, w * fa, len_a, category, part_a, True, name, hs),
         (v, w * fb, len_b, category, part_b, False, name, hs),
@@ -1187,15 +1390,29 @@ def _edge_deficiency(edge, mode: str) -> str | None:
     category = edge[3]
     if category == 'connector':
         return None
-    if mode in ('walk', 'roll'):
+    base = _base_mode(mode)
+    if base in ('walk', 'roll'):
         if category in OWN_SURFACE_CATEGORIES:
             return None
         return 'no_sidewalk' if edge[7] is False else None
-    if mode in ('bike', 'street'):
+    if base in ('bike', 'street'):
         if category in BIKE_FACILITY_CATEGORIES:
             return None
-        return 'no_bike_lane' if category in STRESSFUL_CATEGORIES else None
+        # What counts as "stressful enough to mention" follows the rider's
+        # chosen tolerance.
+        stressful = STRESS_WARN_CATEGORIES.get(
+            _stress_level(mode), STRESSFUL_CATEGORIES,
+        )
+        return 'no_bike_lane' if category in stressful else None
     return None
+
+
+def _climb_m(from_elev: float | None, to_elev: float | None) -> float:
+    """Metres of RISE between two node elevations (feet), 0 for a descent or
+    when either end is off the contour coverage."""
+    if from_elev is None or to_elev is None or to_elev <= from_elev:
+        return 0.0
+    return (to_elev - from_elev) / FT_PER_M
 
 
 def _astar(
@@ -1205,14 +1422,16 @@ def _astar(
     mode: str = 'bike',
     extra_adj: dict | None = None,
     extra_nodes: dict | None = None,
+    extra_elev: dict | None = None,
 ):
     """Returns list of (node, edge) from start to goal, or None. edge is the
     adjacency tuple taken to arrive at node (None for start). Edge weights are
     recomputed per mode from length x category factor x missing-sidewalk
-    penalty (the stored weight is the bike one, kept for stats/dedup).
+    penalty (the stored weight is the bike one, kept for stats/dedup), plus the
+    cost of any climbing between the edge's two nodes.
 
-    `extra_adj` / `extra_nodes` overlay per-request virtual nodes (termini
-    snapped mid-edge) without mutating the shared graph."""
+    `extra_adj` / `extra_nodes` / `extra_elev` overlay per-request virtual nodes
+    (termini snapped mid-edge) without mutating the shared graph."""
     import heapq
     import itertools
 
@@ -1220,15 +1439,24 @@ def _astar(
     adj = graph['adj']
     extra_adj = extra_adj or {}
     extra_nodes = extra_nodes or {}
+    elev = graph.get('elev') or {}
+    extra_elev = extra_elev or {}
 
     def _pos(cell):
         return extra_nodes.get(cell) or nodes[cell]
 
+    def _elev(cell):
+        value = extra_elev.get(cell)
+        return elev.get(cell) if value is None else value
+
     glat, glon = _pos(goal)
+    base = _base_mode(mode)
     factors = MODE_FACTORS[mode]
     default_factor = MODE_DEFAULT_FACTOR[mode]
-    no_sidewalk_factor = NO_SIDEWALK_FACTOR.get(mode, 1.0)
+    no_sidewalk_factor = NO_SIDEWALK_FACTOR.get(base, 1.0)
+    climb_factor = CLIMB_FACTOR.get(_mode_family(mode), 0.0)
     # Connectors weigh 1.0, so the heuristic can never assume better than that.
+    # The climb term only ADDS cost, so the heuristic stays admissible.
     min_factor = min(list(factors.values()) + [1.0])
 
     def h(cell):
@@ -1266,6 +1494,8 @@ def _astar(
             return list(reversed(path))
         for edge in itertools.chain(adj.get(cur, ()), extra_adj.get(cur, ())):
             nbr, weight = edge[0], edge_weight(edge)
+            if climb_factor:
+                weight += _climb_m(_elev(cur), _elev(nbr)) * climb_factor
             ng = g + weight
             if nbr not in dist or ng < dist[nbr]:
                 dist[nbr] = ng
@@ -1358,6 +1588,7 @@ def _build_steps(
     legs: list[dict],
     coordinates: list,
     speed_m_s: float = 4.2,
+    climb_sec_per_m: float = 0.0,
 ) -> list[dict]:
     """Collapse routed legs into turn-by-turn steps.
 
@@ -1393,6 +1624,7 @@ def _build_steps(
         warn = leg.get('warn')
         if steps and continues and abs(delta) < limit:
             steps[-1]['distance_m'] += leg['length_m']
+            steps[-1]['climb_m'] += leg.get('climb_m') or 0.0
             if warn:
                 steps[-1]['warn'] = steps[-1].get('warn') or warn
                 steps[-1]['warn_m'] += leg['length_m']
@@ -1406,6 +1638,7 @@ def _build_steps(
                     prev_name=steps[-1]['name'] if steps else None,
                 ),
                 'distance_m': leg['length_m'],
+                'climb_m': leg.get('climb_m') or 0.0,
                 'start_index': leg['start_index'],
                 'location': list(coords[0]),
                 'bearing': round(in_bearing, 1),
@@ -1435,6 +1668,7 @@ def _build_steps(
     ):
         head, nxt = steps.pop(0), steps[0]
         nxt['distance_m'] += head['distance_m']
+        nxt['climb_m'] += head.get('climb_m') or 0.0
         nxt['start_index'] = head['start_index']
         nxt['location'] = head['location']
         nxt['maneuver'] = 'depart'
@@ -1447,13 +1681,16 @@ def _build_steps(
             'category': None,
             'instruction': _instruction('arrive', None, 0.0),
             'distance_m': 0.0,
+            'climb_m': 0.0,
             'start_index': len(coordinates) - 1,
             'location': list(coordinates[-1]),
         })
     for step in steps:
         step['distance_m'] = round(step['distance_m'], 1)
+        climb = step.pop('climb_m', 0.0) or 0.0
+        step['climb_ft'] = round(climb * FT_PER_M)
         step['duration_min'] = round(
-            step['distance_m'] / speed_m_s / 60, 2
+            (step['distance_m'] / speed_m_s + climb * climb_sec_per_m) / 60, 2
         )
         step['warn_m'] = round(step.get('warn_m') or 0.0, 1)
         step.setdefault('warn', None)
@@ -1472,6 +1709,11 @@ WARNING_LABELS = {
         '{d} with no bike lane',
         'About {d} of this route is on streets with no bike lane — '
         'expect to share the lane with traffic.',
+    ),
+    'steep': (
+        '{d} of steep grade',
+        'About {d} of this route climbs more steeply than a wheelchair ramp '
+        'is allowed to (1:12) — expect a hard push.',
     ),
 }
 
@@ -1561,11 +1803,19 @@ def _route_core(
     # from the snapped point itself instead of the nearest endpoint.
     extra_adj: dict = {}
     extra_nodes: dict = {}
-    _register_virtual(graph, snap_s, extra_adj, extra_nodes)
-    _register_virtual(graph, snap_g, extra_adj, extra_nodes)
+    extra_elev: dict = {}
+    _register_virtual(graph, snap_s, extra_adj, extra_nodes, extra_elev)
+    _register_virtual(graph, snap_g, extra_adj, extra_nodes, extra_elev)
     _bridge_same_edge(graph, snap_s, snap_g, extra_adj)
 
+    elev = graph.get('elev') or {}
+
+    def _node_elev(cell):
+        value = extra_elev.get(cell)
+        return elev.get(cell) if value is None else value
+
     legs: list[dict] = []
+    climb_m = 0.0
     if start == goal:
         nlat, nlon = graph['nodes'][start]
         coordinates = [[from_lon, from_lat], [nlon, nlat], [to_lon, to_lat]]
@@ -1578,17 +1828,20 @@ def _route_core(
             'length_m': distance_m,
             'start_index': 0,
             'warn': None,
+            'climb_m': 0.0,
         })
     else:
         path = _astar(
             graph, start, goal, mode=mode,
             extra_adj=extra_adj, extra_nodes=extra_nodes,
+            extra_elev=extra_elev,
         )
         if path is None:
             raise ValueError("Couldn't find a connected route.")
         coordinates = [[from_lon, from_lat]]
         distance_m = start_d + goal_d
         breakdown = {}
+        prev_node = start
         for _node, edge in path:
             if edge is None:
                 continue
@@ -1603,32 +1856,54 @@ def _route_core(
             distance_m += length_m
             key = str(category or 'unknown')
             breakdown[key] = breakdown.get(key, 0.0) + length_m
+            rise_m = _climb_m(_node_elev(prev_node), _node_elev(_node))
+            climb_m += rise_m
+            prev_node = _node
+            leg_warn = _edge_deficiency(edge, warn_mode)
+            # A hill only gets the callout when nothing worse is wrong with the
+            # leg: the schema carries one warning, and a missing sidewalk
+            # outranks a grade.
+            if (
+                leg_warn is None
+                and _base_mode(warn_mode) in ('walk', 'roll')
+                and length_m > 0
+                and rise_m / length_m > STEEP_GRADE
+            ):
+                leg_warn = 'steep'
             legs.append({
                 'coords': leg_coords,
                 'name': name,
                 'category': category,
                 'length_m': length_m,
                 'start_index': start_index,
-                'warn': _edge_deficiency(edge, warn_mode),
+                'warn': leg_warn,
+                'climb_m': rise_m,
             })
         coordinates.append([to_lon, to_lat])
 
     speed = MODE_SPEED_M_S[warn_mode]
+    climb_seconds = climb_m * CLIMB_SEC_PER_M.get(_mode_family(warn_mode), 0.0)
     ranges = _warn_ranges(legs)
     return {
         'type': 'Feature',
         'geometry': {'type': 'LineString', 'coordinates': coordinates},
         'properties': {
-            'mode': warn_mode,
+            'mode': _base_mode(warn_mode),
+            'ebike': _mode_family(warn_mode) == 'ebike',
+            'stress': _stress_level(warn_mode),
             'distance_m': round(distance_m, 1),
             'distance_mi': round(distance_m / 1609.344, 2),
-            'duration_min': round(distance_m / speed / 60, 1),
+            'duration_min': round((distance_m / speed + climb_seconds) / 60, 1),
+            'climb_ft': round(climb_m * FT_PER_M),
             'stress_breakdown': {k: round(v, 1) for k, v in breakdown.items()},
             'from_snap_m': round(start_d, 1),
             'to_snap_m': round(goal_d, 1),
             'warn_ranges': ranges,
             'warnings': _summarize_warnings(ranges),
-            'steps': _build_steps(legs, coordinates, speed_m_s=speed),
+            'steps': _build_steps(
+                legs, coordinates, speed_m_s=speed,
+                climb_sec_per_m=CLIMB_SEC_PER_M.get(_mode_family(warn_mode), 0.0),
+            ),
         },
     }
 
@@ -1797,7 +2072,7 @@ def _walk_or_direct(
         coords = [[from_lon, from_lat], [to_lon, to_lat]]
         dist = _equirect_m(from_lat, from_lon, to_lat, to_lon)
         speed = MODE_SPEED_M_S.get(mode, MODE_SPEED_M_S['walk'])
-        verb = _ACCESS_VERB.get(mode, 'Head')
+        verb = _ACCESS_VERB.get(_base_mode(mode), 'Head')
         return {
             'type': 'Feature',
             'geometry': {'type': 'LineString', 'coordinates': coords},
@@ -1843,7 +2118,8 @@ def _route_transit(
     if not stops or not shapes:
         raise ValueError("Transit network is unavailable.")
     access_max_m = (
-        TRANSIT_BIKE_MAX_M if access_mode == 'bike' else TRANSIT_WALK_MAX_M
+        TRANSIT_BIKE_MAX_M if _base_mode(access_mode) == 'bike'
+        else TRANSIT_WALK_MAX_M
     )
     access_speed = MODE_SPEED_M_S.get(access_mode, MODE_SPEED_M_S['walk'])
 
@@ -1869,7 +2145,7 @@ def _route_transit(
     near_from = _near(from_lat, from_lon)
     near_to = _near(to_lat, to_lon)
     if not near_from or not near_to:
-        reach = 'biking' if access_mode == 'bike' else 'walking'
+        reach = 'biking' if _base_mode(access_mode) == 'bike' else 'walking'
         raise ValueError(f"No bus stops within {reach} distance.")
 
     shapes_by_route: dict[str, list] = {}
@@ -1966,7 +2242,8 @@ def _route_transit(
             f"Board Greenlink {route_name}"
             + (f' ({long_name})' if long_name else '')
             + f" at {s1['name']}"
-            + (' — load your bike on the front rack' if access_mode == 'bike' else '')
+            + (' — load your bike on the front rack'
+               if _base_mode(access_mode) == 'bike' else '')
         ),
         'distance_m': 0.0,
         'duration_min': round(TRANSIT_WAIT_MIN, 1),
@@ -2038,7 +2315,7 @@ def _route_transit(
         'geometry': {'type': 'LineString', 'coordinates': coordinates},
         'properties': {
             'mode': 'transit',
-            'access_mode': access_mode,
+            'access_mode': _base_mode(access_mode),
             'distance_m': round(distance_m, 1),
             'distance_mi': round(distance_m / 1609.344, 2),
             'duration_min': round(duration_min, 1),
@@ -2243,7 +2520,7 @@ def _route_bikeshare(
         'geometry': {'type': 'LineString', 'coordinates': coordinates},
         'properties': {
             'mode': 'bcycle',
-            'access_mode': foot_mode,
+            'access_mode': _base_mode(foot_mode),
             'distance_m': round(distance_m, 1),
             'distance_mi': round(distance_m / 1609.344, 2),
             'duration_min': round(duration_min, 1),
@@ -2311,10 +2588,18 @@ def _compute_plan(
     from_lon: float,
     to_lat: float,
     to_lon: float,
+    bike_mode: str = 'bike',
 ) -> dict[str, Any]:
-    """One itinerary, memoized briefly. Raises ValueError when impossible."""
+    """One itinerary, memoized briefly. Raises ValueError when impossible.
+
+    `bike_mode` is the composite profile (`bike:quiet`, `ebike:direct`, ...)
+    that every pedalling leg of this plan is costed with. The plan KEY stays
+    plain (`bike`, `bike-transit`) because it names the itinerary, not the
+    rider's preferences -- but the profile joins the cache key, or two riders
+    with different tolerances would share a route.
+    """
     key = (
-        plan,
+        plan, bike_mode,
         round(from_lat, 5), round(from_lon, 5),
         round(to_lat, 5), round(to_lon, 5),
     )
@@ -2324,6 +2609,8 @@ def _compute_plan(
 
     if plan.endswith('-transit'):
         access = plan.split('-', 1)[0]
+        if access == 'bike':
+            access = bike_mode
         straight = _equirect_m(from_lat, from_lon, to_lat, to_lon)
         if straight < TRANSIT_MIN_TRIP_M:
             raise ValueError("That trip is too short to be worth the bus.")
@@ -2333,7 +2620,10 @@ def _compute_plan(
     elif plan == 'bcycle':
         feature = _route_bikeshare(from_lat, from_lon, to_lat, to_lon)
     else:
-        feature = _route(from_lat, from_lon, to_lat, to_lon, mode=plan)
+        feature = _route(
+            from_lat, from_lon, to_lat, to_lon,
+            mode=(bike_mode if plan == 'bike' else plan),
+        )
 
     label, icon_mode = PLAN_LABELS.get(plan, (plan.title(), plan))
     feature['properties']['plan'] = plan
@@ -2354,6 +2644,8 @@ def _route_multimodal(
     roll: bool = False,
     bcycle: bool = False,
     plan: str | None = None,
+    ebike: bool = False,
+    stress: str = DEFAULT_STRESS,
 ) -> dict[str, Any]:
     """Pick the best itinerary across everything the rider is willing to use.
 
@@ -2361,7 +2653,12 @@ def _route_multimodal(
     fastest wins, unless the app asked for a specific `plan`. The rest ride
     along in `properties.alternatives` with real numbers, so switching is a
     labelled choice rather than a guess.
+
+    `ebike` and `stress` describe the rider's own bike and how much traffic
+    they will put up with; they apply to every pedalling leg, including the
+    ride to the bus stop.
     """
+    bike_mode = _bike_mode(ebike, stress)
     keys = _plan_keys(modes, roll, bcycle)
     if plan and plan not in keys:
         keys = keys + [plan]
@@ -2372,6 +2669,7 @@ def _route_multimodal(
         try:
             computed[key] = _compute_plan(
                 key, from_lat, from_lon, to_lat, to_lon,
+                bike_mode=bike_mode,
             )
         except ValueError as e:
             failures.append({'plan': key, 'reason': str(e)})
@@ -2582,6 +2880,8 @@ def init_app(app):
         roll: bool = False,
         bcycle: bool = False,
         plan: str = '',
+        ebike: bool = False,
+        stress: str = '',
     ):
         """Multi-modal directions.
 
@@ -2590,6 +2890,10 @@ def init_app(app):
         `properties.alternatives`. `roll=1` swaps walking for wheelchair
         weighting; `bcycle=1` adds a bike-share itinerary. `plan=<key>` pins a
         specific alternative. The older single `?mode=` is still honored.
+
+        `ebike=1` rides at e-bike pace and shrugs off hills; `stress=` is how
+        much traffic the rider will accept (`quiet`, `balanced`, `direct`).
+        Both default to today's behaviour, so an old client sees no change.
         """
         # Sync def on purpose: FastAPI runs it in the threadpool, so the
         # multi-second first-call graph build never blocks the event loop.
@@ -2608,6 +2912,12 @@ def init_app(app):
         if unknown or not selected:
             return JSONResponse(
                 {'error': "Expected modes from bike, walk (roll), transit."},
+                status_code=400,
+            )
+        level = (stress or DEFAULT_STRESS).strip().lower()
+        if level not in STRESS_LEVELS:
+            return JSONResponse(
+                {'error': f"Expected stress from {', '.join(STRESS_LEVELS)}."},
                 status_code=400,
             )
         try:
@@ -2630,6 +2940,8 @@ def init_app(app):
                 roll=roll,
                 bcycle=bcycle,
                 plan=(plan or '').strip().lower() or None,
+                ebike=ebike,
+                stress=level,
             )
         except ValueError as e:
             return JSONResponse({'error': str(e)}, status_code=422)

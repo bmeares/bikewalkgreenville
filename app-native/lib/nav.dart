@@ -188,6 +188,10 @@ class NavRoute {
   final List<double> cumulative; // meters from start to points[i]
   final double distanceM;
   final double durationMin;
+  /// Total ascent over the trip, in feet. 0 when the router had no elevation.
+  final int climbFt;
+  /// The rider said they are on an e-bike, so the pace and hill cost reflect it.
+  final bool ebike;
   final String mode; // bike | walk | roll | transit | bcycle
   final String? transitRoute; // Greenlink short name, transit only
   final String? boardStop;
@@ -221,6 +225,8 @@ class NavRoute {
     required this.cumulative,
     required this.distanceM,
     required this.durationMin,
+    required this.climbFt,
+    required this.ebike,
     required this.mode,
     required this.transitRoute,
     required this.boardStop,
@@ -260,6 +266,8 @@ class NavRoute {
       distanceM: (props['distance_m'] as num?)?.toDouble() ??
           (cumulative.isEmpty ? 0.0 : cumulative.last),
       durationMin: (props['duration_min'] as num?)?.toDouble() ?? 0.0,
+      climbFt: (props['climb_ft'] as num?)?.round() ?? 0,
+      ebike: props['ebike'] == true,
       mode: mode,
       transitRoute: props['route']?.toString(),
       boardStop: props['board_stop']?.toString(),

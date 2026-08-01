@@ -4,6 +4,23 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'theme.dart';
 
+/// How much traffic the rider is willing to put up with on a bike. Sent to
+/// `/map-layers/route` as `?stress=`; the server re-weights, it never refuses
+/// a route, so every level always gets you there.
+enum BikeStress { quiet, balanced, direct }
+
+const bikeStressLabels = {
+  BikeStress.quiet: 'Quiet',
+  BikeStress.balanced: 'Balanced',
+  BikeStress.direct: 'Direct',
+};
+
+const bikeStressBlurbs = {
+  BikeStress.quiet: 'Back streets and trails, even if it is further',
+  BikeStress.balanced: 'Avoids busy roads where there is a reasonable detour',
+  BikeStress.direct: 'The shortest ride, traffic and all',
+};
+
 /// Single source of truth for map UI state and travel preferences.
 ///
 /// Modes are a SET, not a single choice: someone who has a bike and a bus pass
@@ -14,14 +31,26 @@ class AppState extends ChangeNotifier {
   static const _kModes = 'modes';
   static const _kRoll = 'roll';
   static const _kBcycle = 'bcycle';
+  static const _kEbike = 'ebike';
+  static const _kStress = 'stress';
 
   Set<TravelMode> _modes = {TravelMode.cyclist};
   bool _roll = false;
   bool _useBcycle = false;
+  bool _useEbike = false;
+  BikeStress _stress = BikeStress.balanced;
 
   Set<TravelMode> get modes => _modes;
   bool get roll => _roll;
   bool get useBcycle => _useBcycle;
+  bool get useEbike => _useEbike;
+  BikeStress get stress => _stress;
+
+  /// `stress=` query value for `/map-layers/route`.
+  String get stressApiName => _stress.name;
+
+  /// The bike sub-options only mean anything when there is a bike involved.
+  bool get showsBikeOptions => _modes.contains(TravelMode.cyclist);
 
   /// The mode whose icon and verb the one-tap UI should use. With several
   /// selected there is no single answer, so callers check [isMultiModal] first.
@@ -39,12 +68,17 @@ class AppState extends ChangeNotifier {
 
   /// Walking is relabelled when the rider rolls; everything downstream (the
   /// router's weighting, the sidewalk warnings) follows the same flag.
-  String labelFor(TravelMode m) =>
-      (m == TravelMode.pedestrian && _roll) ? 'Roll' : modeLabels[m]!;
+  String labelFor(TravelMode m) {
+    if (m == TravelMode.pedestrian && _roll) return 'Roll';
+    if (m == TravelMode.cyclist && _useEbike) return 'E-bike';
+    return modeLabels[m]!;
+  }
 
-  IconData iconFor(TravelMode m) => (m == TravelMode.pedestrian && _roll)
-      ? Icons.accessible_forward
-      : modeIcons[m]!;
+  IconData iconFor(TravelMode m) {
+    if (m == TravelMode.pedestrian && _roll) return Icons.accessible_forward;
+    if (m == TravelMode.cyclist && _useEbike) return Icons.electric_bike;
+    return modeIcons[m]!;
+  }
 
   /// `modes=` query value for `/map-layers/route`.
   Set<String> get apiModes =>
@@ -74,6 +108,12 @@ class AppState extends ChangeNotifier {
       }
       _roll = prefs.getBool(_kRoll) ?? false;
       _useBcycle = prefs.getBool(_kBcycle) ?? false;
+      _useEbike = prefs.getBool(_kEbike) ?? false;
+      final savedStress = prefs.getString(_kStress);
+      _stress = BikeStress.values.firstWhere(
+        (s) => s.name == savedStress,
+        orElse: () => BikeStress.balanced,
+      );
       notifyListeners();
     } catch (_) {
       // Preferences are a convenience; defaults are perfectly usable.
@@ -86,6 +126,8 @@ class AppState extends ChangeNotifier {
       await prefs.setStringList(_kModes, _modes.map((m) => m.name).toList());
       await prefs.setBool(_kRoll, _roll);
       await prefs.setBool(_kBcycle, _useBcycle);
+      await prefs.setBool(_kEbike, _useEbike);
+      await prefs.setString(_kStress, _stress.name);
     } catch (_) {}
   }
 
@@ -120,6 +162,22 @@ class AppState extends ChangeNotifier {
     if (value == _useBcycle) return;
     _useBcycle = value;
     if (value) _modes = {..._modes, TravelMode.cyclist};
+    notifyListeners();
+    _save();
+  }
+
+  void setUseEbike(bool value) {
+    if (value == _useEbike) return;
+    _useEbike = value;
+    // An e-bike is a bike: turn that mode on with it.
+    if (value) _modes = {..._modes, TravelMode.cyclist};
+    notifyListeners();
+    _save();
+  }
+
+  void setStress(BikeStress value) {
+    if (value == _stress) return;
+    _stress = value;
     notifyListeners();
     _save();
   }
