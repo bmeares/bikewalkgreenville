@@ -25,8 +25,10 @@ Bike sub-options and terrain. Design doc:
    that re-weight the bike penalties. A tolerance never removes an edge, so a
    route always exists and the over-tolerance stretches stay disclosed. It also
    sets what earns a "no bike lane" warning (quiet flags ML and up, direct only
-   MH/H). **`balanced` reproduces the historical numbers exactly**, and a test
-   pins that, so an old client sees no change.
+   MH/H). **`balanced` reproduces the historical stress weights exactly**, and
+   a test pins that. Note the scope of that claim: traffic costing is
+   unchanged, but hills (below) are priced for everyone, so responses do
+   differ from v0.4.1 even with no new parameters.
 2. **E-bike** — `?ebike=1`. 6.7 m/s (15 mph) instead of 4.2, and a quarter of
    the hill cost. No separate stress table: whether traffic is tolerable is the
    rider's call and they have a control for it.
@@ -61,6 +63,13 @@ and 6570 both measure ≈3.27 units/m — feet, including projection scale).
 Sanity of the resulting terrain: edge grades come out median 2.23%, p90 6.1%,
 max 23.8%, with 4.1% of edges above ADA's 8.3%. That is a believable Piedmont
 distribution.
+
+Blast radius of the terrain change, over the same 180-route sweep the previous
+session used: **68% of default routes are byte-identical**, the other 32% are
+rerouted around hills; mean distance change −0.07 mi; nothing became
+unroutable. ETAs rise across the board (the reported McHan → Other Lands bike
+trip goes 25.4 → 36.5 min on 312 ft of climb), which is the intended
+correction, not a regression — the old numbers assumed Greenville was flat.
 
 **Known limitation:** nearest-contour sampling quantizes to ±2 ft, so gross
 climb (and therefore ETA) is slightly over-counted on long routes — noise

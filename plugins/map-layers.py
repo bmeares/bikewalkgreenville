@@ -2355,12 +2355,17 @@ def _route_bikeshare(
     to_lat: float,
     to_lon: float,
     foot_mode: str = 'walk',
+    bike_mode: str = 'bike',
 ) -> dict[str, Any]:
     """Walk to a BCycle dock -> ride a share bike -> dock it -> walk on.
 
     Same shape as the transit plan, with docks instead of stops. Stations with
     no bikes (or that aren't renting) are skipped, so the plan reflects what's
     actually available right now rather than where the kiosks are.
+
+    `bike_mode` carries the rider's stress tolerance onto the rented leg -- but
+    never their e-bike setting. You cannot count on the dock handing you an
+    electric one, so the ride is costed at ordinary bike pace.
     """
     stations = _bcycle_stations()
     if not stations:
@@ -2423,7 +2428,9 @@ def _route_bikeshare(
         from_lat, from_lon, rent['lat'], rent['lon'],
         toward='the BCycle dock', mode=foot_mode,
     )
-    ride = _route(rent['lat'], rent['lon'], dock['lat'], dock['lon'], mode='bike')
+    ride = _route(
+        rent['lat'], rent['lon'], dock['lat'], dock['lon'], mode=bike_mode,
+    )
     leg3 = _walk_or_direct(
         dock['lat'], dock['lon'], to_lat, to_lon,
         toward='your destination', mode=foot_mode,
@@ -2618,7 +2625,12 @@ def _compute_plan(
             from_lat, from_lon, to_lat, to_lon, access_mode=access,
         )
     elif plan == 'bcycle':
-        feature = _route_bikeshare(from_lat, from_lon, to_lat, to_lon)
+        feature = _route_bikeshare(
+            from_lat, from_lon, to_lat, to_lon,
+            # A rental is not the rider's own e-bike, but it IS ridden on the
+            # streets they said they would accept.
+            bike_mode=_bike_mode(False, _stress_level(bike_mode)),
+        )
     else:
         feature = _route(
             from_lat, from_lon, to_lat, to_lon,
