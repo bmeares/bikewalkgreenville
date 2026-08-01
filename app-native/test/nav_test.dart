@@ -207,4 +207,27 @@ void main() {
     expect(formatDuration(0.5), '<1 min');
     expect(formatDuration(90), '1 hr 30 min');
   });
+
+  group('warning presentation', () {
+    test('every server warning kind has its own wording and icon', () {
+      for (final kind in ['no_sidewalk', 'no_bike_lane', 'steep']) {
+        expect(warnStepPhrases[kind], isNotNull, reason: kind);
+        expect(warnStepSentences[kind], isNotNull, reason: kind);
+        expect(warnIcons[kind], isNotNull, reason: kind);
+      }
+    });
+
+    test('a steep grade is not announced as a missing bike lane', () {
+      expect(warnStepPhrase('steep'), 'of steep grade');
+      expect(warnStepSentence('steep'), 'Steep grade on this stretch');
+      expect(warnStepPhrase('steep'), isNot(contains('bike lane')));
+      expect(warnStepSentence('steep'), isNot(contains('bike lane')));
+    });
+
+    test('an unknown kind stays honest instead of borrowing wording', () {
+      expect(warnStepPhrase('something_new'), isNot(contains('bike lane')));
+      expect(warnStepPhrase('something_new'), isNot(contains('sidewalk')));
+      expect(warnStepSentence(null), isNot(contains('bike lane')));
+    });
+  });
 }

@@ -144,10 +144,39 @@ class RouteWarning {
         message: (j['message'] ?? '').toString(),
       );
 
-  IconData get icon => kind == 'no_sidewalk'
-      ? Icons.no_transfer_outlined
-      : Icons.directions_bike_outlined;
+  IconData get icon => warnIcons[kind] ?? Icons.warning_amber_rounded;
 }
+
+/// Per-warning presentation. Keyed by the server's `kind`, so a kind the app
+/// has not been taught about falls back to something honest rather than
+/// borrowing another warning's wording -- a `steep` grade used to be announced
+/// as a missing bike lane.
+const warnIcons = <String, IconData>{
+  'no_sidewalk': Icons.no_transfer_outlined,
+  'no_bike_lane': Icons.directions_bike_outlined,
+  'steep': Icons.trending_up,
+};
+
+/// Short phrase for a per-step warning; `{d}` worth of distance is prepended
+/// by the caller.
+const warnStepPhrases = <String, String>{
+  'no_sidewalk': 'with no sidewalk',
+  'no_bike_lane': 'with no bike lane',
+  'steep': 'of steep grade',
+};
+
+/// Sentence for the maneuver card, mid-turn.
+const warnStepSentences = <String, String>{
+  'no_sidewalk': 'No sidewalk mapped on this stretch',
+  'no_bike_lane': 'No bike lane on this stretch',
+  'steep': 'Steep grade on this stretch',
+};
+
+String warnStepPhrase(String? kind) =>
+    warnStepPhrases[kind] ?? 'flagged by the router';
+
+String warnStepSentence(String? kind) =>
+    warnStepSentences[kind] ?? 'This stretch is flagged by the router';
 
 /// A different way to make the same trip, priced by the router.
 class RouteAlternative {

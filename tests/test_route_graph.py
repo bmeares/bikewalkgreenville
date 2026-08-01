@@ -335,6 +335,73 @@ class TestHills(RouteGraphTestCase):
         self.assertEqual(feature['properties']['climb_ft'], 0)
 
 
+class TestHillReviewFindings(RouteGraphTestCase):
+    """Fixes for defects Codex found in the first cut of the hill work."""
+
+    A = (34.8500, -82.4000)
+    HILL = (34.8530, -82.4000)
+    C = (34.8560, -82.4000)
+    WEST = (34.8530, -82.4040)
+    ELEV = {A: 900.0, HILL: 1100.0, C: 900.0, WEST: 900.0}
+
+    def _rows(self):
+        return [
+            (_line(self.A, self.HILL), 'L', 'HILL ST', True),
+            (_line(self.HILL, self.C), 'L', 'HILL ST', True),
+            (_line(self.A, self.WEST), 'L', 'VALLEY RD', True),
+            (_line(self.WEST, self.C), 'L', 'VALLEY RD', True),
+        ]
+
+    def test_a_steep_descent_is_disclosed_too(self):
+        """ADA's 1:12 governs the slope, not which way you are pointed --
+        rolling DOWN a 12% grade is its own hazard."""
+        graph = self._graph(self._rows(), elevation=self.ELEV)
+        downhill = self._route(graph, self.HILL, self.A, mode='roll')
+        self.assertEqual(downhill['properties']['climb_ft'], 0,
+                         "going down should cost no climb")
+        kinds = {w['kind'] for w in downhill['properties']['warn_ranges']}
+        self.assertIn('steep', kinds,
+                      "a steep descent still has to be disclosed")
+
+    def test_the_street_fallback_still_avoids_hills(self):
+        """The fallback drops the mode's PREFERENCES, not its physics. A
+        wheelchair user pushed onto the street fallback is still in a
+        wheelchair and the hill is still there."""
+        graph = self._graph(self._rows(), elevation=self.ELEV)
+        original = ml._get_route_graph
+        ml._get_route_graph = lambda debug=False: graph
+        try:
+            feature = ml._route_core(
+                *self.A, *self.C, mode='street', warn_mode='roll',
+            )
+        finally:
+            ml._get_route_graph = original
+        names = {s['name'] for s in feature['properties']['steps'] if s['name']}
+        self.assertIn('Valley Rd', names,
+                      "street-weighted routing still has to price the grade")
+
+    def test_folding_a_short_step_keeps_its_climb(self):
+        """A sub-25 m hop folds into its neighbour; its climb must go with it,
+        or the steps understate what the trip total already counted."""
+        legs = [
+            {'coords': [[-82.40, 34.85], [-82.40, 34.851]], 'name': 'A ST',
+             'category': 'L', 'length_m': 200.0, 'start_index': 0,
+             'warn': None, 'climb_m': 10.0},
+            {'coords': [[-82.40, 34.851], [-82.3999, 34.8511]], 'name': 'B ST',
+             'category': 'L', 'length_m': 10.0, 'start_index': 1,
+             'warn': None, 'climb_m': 5.0},
+        ]
+        steps = ml._build_steps(
+            legs, [[-82.40, 34.85], [-82.40, 34.851], [-82.3999, 34.8511]],
+            speed_m_s=1.35, climb_sec_per_m=6.0,
+        )
+        total = sum(s['climb_ft'] for s in steps)
+        self.assertAlmostEqual(
+            total, round(15.0 * ml.FT_PER_M), delta=2,
+            msg=f"climb lost in the fold: {[(s['name'], s['climb_ft']) for s in steps]}",
+        )
+
+
 class TestModeKeyHelpers(unittest.TestCase):
     def test_family_base_and_level(self):
         self.assertEqual(ml._mode_family('ebike:quiet'), 'ebike')

@@ -1423,6 +1423,7 @@ def _astar(
     extra_adj: dict | None = None,
     extra_nodes: dict | None = None,
     extra_elev: dict | None = None,
+    climb_mode: str | None = None,
 ):
     """Returns list of (node, edge) from start to goal, or None. edge is the
     adjacency tuple taken to arrive at node (None for start). Edge weights are
@@ -1454,7 +1455,11 @@ def _astar(
     factors = MODE_FACTORS[mode]
     default_factor = MODE_DEFAULT_FACTOR[mode]
     no_sidewalk_factor = NO_SIDEWALK_FACTOR.get(base, 1.0)
-    climb_factor = CLIMB_FACTOR.get(_mode_family(mode), 0.0)
+    # Hills are priced for whoever is actually travelling, which is not always
+    # the mode being routed: the street fallback routes with flat `street`
+    # weights, but the rider is still in a wheelchair and the hill is still
+    # there. Traffic tolerance is a preference; a grade is physics.
+    climb_factor = CLIMB_FACTOR.get(_mode_family(climb_mode or mode), 0.0)
     # Connectors weigh 1.0, so the heuristic can never assume better than that.
     # The climb term only ADDS cost, so the heuristic stays admissible.
     min_factor = min(list(factors.values()) + [1.0])
@@ -1653,6 +1658,9 @@ def _build_steps(
     for step in steps:
         if merged and step['distance_m'] < STEP_MIN_M and step['maneuver'] != 'depart':
             merged[-1]['distance_m'] += step['distance_m']
+            merged[-1]['climb_m'] = (
+                merged[-1].get('climb_m', 0.0) + step.get('climb_m', 0.0)
+            )
             merged[-1]['warn_m'] = merged[-1].get('warn_m', 0.0) + step.get('warn_m', 0.0)
             merged[-1]['warn'] = merged[-1].get('warn') or step.get('warn')
             continue
@@ -1834,7 +1842,7 @@ def _route_core(
         path = _astar(
             graph, start, goal, mode=mode,
             extra_adj=extra_adj, extra_nodes=extra_nodes,
-            extra_elev=extra_elev,
+            extra_elev=extra_elev, climb_mode=warn_mode,
         )
         if path is None:
             raise ValueError("Couldn't find a connected route.")
@@ -1856,8 +1864,17 @@ def _route_core(
             distance_m += length_m
             key = str(category or 'unknown')
             breakdown[key] = breakdown.get(key, 0.0) + length_m
-            rise_m = _climb_m(_node_elev(prev_node), _node_elev(_node))
+            from_elev, to_elev = _node_elev(prev_node), _node_elev(_node)
+            rise_m = _climb_m(from_elev, to_elev)
             climb_m += rise_m
+            # For the disclosure, what matters is how steep the ground is, not
+            # which way the rider is pointed: rolling DOWN a 12% grade is its
+            # own hazard.
+            grade_m = (
+                abs(to_elev - from_elev) / FT_PER_M
+                if from_elev is not None and to_elev is not None
+                else 0.0
+            )
             prev_node = _node
             leg_warn = _edge_deficiency(edge, warn_mode)
             # A hill only gets the callout when nothing worse is wrong with the
@@ -1867,7 +1884,7 @@ def _route_core(
                 leg_warn is None
                 and _base_mode(warn_mode) in ('walk', 'roll')
                 and length_m > 0
-                and rise_m / length_m > STEEP_GRADE
+                and grade_m / length_m > STEEP_GRADE
             ):
                 leg_warn = 'steep'
             legs.append({
@@ -2319,6 +2336,11 @@ def _route_transit(
             'distance_m': round(distance_m, 1),
             'distance_mi': round(distance_m / 1609.344, 2),
             'duration_min': round(duration_min, 1),
+            # The bus does its own climbing; this is what the rider does.
+            'climb_ft': (
+                walk1['properties'].get('climb_ft', 0)
+                + walk2['properties'].get('climb_ft', 0)
+            ),
             'walk_m': round(walk_m, 1),
             'ride_m': round(ride_m, 1),
             'route': shape['route'],
@@ -2531,6 +2553,11 @@ def _route_bikeshare(
             'distance_m': round(distance_m, 1),
             'distance_mi': round(distance_m / 1609.344, 2),
             'duration_min': round(duration_min, 1),
+            'climb_ft': (
+                leg1['properties'].get('climb_ft', 0)
+                + ride['properties'].get('climb_ft', 0)
+                + leg3['properties'].get('climb_ft', 0)
+            ),
             'walk_m': round(foot_m, 1),
             'ride_m': round(ride_m, 1),
             'rent_station': rent['name'],

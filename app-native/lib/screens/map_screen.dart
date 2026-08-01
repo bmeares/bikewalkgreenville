@@ -1705,9 +1705,7 @@ class _MapScreenState extends State<MapScreen> {
                           const SizedBox(width: 6),
                           Expanded(
                             child: Text(
-                              step.warn == 'no_sidewalk'
-                                  ? 'No sidewalk mapped on this stretch'
-                                  : 'No bike lane on this stretch',
+                              warnStepSentence(step.warn),
                               style: const TextStyle(
                                   color: Color(0xFFFFB74D), fontSize: 12.5),
                             ),
@@ -1917,9 +1915,8 @@ class _MapScreenState extends State<MapScreen> {
                 subtitle: route.steps[i].warn == null
                     ? null
                     : Text(
-                        route.steps[i].warn == 'no_sidewalk'
-                            ? '${formatDistance(route.steps[i].warnM)} with no sidewalk'
-                            : '${formatDistance(route.steps[i].warnM)} with no bike lane',
+                        '${formatDistance(route.steps[i].warnM)} '
+                        '${warnStepPhrase(route.steps[i].warn)}',
                         style: const TextStyle(fontSize: 12, color: warnRed),
                       ),
                 trailing: route.steps[i].distanceM > 0
