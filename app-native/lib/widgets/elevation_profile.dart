@@ -22,27 +22,31 @@ class ElevationProfile extends StatelessWidget {
     final elevations = profile.map((p) => p[1]).toList();
     final lo = elevations.reduce(math.min).round();
     final hi = elevations.reduce(math.max).round();
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Expanded(
-          child: CustomPaint(
-            size: Size.fromHeight(height),
-            painter: _ProfilePainter(profile),
+    // The preview hosts this inside a shrink-wrapping Column, whose children
+    // get UNBOUNDED height — a stretch-aligned Row here must live inside an
+    // explicit height or the layout throws and takes the whole bottom overlay
+    // (preview, Start, FABs) down with it.
+    return SizedBox(
+      height: height,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            child: CustomPaint(painter: _ProfilePainter(profile)),
           ),
-        ),
-        const SizedBox(width: 8),
-        Column(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Text('$hi ft',
-                style: const TextStyle(fontSize: 10, color: Colors.black54)),
-            Text('$lo ft',
-                style: const TextStyle(fontSize: 10, color: Colors.black54)),
-          ],
-        ),
-      ],
+          const SizedBox(width: 8),
+          Column(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text('$hi ft',
+                  style: const TextStyle(fontSize: 10, color: Colors.black54)),
+              Text('$lo ft',
+                  style: const TextStyle(fontSize: 10, color: Colors.black54)),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }

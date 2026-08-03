@@ -16,6 +16,23 @@ Updated 2026-08-02 (seventh session on omega). Read this + `DATA.md` before touc
 - **walk-audit config** moved off env vars onto Meerschaum config (`plugins:walk-audit:{smtp,notify}`). Prod values live in the container volume at `/meerschaum/config/plugins.json` (chmod 600); the `/meerschaum/.env` hack has been **deleted**.
 - `WalkAudit.reports` is empty (the deploy-check row was removed).
 
+### Hotfix 2026-08-03 — app v1.6.1+37
+
+On-device report: after "Get directions" the whole bottom overlay (route
+preview, Start, layers/report FABs) vanished; the FABs flashed back while the
+"Finding route…" chip was up. Root cause: `ElevationProfile`'s root was a
+stretch-aligned Row, and the preview hosts it in a shrink-wrapping Column
+whose children get UNBOUNDED height → `BoxConstraints forces an infinite
+height` → the layout exception took the entire overlay down whenever a route
+had ≥30 ft of climb (i.e. almost always). The chip branch doesn't render the
+preview, which is why the FABs reappeared during planning. Fix: explicit
+`SizedBox(height:)` around the Row; regression test
+`test/elevation_profile_test.dart` pumps the widget inside an
+unbounded-height Column (fails on the old code with the exact exception).
+Lesson for this codebase: anything added to the bottom-overlay Column must
+tolerate unbounded height — no stretch/spaceBetween/Expanded at its root
+without an explicit height.
+
 ### Shipped 2026-08-02 (seventh session) — map-layers v0.6.0, app v1.6.0+36
 
 Nav overhaul + new layers + submissions. Design doc:
