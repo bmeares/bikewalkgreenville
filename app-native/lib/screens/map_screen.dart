@@ -14,7 +14,10 @@ import '../api.dart';
 import '../app_state.dart';
 import '../map_icons.dart';
 import '../nav.dart';
+import '../nav_notifier.dart';
 import '../theme.dart';
+import '../widgets/elevation_profile.dart';
+import 'add_point_sheet.dart';
 import 'directions_sheet.dart';
 import 'report_sheet.dart';
 import 'tools_screen.dart';
@@ -50,6 +53,13 @@ class _MapScreenState extends State<MapScreen> {
 
   // Route + turn-by-turn navigation state.
   bool _routing = false;
+
+  /// A route request is in flight — drives the "Finding route…" feedback.
+  bool _planning = false;
+
+  /// Monotonic id of the newest _planTrip call; older responses that lose the
+  /// race (rapid pill cycling re-plans in bursts) are discarded on arrival.
+  int _planSeq = 0;
   NavRoute? _navRoute;
   LatLng? _destination;
   bool _navigating = false;
@@ -62,12 +72,36 @@ class _MapScreenState extends State<MapScreen> {
   int _offRouteHits = 0;
   bool _rerouting = false;
 
+  // Follow camera: on until the user pans away, then a Re-center chip brings
+  // it back. `_progAnimUntil` marks our own camera animations so a user
+  // gesture can be told apart from the follow camera moving itself.
+  bool _followNav = true;
+  DateTime _lastCamAt = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _progAnimUntil = DateTime.now().add(const Duration(seconds: 5));
+  LatLng? _lastNavPos;
+  double? _lastNavBearing;
+
+  // Persistent notification with the upcoming turn.
+  final _navNotifier = NavNotifier();
+  int _notifiedStep = -1;
+  DateTime _lastNotifyAt = DateTime.fromMillisecondsSinceEpoch(0);
+
   AppState get app => context.read<AppState>();
 
   @override
   void initState() {
     super.initState();
     context.read<AppState>().addListener(_applyVisibility);
+    // Focusing the search field brings back recents — and re-runs whatever is
+    // still typed there, so a cleared route is two taps to restore.
+    _searchFocus.addListener(() {
+      if (!mounted) return;
+      setState(() {});
+      final q = _searchCtl.text.trim();
+      if (_searchFocus.hasFocus && q.length >= 2 && _results.isEmpty) {
+        _onSearchChanged(q);
+      }
+    });
   }
 
   @override
@@ -76,6 +110,7 @@ class _MapScreenState extends State<MapScreen> {
     _searchFocus.dispose();
     _posSub?.cancel();
     _tts?.stop();
+    _navNotifier.cancel();
     WakelockPlus.disable();
     super.dispose();
   }
@@ -264,6 +299,19 @@ class _MapScreenState extends State<MapScreen> {
           minzoom: def.minZoom > 0 ? def.minZoom : null,
           belowLayerId: 'lyr-route-casing',
         );
+      } else if (def.isFill) {
+        // Polygon layers (parking land use) sit under every line so streets
+        // and trails stay legible on top of them.
+        await map.addFillLayer(
+          def.id,
+          'lyr-${def.id}',
+          FillLayerProperties(
+            fillColor: _layerColorExpr(def),
+            fillOpacity: 0.45,
+            fillOutlineColor: def.color,
+          ),
+          belowLayerId: 'lyr-highlight-line',
+        );
       } else {
         await map.addLineLayer(
           def.id,
@@ -276,12 +324,7 @@ class _MapScreenState extends State<MapScreen> {
                     for (final e in stressColors.entries) ...[e.key, e.value],
                     '#9e9e9e',
                   ]
-                // Per-feature color when the layer provides one (GTFS routes).
-                : [
-                    'coalesce',
-                    ['get', 'color'],
-                    def.color,
-                  ],
+                : _layerColorExpr(def),
             lineWidth: def.width,
             lineOpacity: 0.85,
             lineCap: 'round',
@@ -293,6 +336,24 @@ class _MapScreenState extends State<MapScreen> {
     } catch (_) {
       _addedLayers.remove(def.id); // retry on the next visibility pass
     }
+  }
+
+  /// Data-driven color: a per-layer property match (lots vs garages), else a
+  /// per-feature `color` (GTFS routes), else the layer's own color.
+  dynamic _layerColorExpr(LayerDef def) {
+    if (def.matchProp != null && def.matchColors != null) {
+      return [
+        'match',
+        ['get', def.matchProp!],
+        for (final e in def.matchColors!.entries) ...[e.key, e.value],
+        def.color,
+      ];
+    }
+    return [
+      'coalesce',
+      ['get', 'color'],
+      def.color,
+    ];
   }
 
   void _applyVisibility() {
@@ -437,6 +498,15 @@ class _MapScreenState extends State<MapScreen> {
               },
             ),
             ListTile(
+              leading: const Icon(Icons.add_location_alt, color: brandGreen),
+              title: const Text('Add a missing place here'),
+              subtitle: const Text('Bike parking, repair station, fountain…'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _openAddPointSheet(latLng);
+              },
+            ),
+            ListTile(
               leading: const Icon(Icons.badge_outlined),
               title: const Text('Who owns this road?'),
               onTap: () {
@@ -511,6 +581,7 @@ class _MapScreenState extends State<MapScreen> {
     }
 
     final isBcycle = def?.id == 'bcycle';
+    final isGarage = def?.id == 'parking-garages';
     final skip = {
       'name', 'label', 'street_name', 'geojson', 'color', 'id',
       // BCycle internals: the availability line already says it better.
@@ -518,6 +589,8 @@ class _MapScreenState extends State<MapScreen> {
         'short_id', 'rental_uri', 'bikes', 'ebikes', 'docks',
         'is_renting', 'is_returning', 'last_reported',
       },
+      // Garage internals: the availability line already says it better.
+      if (isGarage) ...{'capacity', 'occupied', 'percent_occupied', 'as_of'},
     };
     final rows = props.entries
         .where((e) =>
@@ -651,21 +724,35 @@ class _MapScreenState extends State<MapScreen> {
 
   /// Hand off to the BCycle app: the station's own deep link when GBFS gave us
   /// one, then the app's discovery scheme, then the Play Store listing.
+  ///
+  /// Every candidate is tried app-first (`externalNonBrowserApplication`) so a
+  /// https deep link opens the installed app instead of a browser tab; only
+  /// the Play Store fallback is allowed to land anywhere else. The manifest
+  /// carries `<queries>` for the `bcycle` scheme + package — without those,
+  /// Android 11+ package visibility makes every launch silently unresolvable.
   Future<void> _openBcycleApp(String? stationUri) async {
     final candidates = <String>[
       if (stationUri != null && stationUri.isNotEmpty) stationUri,
       'bcycle://',
-      'https://play.google.com/store/apps/details?id=com.bcycle',
     ];
     for (final uri in candidates) {
       try {
-        if (await launchUrlString(uri, mode: LaunchMode.externalApplication)) {
+        if (await launchUrlString(uri,
+            mode: LaunchMode.externalNonBrowserApplication)) {
           return;
         }
       } catch (_) {
         // Try the next fallback.
       }
     }
+    try {
+      if (await launchUrlString(
+        'https://play.google.com/store/apps/details?id=com.bcycle',
+        mode: LaunchMode.externalApplication,
+      )) {
+        return;
+      }
+    } catch (_) {}
     if (mounted) toast(context, 'Could not open the BCycle app.');
   }
 
@@ -715,7 +802,13 @@ class _MapScreenState extends State<MapScreen> {
       }
       return;
     }
-    if (!silent) setState(() => _routing = true);
+    final seq = ++_planSeq;
+    if (!silent) {
+      setState(() {
+        _routing = true;
+        _planning = true;
+      });
+    }
     try {
       final feature = await api.route(
         origin.latitude,
@@ -729,6 +822,8 @@ class _MapScreenState extends State<MapScreen> {
         stress: state.stressApiName,
         plan: plan,
       );
+      // A newer plan superseded this one while it was in flight.
+      if (seq != _planSeq) return;
       final route = NavRoute.fromFeature(feature);
       // Transit routes draw in the official Greenlink route color.
       final props = Map<String, dynamic>.from(feature['properties'] ?? {});
@@ -752,9 +847,14 @@ class _MapScreenState extends State<MapScreen> {
       });
       if (!_navigating) await _fitRoute(route);
     } on Exception catch (e) {
-      if (!mounted) return;
+      if (!mounted || seq != _planSeq) return;
       setState(() => _routing = _navRoute != null);
       toast(context, e.toString());
+    } finally {
+      // Only the newest request may clear the spinner.
+      if (mounted && seq == _planSeq && _planning) {
+        setState(() => _planning = false);
+      }
     }
   }
 
@@ -872,9 +972,15 @@ class _MapScreenState extends State<MapScreen> {
     if (!mounted) return;
     setState(() {
       _navigating = true;
+      _followNav = true;
       _spokenStep = -1;
       _spokenImminent = false;
       _offRouteHits = 0;
+      _notifiedStep = -1;
+      _lastNotifyAt = DateTime.fromMillisecondsSinceEpoch(0);
+      _lastCamAt = DateTime.fromMillisecondsSinceEpoch(0);
+      // Ignore camera chatter from the initial fly-in.
+      _progAnimUntil = DateTime.now().add(const Duration(seconds: 3));
     });
     // Strip the thematic overlays so the street layout underneath is legible.
     _applyVisibility();
@@ -892,6 +998,7 @@ class _MapScreenState extends State<MapScreen> {
     await _posSub?.cancel();
     _posSub = null;
     await _tts?.stop();
+    await _navNotifier.cancel();
     await WakelockPlus.disable();
     if (!mounted || !_navigating) return;
     setState(() {
@@ -916,6 +1023,11 @@ class _MapScreenState extends State<MapScreen> {
     if (progress == null || !mounted) return;
     final advanced = progress.stepIndex != _progress?.stepIndex;
     setState(() => _progress = progress);
+    _lastNavPos = here;
+    // Course-up: GPS heading while moving, else the route's own bearing.
+    _lastNavBearing = (pos.heading >= 0 && pos.speed > 0.8)
+        ? pos.heading
+        : progress.courseBearing;
     // Drop the arrows for turns already made, so what's on the map is only
     // what's still ahead.
     if (advanced) {
@@ -925,19 +1037,15 @@ class _MapScreenState extends State<MapScreen> {
       );
     }
 
-    // Course-up camera: GPS heading while moving, else the route's own bearing.
-    final bearing =
-        (pos.heading >= 0 && pos.speed > 0.8) ? pos.heading : progress.courseBearing;
-    // Google-style isometric follow camera.
-    await _map?.animateCamera(
-      CameraUpdate.newCameraPosition(CameraPosition(
-        target: here,
-        zoom: 17.5,
-        bearing: bearing,
-        tilt: 60.0,
-      )),
-      duration: const Duration(milliseconds: 900),
-    );
+    // Follow camera, throttled: a fix every couple of seconds must not queue
+    // up a backlog of 900 ms animations — that is exactly the jitter that made
+    // nav mode unusable. One short animation, at most ~once a second, and only
+    // while the user hasn't panned away.
+    if (_followNav &&
+        DateTime.now().difference(_lastCamAt) >
+            const Duration(milliseconds: 800)) {
+      _moveNavCamera(here, _lastNavBearing!);
+    }
 
     if (progress.remainingM < 25) {
       await _speak('You have arrived.');
@@ -946,8 +1054,82 @@ class _MapScreenState extends State<MapScreen> {
       return;
     }
 
+    _updateNavNotification(route, progress, advanced);
     _announce(route, progress);
     await _maybeReroute(progress);
+  }
+
+  /// One programmatic camera move. Deliberately does NOT touch
+  /// [_progAnimUntil]: routine follow animations stay within the distance
+  /// threshold [_onCameraMove] checks, and extending the suppression window
+  /// on every fix would blind gesture detection for the whole trip.
+  void _moveNavCamera(LatLng target, double bearing) {
+    _lastCamAt = DateTime.now();
+    _map?.animateCamera(
+      CameraUpdate.newCameraPosition(CameraPosition(
+        target: target,
+        zoom: 17.5,
+        bearing: bearing,
+        tilt: 60.0,
+      )),
+      duration: const Duration(milliseconds: 600),
+    );
+  }
+
+  /// The user panning away to look at something stops the follow camera; the
+  /// Re-center chip brings it back.
+  ///
+  /// Detection is by DISTANCE, not timing: our own follow animations keep the
+  /// camera within metres of the rider, so a camera target far from the last
+  /// fix can only be a user drag. (A time-window heuristic doesn't work here —
+  /// follow animations fire continuously, so their suppression windows overlap
+  /// and a real drag would almost never be seen.) `_progAnimUntil` only covers
+  /// the two legitimately-far programmatic moves: the fly-in at nav start and
+  /// the Re-center animation itself.
+  void _onCameraMove(CameraPosition pos) {
+    if (!_navigating || !_followNav) return;
+    if (DateTime.now().isBefore(_progAnimUntil)) return;
+    final here = _lastNavPos;
+    if (here == null) return;
+    if (metersBetween(pos.target, here) > 120) {
+      setState(() => _followNav = false);
+    }
+  }
+
+  void _recenterNav() {
+    setState(() => _followNav = true);
+    // The camera may be far away right now — that animation is ours.
+    _progAnimUntil = DateTime.now().add(const Duration(milliseconds: 1500));
+    final here = _lastNavPos;
+    if (here != null) {
+      _moveNavCamera(here, _lastNavBearing ?? _progress?.courseBearing ?? 0);
+    }
+  }
+
+  /// The upcoming turn, pinned in the notification shade.
+  void _updateNavNotification(
+      NavRoute route, NavProgress progress, bool advanced) {
+    if (route.steps.isEmpty) return;
+    final nextIndex =
+        math.min(progress.stepIndex + 1, route.steps.length - 1);
+    final now = DateTime.now();
+    if (!advanced &&
+        nextIndex == _notifiedStep &&
+        now.difference(_lastNotifyAt) < const Duration(seconds: 15)) {
+      return;
+    }
+    _notifiedStep = nextIndex;
+    _lastNotifyAt = now;
+    final step = route.steps[nextIndex];
+    final etaMin = route.durationMin <= 0 || route.distanceM <= 0
+        ? 0.0
+        : route.durationMin * (progress.remainingM / route.distanceM);
+    _navNotifier.update(
+      instruction:
+          'In ${formatDistance(progress.distanceToManeuverM)}: ${step.instruction}',
+      detail:
+          '${formatDistance(progress.remainingM)} left · ${formatDuration(etaMin)}',
+    );
   }
 
   /// Two prompts per maneuver, the way every nav app does it: a heads-up at
@@ -1075,6 +1257,7 @@ class _MapScreenState extends State<MapScreen> {
       _place = (lat == null || lon == null) ? null : r;
     });
     if (lat == null || lon == null) return;
+    context.read<AppState>().addRecentSearch(r);
     final target = LatLng(lat, lon);
     await _setPin(target);
     _map?.animateCamera(CameraUpdate.newLatLngZoom(target, 15.5));
@@ -1199,6 +1382,20 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
+  /// "This exists on the ground but not on the map."
+  Future<void> _openAddPointSheet(LatLng latLng) async {
+    final submitted = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => AddPointSheet(latLng: latLng),
+    );
+    if (submitted == true && mounted) {
+      toast(context,
+          'Thanks! We\'ll review it and add it to the map.');
+    }
+    _clearPinIfIdle();
+  }
+
   Future<void> _reportAtMyLocation() async {
     final pos = await _currentPosition();
     if (!mounted) return;
@@ -1235,6 +1432,7 @@ class _MapScreenState extends State<MapScreen> {
             onStyleLoadedCallback: _onStyleLoaded,
             onMapClick: _onMapClick,
             onMapLongClick: _onMapLongClick,
+            onCameraMove: _onCameraMove,
             myLocationEnabled: _locationEnabled,
             trackCameraPosition: true,
             attributionButtonPosition: AttributionButtonPosition.bottomLeft,
@@ -1324,13 +1522,45 @@ class _MapScreenState extends State<MapScreen> {
                         ],
                       ),
                     ),
+                  )
+                // Places picked before, one tap from the still-focused field —
+                // the "bring my route back" path after clearing navigation.
+                else if (_searchFocus.hasFocus &&
+                    state.recentSearches.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Material(
+                      elevation: 3,
+                      borderRadius: BorderRadius.circular(12),
+                      child: Column(
+                        children: [
+                          for (final r in state.recentSearches.take(5))
+                            ListTile(
+                              dense: true,
+                              leading: const Icon(Icons.history),
+                              title: Text(r['label']?.toString() ?? ''),
+                              subtitle: (r['sublabel']?.toString() ?? '')
+                                      .isEmpty
+                                  ? null
+                                  : Text(r['sublabel'].toString()),
+                              onTap: () => _selectResult(
+                                  Map<String, dynamic>.from(r)),
+                            ),
+                        ],
+                      ),
+                    ),
                   ),
                 const SizedBox(height: 8),
                 // Multi-select on purpose: bike AND bus means "cost me a
-                // bike-to-the-bus trip", not "pick one".
+                // bike-to-the-bus trip", not "pick one". Tapping a selected
+                // pill cycles its variant (Bike → E-bike, Walk → Roll) before
+                // it deselects — see AppState.cyclePill.
                 SegmentedButton<TravelMode>(
                   multiSelectionEnabled: true,
-                  emptySelectionAllowed: false,
+                  // The empty selection is never applied — it's how the
+                  // widget reports "the last selected pill was tapped", which
+                  // cyclePill turns into a variant cycle instead.
+                  emptySelectionAllowed: true,
                   showSelectedIcon: false,
                   segments: [
                     for (final m in TravelMode.values)
@@ -1342,7 +1572,17 @@ class _MapScreenState extends State<MapScreen> {
                   ],
                   selected: state.modes,
                   onSelectionChanged: (s) {
-                    state.setModes(s);
+                    // The widget hands back the would-be selection; the pill
+                    // the user actually touched is the symmetric difference.
+                    final tapped = {
+                      ...state.modes.difference(s),
+                      ...s.difference(state.modes),
+                    };
+                    if (tapped.length != 1) {
+                      state.setModes(s);
+                    } else {
+                      state.cyclePill(tapped.first);
+                    }
                     // A drawn route follows the mode switch.
                     if (_navRoute != null && !_navigating && _to != null) {
                       _planTrip();
@@ -1381,13 +1621,31 @@ class _MapScreenState extends State<MapScreen> {
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 _fabColumn(),
+                if (_navigating && !_followNav) ...[
+                  const SizedBox(height: 10),
+                  Align(
+                    alignment: Alignment.center,
+                    child: FloatingActionButton.extended(
+                      heroTag: 'recenter',
+                      backgroundColor: brandGreen,
+                      foregroundColor: Colors.white,
+                      icon: const Icon(Icons.navigation),
+                      label: const Text('Re-center'),
+                      onPressed: _recenterNav,
+                    ),
+                  ),
+                ],
+                if (_planning && !_navigating) ...[
+                  const SizedBox(height: 10),
+                  _planningChip(),
+                ],
                 if (_navigating && _navRoute != null) ...[
                   const SizedBox(height: 10),
                   _navTripBar(),
-                ] else if (_navRoute != null) ...[
+                ] else if (_navRoute != null && !_planning) ...[
                   const SizedBox(height: 10),
                   _routePreview(),
-                ] else if (_place != null) ...[
+                ] else if (_place != null && !_planning) ...[
                   const SizedBox(height: 10),
                   _placeCard(),
                 ],
@@ -1430,6 +1688,34 @@ class _MapScreenState extends State<MapScreen> {
             ),
           ],
         ],
+      );
+
+  /// Immediate feedback that the router is working on it ("Bike here" used to
+  /// do nothing visible for a second or two).
+  Widget _planningChip() => Align(
+        alignment: Alignment.center,
+        child: Material(
+          elevation: 4,
+          borderRadius: BorderRadius.circular(24),
+          color: Colors.white,
+          child: const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2.5, color: brandGreen),
+                ),
+                SizedBox(width: 12),
+                Text('Finding your route…',
+                    style: TextStyle(fontWeight: FontWeight.w600)),
+              ],
+            ),
+          ),
+        ),
       );
 
   /// "Tap the map" banner while a trip endpoint is being picked.
@@ -1486,6 +1772,22 @@ class _MapScreenState extends State<MapScreen> {
           if (route.alternatives.isNotEmpty) _alternativesRow(route),
           if (route.fallbackNote != null || route.warnings.isNotEmpty)
             _warningBanner(route),
+          // The terrain, at a glance: where the trip climbs and where it
+          // bites (steep stretches in red). Only worth the pixels once the
+          // climb is enough to feel in your legs.
+          if (route.elevationProfile != null && route.climbFt >= 30)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Material(
+                elevation: 2,
+                borderRadius: BorderRadius.circular(14),
+                color: Colors.white,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                  child: ElevationProfile(profile: route.elevationProfile!),
+                ),
+              ),
+            ),
           Material(
             elevation: 4,
             borderRadius: BorderRadius.circular(16),
@@ -1712,6 +2014,24 @@ class _MapScreenState extends State<MapScreen> {
                           ),
                         ],
                       ),
+                    )
+                  else if (step.isSteepClimb)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6, left: 2),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.trending_up,
+                              color: Color(0xFFFFB74D), size: 16),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              'Steep climb ahead — ${step.climbFt} ft up',
+                              style: const TextStyle(
+                                  color: Color(0xFFFFB74D), fontSize: 12.5),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   if (after != null)
                     Padding(
@@ -1822,7 +2142,8 @@ class _MapScreenState extends State<MapScreen> {
                       children: [
                         Icon(route.steps[i].icon,
                             size: 18,
-                            color: route.steps[i].warn != null
+                            color: route.steps[i].warn != null ||
+                                    route.steps[i].isSteepClimb
                                 ? warnRed
                                 : brandDark),
                         const SizedBox(width: 5),
@@ -1912,13 +2233,7 @@ class _MapScreenState extends State<MapScreen> {
                     fontWeight: i == current ? FontWeight.w600 : null,
                   ),
                 ),
-                subtitle: route.steps[i].warn == null
-                    ? null
-                    : Text(
-                        '${formatDistance(route.steps[i].warnM)} '
-                        '${warnStepPhrase(route.steps[i].warn)}',
-                        style: const TextStyle(fontSize: 12, color: warnRed),
-                      ),
+                subtitle: _stepSubtitle(route.steps[i]),
                 trailing: route.steps[i].distanceM > 0
                     ? Text(formatDistance(route.steps[i].distanceM))
                     : null,
@@ -1927,6 +2242,33 @@ class _MapScreenState extends State<MapScreen> {
         ),
       ),
     );
+  }
+
+  /// What a step wants you to know beyond the instruction: missing
+  /// infrastructure first (worse), then a climb worth bracing for.
+  Widget? _stepSubtitle(RouteStep step) {
+    final lines = <Widget>[
+      if (step.warn != null)
+        Text(
+          '${formatDistance(step.warnM)} ${warnStepPhrase(step.warn)}',
+          style: const TextStyle(fontSize: 12, color: warnRed),
+        ),
+      if (step.climbFt >= 20 || step.isSteepClimb)
+        Text(
+          step.isSteepClimb
+              ? '↑ ${step.climbFt} ft — steep climb'
+              : '↑ ${step.climbFt} ft of climb',
+          style: TextStyle(
+            fontSize: 12,
+            color: step.isSteepClimb ? warnRed : Colors.black54,
+            fontWeight: step.isSteepClimb ? FontWeight.w600 : null,
+          ),
+        ),
+    ];
+    if (lines.isEmpty) return null;
+    if (lines.length == 1) return lines.first;
+    return Column(
+        crossAxisAlignment: CrossAxisAlignment.start, children: lines);
   }
 
   void _openLayersSheet() {

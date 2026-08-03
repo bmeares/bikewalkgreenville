@@ -35,7 +35,7 @@ from meerschaum.actions import make_action
 from meerschaum.plugins import api_plugin
 from meerschaum.utils.warnings import info, warn
 
-__version__ = '0.5.0'
+__version__ = '0.6.0'
 
 bwg = mrsm.Plugin('bwg')
 
@@ -102,6 +102,39 @@ LAYERS: dict[str, dict[str, Any]] = {
         'tolerance_m': 3,
         'color': '#FF6F00',
     },
+    # County lines plus the city lines that aren't the same sidewalk drawn
+    # twice (the two sources overlap heavily inside city limits). Built by
+    # `_build_merged_sidewalks`; the per-source layers stay served for
+    # back-compat but the app renders this one.
+    'sidewalks': {
+        'label': 'Sidewalks',
+        'kind': 'line',
+        'builder': '_build_merged_sidewalks',
+        'props': {},
+        'color': '#1565C0',
+    },
+    # Downtown land use: surface parking lots vs. parking garages, the same
+    # split the parking Grafana dashboard reports on.
+    'parking-landuse': {
+        'label': 'Parking Land Use',
+        'kind': 'fill',
+        'builder': '_build_parking_landuse',
+        'props': {'kind': 'kind', 'name': 'name'},
+        'color': '#8D6E63',
+        'color_by': {
+            'property': 'kind',
+            'map': {'lot': '#BCAAA4', 'garage': '#6D4C41'},
+        },
+    },
+    # Curated, hand-maintained: extend BIKE_BUSINESSES below as more sign on.
+    'bike-businesses': {
+        'label': 'Bike Friendly Businesses',
+        'kind': 'point',
+        'builder': '_build_bike_businesses',
+        'props': {'name': 'name', 'address': 'address', 'url': 'url', 'note': 'note'},
+        'color': '#00897B',
+        'icon': 'storefront',
+    },
     'bike-stress': {
         'label': 'Bike Stress',
         'kind': 'line',
@@ -145,9 +178,151 @@ def _output_dir():
     return Path(ROOT_DIR_PATH) / 'output' / 'geojson' / 'app'
 
 
+#: Bike-friendly businesses, curated by hand. Add a dict here (name, lat, lon
+#: in WGS84, plus whatever address/url/note help a rider) and redeploy; the
+#: layer serves straight from this list, no ETL involved.
+BIKE_BUSINESSES: list[dict[str, Any]] = [
+    {
+        'name': 'Swamp Rabbit Cafe & Grocery',
+        'lat': 34.86993,
+        'lon': -82.42195,
+        'address': '205 Cedar Lane Rd',
+        'url': 'https://www.swamprabbitcafe.com',
+        'note': 'Grocery, bakery & cafe right on the trail',
+    },
+]
+
+#: How close a city sidewalk line must run to a county line to count as the
+#: same sidewalk digitized twice. Both CRSes are ft-based (see DATA.md).
+SIDEWALK_DEDUPE_FT = 80.0
+
+
+def _build_bike_businesses(debug: bool = False) -> str | None:
+    import json
+    return json.dumps({
+        'type': 'FeatureCollection',
+        'features': [
+            {
+                'type': 'Feature',
+                'geometry': {'type': 'Point', 'coordinates': [b['lon'], b['lat']]},
+                'properties': {k: v for k, v in b.items() if k not in ('lat', 'lon')},
+            }
+            for b in BIKE_BUSINESSES
+        ],
+    })
+
+
+def _build_merged_sidewalks(debug: bool = False) -> str | None:
+    """County sidewalk lines plus the city lines that are NOT within
+    SIDEWALK_DEDUPE_FT of any county line — one layer instead of two mostly
+    overlapping ones. Dissolved + simplified like the per-source layers."""
+    import pandas as pd
+
+    county_pipe = mrsm.Pipe('plugin:greenville-county', 'sidewalks', instance='sql:bwg')
+    city_pipe = mrsm.Pipe('plugin:city-gis', 'Sidewalks', instance='sql:bwg')
+    frames = []
+    for pipe in (county_pipe, city_pipe):
+        if not pipe.exists(debug=debug):
+            continue
+        geom_cols = [
+            col for col, typ in pipe.dtypes.items()
+            if 'geometry' in typ.lower() or 'geography' in typ.lower()
+        ]
+        if not geom_cols:
+            continue
+        df = pipe.get_data([geom_cols[0]], debug=debug)
+        if df is None or len(df) == 0:
+            continue
+        try:
+            df.geometry = df.geometry.force_2d()
+        except Exception:
+            pass
+        frames.append(df)
+    if not frames:
+        warn('No sidewalk sources available for the merged layer.')
+        return None
+
+    county = frames[0]
+    merged = county
+    if len(frames) > 1:
+        city = frames[1].to_crs(county.crs)
+        # A city line running alongside a county line is the same sidewalk in
+        # two datasets; keep the county copy. sindex.query pairs are
+        # (city positions, county positions).
+        near = county.geometry.sindex.query(
+            city.geometry, predicate='dwithin', distance=SIDEWALK_DEDUPE_FT,
+        )
+        dupes = set(near[0].tolist())
+        city_only = city.iloc[[i for i in range(len(city)) if i not in dupes]]
+        merged = pd.concat(
+            [county[['geometry']], city_only[['geometry']]],
+            ignore_index=True,
+        ).set_crs(county.crs)
+
+    merged = merged.dissolve()
+    merged.geometry = merged.geometry.line_merge()
+    merged.geometry = merged.geometry.simplify(8 * FT_PER_M, preserve_topology=True)
+    merged = merged.to_crs(4326)
+    try:
+        merged.geometry = merged.geometry.set_precision(1e-5)
+    except Exception:
+        pass
+    return merged.to_json(drop_id=True)
+
+
+def _build_parking_landuse(debug: bool = False) -> str | None:
+    """Downtown parking land use: surface lots (paved/unpaved city parking
+    polygons in the DTMP study area) vs. garage building footprints."""
+    import json
+
+    conn = mrsm.get_connector('sql:bwg')
+    query = f'''
+    SELECT
+        ST_AsGeoJSON(
+            ST_Force2D(ST_Transform(
+                ST_SimplifyPreserveTopology(ST_MakeValid("geometry"), 5), 4326
+            )), 5
+        ) AS "gj",
+        'lot' AS "kind",
+        NULL AS "name"
+    FROM "Parking".dtmp_parking
+    WHERE "FEAT_CODE" IN (121, 122)
+    UNION ALL
+    SELECT
+        ST_AsGeoJSON(
+            ST_Force2D(ST_Transform(
+                ST_SimplifyPreserveTopology(ST_MakeValid("geometry"), 5), 4326
+            )), 5
+        ) AS "gj",
+        'garage' AS "kind",
+        SMART_CAPITALIZE("FAC_LABEL") AS "name"
+    FROM "Parking".parking_facilities_greenville
+    '''
+    df = conn.read(query, debug=debug)
+    if df is None or not len(df):
+        return None
+    features = []
+    for row in df.to_dict(orient='records'):
+        gj = row.pop('gj', None)
+        if not gj:
+            continue
+        features.append({
+            'type': 'Feature',
+            'geometry': json.loads(gj),
+            'properties': {
+                k: (None if v is None or (isinstance(v, float) and v != v) else v)
+                for k, v in row.items()
+            },
+        })
+    return json.dumps({'type': 'FeatureCollection', 'features': features})
+
+
 def _build_layer_geojson(layer_id: str, debug: bool = False) -> str | None:
     """Read the layer's pipe, simplify + reproject, return a GeoJSON string."""
     layer = LAYERS[layer_id]
+    builder = layer.get('builder')
+    if builder:
+        return globals()[builder](debug=debug)
     pipe = _layer_pipe(layer)
     if not pipe.exists(debug=debug):
         warn(f"Pipe for layer '{layer_id}' does not exist: {pipe}")
@@ -451,7 +626,10 @@ def _search_nominatim(q: str) -> list[dict[str, Any]]:
 #: close to unusable rather than merely unpleasant (see NO_SIDEWALK_FACTOR).
 MODE_FACTORS = {
     'bike': {
-        'srt': 0.4,
+        # The SRT is deliberately the cheapest surface for every human-powered
+        # mode: BWG wants trips steered onto the trail network wherever it is
+        # remotely competitive.
+        'srt': 0.28,
         'bike-lane': 0.4,
         'L': 1.0,
         'ML': 1.3,
@@ -460,7 +638,7 @@ MODE_FACTORS = {
         'H': 12.0,
     },
     'walk': {
-        'srt': 0.7,
+        'srt': 0.55,
         'bike-lane': 1.0,
         'L': 1.0,
         'ML': 1.0,
@@ -469,7 +647,7 @@ MODE_FACTORS = {
         'H': 1.5,
     },
     'roll': {
-        'srt': 0.6,
+        'srt': 0.5,
         'bike-lane': 1.0,
         'L': 1.0,
         'ML': 1.0,
@@ -504,23 +682,25 @@ BIKE_FACILITY_CATEGORIES = ('srt', 'bike-lane')
 #: How much traffic the rider is willing to put up with. A tolerance only
 #: RE-WEIGHTS; it never removes an edge, so a route always exists and the
 #: stretches above the rider's tolerance stay disclosed through `warnings[]`.
-#: `balanced` reproduces the historical numbers exactly -- a request that omits
-#: `?stress=` gets byte-identical output to before this option existed.
+#: `balanced` keeps the historical traffic weights; since v0.6.0 its `srt`
+#: discount is deeper (0.4 -> 0.28) to bias trips onto the trail network.
 STRESS_LEVELS = ('quiet', 'balanced', 'direct')
 DEFAULT_STRESS = 'balanced'
+#: The `srt` discounts sit well below the bike-lane ones on purpose (see
+#: MODE_FACTORS): the trail network is the backbone BWG wants trips on.
 BIKE_STRESS_FACTORS = {
     'quiet': {
-        'srt': 0.35, 'bike-lane': 0.35,
+        'srt': 0.2, 'bike-lane': 0.35,
         'L': 1.0, 'ML': 2.0, 'M': 8.0, 'MH': 20.0, 'H': 40.0,
     },
     'balanced': {
-        'srt': 0.4, 'bike-lane': 0.4,
+        'srt': 0.28, 'bike-lane': 0.4,
         'L': 1.0, 'ML': 1.3, 'M': 2.5, 'MH': 6.0, 'H': 12.0,
     },
     # "Shortest ride": the facility discount shrinks too, or a direct route
     # would still detour half a mile to pick up a bike lane.
     'direct': {
-        'srt': 0.5, 'bike-lane': 0.6,
+        'srt': 0.4, 'bike-lane': 0.6,
         'L': 1.0, 'ML': 1.1, 'M': 1.4, 'MH': 2.0, 'H': 3.0,
     },
 }
@@ -1843,6 +2023,10 @@ def _route_core(
 
     legs: list[dict] = []
     climb_m = 0.0
+    #: [distance_from_start_m, elevation_ft] at each leg boundary with a known
+    #: elevation — the app's elevation-preview sparkline.
+    profile: list[list[float]] = []
+    profile_dist = 0.0
     if start == goal:
         nlat, nlon = graph['nodes'][start]
         coordinates = [[from_lon, from_lat], [nlon, nlat], [to_lon, to_lat]]
@@ -1869,6 +2053,7 @@ def _route_core(
         distance_m = start_d + goal_d
         breakdown = {}
         prev_node = start
+        profile_dist = start_d
         for _node, edge in path:
             if edge is None:
                 continue
@@ -1886,6 +2071,11 @@ def _route_core(
             from_elev, to_elev = _node_elev(prev_node), _node_elev(_node)
             rise_m = _climb_m(from_elev, to_elev)
             climb_m += rise_m
+            if from_elev is not None and not profile:
+                profile.append([profile_dist, from_elev])
+            profile_dist += length_m
+            if to_elev is not None:
+                profile.append([profile_dist, to_elev])
             # For the disclosure, what matters is how steep the ground is, not
             # which way the rider is pointed: rolling DOWN a 12% grade is its
             # own hazard.
@@ -1924,6 +2114,14 @@ def _route_core(
     speed = MODE_SPEED_M_S[warn_mode]
     climb_seconds = climb_m * CLIMB_SEC_PER_M.get(_mode_family(warn_mode), 0.0)
     ranges = _warn_ranges(legs)
+    # Downsample the elevation profile: a long route touches hundreds of
+    # nodes and the sparkline can't show more than ~a hundred anyway.
+    if len(profile) > 120:
+        stride = len(profile) / 119.0
+        profile = [profile[int(i * stride)] for i in range(119)] + [profile[-1]]
+    elevation_profile = (
+        [[round(d, 1), round(e)] for d, e in profile] if len(profile) >= 2 else None
+    )
     return {
         'type': 'Feature',
         'geometry': {'type': 'LineString', 'coordinates': coordinates},
@@ -1935,6 +2133,7 @@ def _route_core(
             'distance_mi': round(distance_m / 1609.344, 2),
             'duration_min': round((distance_m / speed + climb_seconds) / 60, 1),
             'climb_ft': round(climb_m * FT_PER_M),
+            'elevation_profile': elevation_profile,
             'stress_breakdown': {k: round(v, 1) for k, v in breakdown.items()},
             'from_snap_m': round(start_d, 1),
             'to_snap_m': round(goal_d, 1),
@@ -2773,6 +2972,68 @@ def _route_multimodal(
     return feature
 
 
+# User-submitted missing points (bike parking, repair stations, fountains...).
+# Deliberately anonymous — no usernames until the login question is settled;
+# rows are moderated by hand before any OSM upstreaming.
+SUBMISSION_PIPE: mrsm.Pipe = mrsm.Pipe(
+    'app', 'point_submissions', 'MapLayers',
+    instance='sql:bwg',
+    parameters={
+        'autotime': True,
+        'schema': 'MapLayers',
+        'target': 'point_submissions',
+        'columns': {
+            'datetime': 'ts',
+            'id': 'id',
+        },
+        'dtypes': {
+            'ts': 'datetime',
+            'id': 'string',
+            'category': 'string',
+            'name': 'string',
+            'comment': 'string',
+            'lat': 'float',
+            'lon': 'float',
+            'photo_filename': 'string',
+            'ip': 'string',
+            'user_agent': 'string',
+        },
+    },
+)
+
+#: Allowed categories for point submissions (server-side guard: the endpoint
+#: is public, so free-text categories invite junk).
+SUBMISSION_CATEGORIES = (
+    'bike-parking',
+    'repair-station',
+    'water-fountain',
+    'bike-business',
+    'other',
+)
+
+#: Cheap abuse guards for the anonymous submission endpoint: an in-process
+#: per-IP sliding window and a hard cap on the streamed photo. Not real
+#: DoS protection (that's the reverse proxy's job) but enough that one script
+#: kiddie can't fill the disk or the table overnight.
+SUBMIT_MAX_PER_HOUR = 10
+SUBMIT_MAX_PHOTO_BYTES = 8 * 1024 * 1024
+_SUBMIT_HITS: dict[str, list[float]] = {}
+_SUBMIT_HITS_LOCK = threading.Lock()
+
+
+def _submit_rate_limited(ip: str | None) -> bool:
+    """True when this client has used up its hourly submissions."""
+    key = ip or 'unknown'
+    now = time.time()
+    with _SUBMIT_HITS_LOCK:
+        hits = [t for t in _SUBMIT_HITS.get(key, []) if now - t < 3600]
+        if len(hits) >= SUBMIT_MAX_PER_HOUR:
+            _SUBMIT_HITS[key] = hits
+            return True
+        hits.append(now)
+        _SUBMIT_HITS[key] = hits
+    return False
+
 # User feedback on any map feature (bus stop, sidewalk segment, bike lane, ...).
 FEEDBACK_PIPE: mrsm.Pipe = mrsm.Pipe(
     'app', 'feedback', 'MapLayers',
@@ -2892,6 +3153,90 @@ def init_app(app):
     def map_layers_index():
         return JSONResponse({'layers': _layer_index()})
 
+    #: Live-ish garage occupancy cache (the pipe is synced by the parking job;
+    #: this only avoids hammering Postgres from every map pan).
+    _garages_cache: dict[str, Any] = {'epoch': 0.0, 'body': None}
+
+    # NOTE: registered BEFORE the parameterized `/{layer_id}.geojson` route --
+    # Starlette matches in declaration order, so the other way around this
+    # endpoint is unreachable (the layer route 404s 'parking-garages').
+    @app.get('/map-layers/parking-garages.geojson')
+    def map_layers_parking_garages():
+        """Downtown parking garages with the latest occupancy counts, from the
+        cached `Parking.garages_counts_map` pipe (one row per garage)."""
+        import json
+        if (
+            _garages_cache['body'] is not None
+            and time.time() - _garages_cache['epoch'] < 60
+        ):
+            return Response(
+                _garages_cache['body'],
+                media_type='application/geo+json',
+                headers={'Cache-Control': 'no-store'},
+            )
+
+        def _num(value):
+            """float | None, treating pandas NaN as missing -- one bad garage
+            row must not 500 the layer."""
+            if value is None:
+                return None
+            try:
+                f = float(value)
+            except Exception:
+                return None
+            return None if f != f else f
+
+        query = '''
+        SELECT
+            "label" AS "name",
+            "capacity",
+            "Spaces Occupied" AS "occupied",
+            ROUND(("Percent Occupied" * 100)::numeric, 0) AS "percent_occupied",
+            "ts",
+            "longitude",
+            "latitude"
+        FROM "Parking".garages_counts_map
+        '''
+        try:
+            conn = mrsm.get_connector('sql:bwg')
+            df = conn.read(query)
+        except Exception as e:
+            return JSONResponse({'error': str(e)}, status_code=500)
+        features = []
+        for row in df.to_dict(orient='records'):
+            lon = _num(row.pop('longitude', None))
+            lat = _num(row.pop('latitude', None))
+            if lon is None or lat is None:
+                continue
+            capacity = _num(row.get('capacity'))
+            occupied = _num(row.get('occupied'))
+            percent = _num(row.get('percent_occupied'))
+            props = {
+                'name': row.get('name'),
+                'capacity': int(capacity) if capacity is not None else None,
+                'occupied': int(occupied) if occupied is not None else None,
+                'percent_occupied': int(percent) if percent is not None else None,
+                'as_of': str(row['ts']) if row.get('ts') is not None else None,
+            }
+            if props['capacity'] and props['occupied'] is not None:
+                open_spaces = max(props['capacity'] - props['occupied'], 0)
+                props['availability'] = (
+                    f"{open_spaces} of {props['capacity']} spaces open"
+                )
+            features.append({
+                'type': 'Feature',
+                'geometry': {'type': 'Point', 'coordinates': [lon, lat]},
+                'properties': props,
+            })
+        body = json.dumps({'type': 'FeatureCollection', 'features': features})
+        _garages_cache['epoch'] = time.time()
+        _garages_cache['body'] = body
+        return Response(
+            body,
+            media_type='application/geo+json',
+            headers={'Cache-Control': 'no-store'},
+        )
+
     @app.get('/map-layers/{layer_id}.geojson')
     def map_layer_geojson(
         layer_id: str,
@@ -2902,7 +3247,8 @@ def init_app(app):
             return JSONResponse({'error': f"Unknown layer '{layer_id}'."}, status_code=404)
 
         # Viewport query: ?bbox=minlon,minlat,maxlon,maxlat&zoom=14
-        if bbox:
+        # (builder layers have no single source table — serve the full layer)
+        if bbox and not LAYERS[layer_id].get('builder'):
             try:
                 minlon, minlat, maxlon, maxlat = (float(v) for v in bbox.split(','))
             except Exception:
@@ -2932,6 +3278,77 @@ def init_app(app):
 
         _CACHE[layer_id] = (time.time(), json_str)
         return Response(json_str, media_type='application/geo+json')
+
+    @app.post('/map-layers/submit-point')
+    async def submit_point(
+        request: Request,
+        category: str = Form(''),
+        name: str = Form(''),
+        comment: str = Form(''),
+        lat: float = Form(None),
+        lon: float = Form(None),
+        photo: UploadFile = File(None),
+    ):
+        """A missing point on the map (bike rack, repair station...), submitted
+        by a rider. Anonymous by design; moderated before anything downstream."""
+        category = (category or '').strip().lower()
+        if category not in SUBMISSION_CATEGORIES:
+            return JSONResponse(
+                {'error': f"Expected category from {', '.join(SUBMISSION_CATEGORIES)}."},
+                status_code=400,
+            )
+        if (
+            lat is None or lon is None
+            or not (math.isfinite(lat) and math.isfinite(lon))
+            or not (-90.0 <= lat <= 90.0)
+            or not (-180.0 <= lon <= 180.0)
+        ):
+            return JSONResponse({'error': 'A valid location is required.'}, status_code=400)
+        if not (name or '').strip() and not (comment or '').strip():
+            return JSONResponse(
+                {'error': 'Give the spot a name or a short description.'},
+                status_code=400,
+            )
+        client = request.client
+        if _submit_rate_limited(client.host if client else None):
+            return JSONResponse(
+                {'error': 'Too many submissions — please try again later.'},
+                status_code=429,
+            )
+        rec_id = uuid.uuid4().hex
+        photo_filename = None
+        if photo is not None and photo.filename:
+            ext = Path(photo.filename).suffix or '.jpg'
+            photo_filename = f'{rec_id}{ext}'
+            photo_path = _photos_dir() / photo_filename
+            written = 0
+            with open(photo_path, 'wb') as out:
+                while chunk := photo.file.read(256 * 1024):
+                    written += len(chunk)
+                    if written > SUBMIT_MAX_PHOTO_BYTES:
+                        break
+                    out.write(chunk)
+            if written > SUBMIT_MAX_PHOTO_BYTES:
+                photo_path.unlink(missing_ok=True)
+                return JSONResponse(
+                    {'error': 'Photo is too large (8 MB max).'},
+                    status_code=413,
+                )
+        SUBMISSION_PIPE.sync(
+            [{
+                'id': rec_id,
+                'category': category,
+                'name': (name or '').strip()[:200] or None,
+                'comment': (comment or '').strip()[:2000] or None,
+                'lat': lat,
+                'lon': lon,
+                'photo_filename': photo_filename,
+                'ip': client.host if client else None,
+                'user_agent': request.headers.get('user-agent'),
+            }],
+            blocking=False,
+        )
+        return JSONResponse({'ok': True, 'id': rec_id})
 
     @app.get('/map-layers/route')
     def map_layers_route(

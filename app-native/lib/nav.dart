@@ -44,6 +44,9 @@ class RouteStep {
   /// How much of [distanceM] is missing that infrastructure.
   final double warnM;
 
+  /// Feet of ascent within this step (0 when flat or unknown).
+  final int climbFt;
+
   RouteStep({
     required this.maneuver,
     required this.instruction,
@@ -52,6 +55,7 @@ class RouteStep {
     required this.startIndex,
     this.warn,
     this.warnM = 0.0,
+    this.climbFt = 0,
   });
 
   factory RouteStep.fromJson(Map<String, dynamic> j) => RouteStep(
@@ -62,7 +66,15 @@ class RouteStep {
         startIndex: (j['start_index'] as num?)?.toInt() ?? 0,
         warn: j['warn']?.toString(),
         warnM: (j['warn_m'] as num?)?.toDouble() ?? 0.0,
+        climbFt: (j['climb_ft'] as num?)?.round() ?? 0,
       );
+
+  /// A climb worth flagging on this step: steeper than ~8% (ADA's 1:12) over
+  /// more than sampling noise (8 ft — mirrors the server's noise gate).
+  bool get isSteepClimb =>
+      climbFt >= 8 &&
+      distanceM > 0 &&
+      (climbFt / 3.28084) / distanceM > 0.08;
 
   IconData get icon {
     switch (maneuver) {
@@ -219,6 +231,10 @@ class NavRoute {
   final double durationMin;
   /// Total ascent over the trip, in feet. 0 when the router had no elevation.
   final int climbFt;
+
+  /// [distance_from_start_m, elevation_ft] samples for the preview sparkline,
+  /// or null when the router had no elevation for this trip.
+  final List<List<double>>? elevationProfile;
   /// The rider said they are on an e-bike, so the pace and hill cost reflect it.
   final bool ebike;
   final String mode; // bike | walk | roll | transit | bcycle
@@ -255,6 +271,7 @@ class NavRoute {
     required this.distanceM,
     required this.durationMin,
     required this.climbFt,
+    required this.elevationProfile,
     required this.ebike,
     required this.mode,
     required this.transitRoute,
@@ -296,6 +313,13 @@ class NavRoute {
           (cumulative.isEmpty ? 0.0 : cumulative.last),
       durationMin: (props['duration_min'] as num?)?.toDouble() ?? 0.0,
       climbFt: (props['climb_ft'] as num?)?.round() ?? 0,
+      elevationProfile: (props['elevation_profile'] is List &&
+              (props['elevation_profile'] as List).length >= 2)
+          ? [
+              for (final p in props['elevation_profile'] as List)
+                [(p[0] as num).toDouble(), (p[1] as num).toDouble()],
+            ]
+          : null,
       ebike: props['ebike'] == true,
       mode: mode,
       transitRoute: props['route']?.toString(),

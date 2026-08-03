@@ -226,6 +226,71 @@ class TestStressTolerance(RouteGraphTestCase):
         self.assertNotIn('no_bike_lane', kinds['direct'])
 
 
+class TestSrtBias(RouteGraphTestCase):
+    """The Swamp Rabbit Trail is the backbone: a bike route should take the
+    trail even when it is substantially longer than a calm direct street.
+
+    Geometry: a straight low-stress street A -> C, and an SRT dogleg
+    A -> B -> C about 2.65x as long. With the pre-v0.6.0 srt factor (0.4) the
+    street wins (0.4 x 2.65 > 1.0); with the biased factor (0.28) the trail
+    wins. This test is the pin on that bias.
+    """
+
+    A = (34.8500, -82.4000)
+    B = (34.8530, -82.4090)
+    C = (34.8560, -82.4000)
+
+    def _rows(self):
+        return [
+            (_line(self.A, self.C), 'L', 'CALM ST', True),
+            (_line(self.A, self.B), 'srt', 'SWAMP RABBIT TRAIL', False),
+            (_line(self.B, self.C), 'srt', 'SWAMP RABBIT TRAIL', False),
+        ]
+
+    def test_a_bike_prefers_the_trail(self):
+        graph = self._graph(self._rows())
+        feature = self._route(graph, self.A, self.C, mode='bike:balanced')
+        names = {s['name'] for s in feature['properties']['steps'] if s['name']}
+        self.assertIn('Swamp Rabbit Trail', names)
+
+    def test_walking_still_takes_the_direct_street(self):
+        """The walking bias is milder (0.55): a 2.65x detour is too far to
+        walk for the trail, so the direct street should still win."""
+        graph = self._graph(self._rows())
+        feature = self._route(graph, self.A, self.C, mode='walk')
+        names = {s['name'] for s in feature['properties']['steps'] if s['name']}
+        self.assertIn('Calm St', names)
+
+
+class TestElevationProfile(RouteGraphTestCase):
+    """The route feature carries `elevation_profile` for the app's preview
+    sparkline: [distance_from_start_m, elevation_ft] per leg boundary."""
+
+    A = (34.8500, -82.4000)
+    HILL = (34.8530, -82.4000)
+    ELEV = {A: 900.0, HILL: 1100.0}
+
+    def _rows(self):
+        return [(_line(self.A, self.HILL), 'L', 'HILL ST', True)]
+
+    def test_profile_spans_the_climb(self):
+        graph = self._graph(self._rows(), elevation=self.ELEV)
+        feature = self._route(graph, self.A, self.HILL, mode='bike:balanced')
+        profile = feature['properties']['elevation_profile']
+        self.assertIsNotNone(profile)
+        self.assertGreaterEqual(len(profile), 2)
+        dists = [p[0] for p in profile]
+        self.assertEqual(dists, sorted(dists), "distances must ascend")
+        elevs = [p[1] for p in profile]
+        self.assertAlmostEqual(elevs[0], 900.0, delta=10)
+        self.assertAlmostEqual(elevs[-1], 1100.0, delta=10)
+
+    def test_no_elevation_means_no_profile(self):
+        graph = self._graph(self._rows(), elevation=None)
+        feature = self._route(graph, self.A, self.HILL, mode='bike:balanced')
+        self.assertIsNone(feature['properties']['elevation_profile'])
+
+
 class TestEbike(RouteGraphTestCase):
     A = (34.8500, -82.4000)
     B = (34.8560, -82.4000)

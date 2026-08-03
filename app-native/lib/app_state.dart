@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart' show setEquals;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -33,6 +35,8 @@ class AppState extends ChangeNotifier {
   static const _kBcycle = 'bcycle';
   static const _kEbike = 'ebike';
   static const _kStress = 'stress';
+  static const _kRecents = 'recent_searches';
+  static const _maxRecents = 8;
 
   Set<TravelMode> _modes = {TravelMode.cyclist};
   bool _roll = false;
@@ -114,6 +118,10 @@ class AppState extends ChangeNotifier {
         (s) => s.name == savedStress,
         orElse: () => BikeStress.balanced,
       );
+      _recents = [
+        for (final s in prefs.getStringList(_kRecents) ?? <String>[])
+          Map<String, dynamic>.from(jsonDecode(s) as Map),
+      ];
       notifyListeners();
     } catch (_) {
       // Preferences are a convenience; defaults are perfectly usable.
@@ -144,6 +152,43 @@ class AppState extends ChangeNotifier {
     final next = {..._modes};
     if (!next.remove(m)) next.add(m);
     setModes(next);
+  }
+
+  /// One pill, tapped repeatedly, cycles: off → base → variant → off.
+  ///
+  /// Bike: off → Bike → E-bike → off. Walk: off → Walk → Roll → off. Bus has
+  /// no variant, so it's a plain toggle. The variant resets on the way out, so
+  /// re-selecting always starts at the base mode. The last remaining mode
+  /// never deselects (nothing to route with an empty selection) — its cycle
+  /// just wraps back to the base variant.
+  void cyclePill(TravelMode m) {
+    if (!_modes.contains(m)) {
+      _modes = {..._modes, m};
+      notifyListeners();
+      _save();
+      return;
+    }
+    final isLast = _modes.length == 1;
+    switch (m) {
+      case TravelMode.cyclist:
+        if (!_useEbike) {
+          _useEbike = true;
+        } else {
+          _useEbike = false;
+          if (!isLast) _modes = {..._modes}..remove(m);
+        }
+      case TravelMode.pedestrian:
+        if (!_roll) {
+          _roll = true;
+        } else {
+          _roll = false;
+          if (!isLast) _modes = {..._modes}..remove(m);
+        }
+      case TravelMode.transit:
+        if (!isLast) _modes = {..._modes}..remove(m);
+    }
+    notifyListeners();
+    _save();
   }
 
   /// Back-compat single-mode setter (feature sheets that route one way).
@@ -188,4 +233,40 @@ class AppState extends ChangeNotifier {
   }
 
   bool overrideFor(LayerDef def) => _overrides[def.id] ?? def.defaultOn;
+
+  // ---------------------------------------------------------- recent searches
+
+  /// Places the user has actually picked from search results, newest first —
+  /// so a cleared route is two taps to bring back. Each entry is the search
+  /// result map (`label`, `sublabel`, `lat`, `lon`).
+  List<Map<String, dynamic>> _recents = [];
+
+  List<Map<String, dynamic>> get recentSearches => _recents;
+
+  void addRecentSearch(Map<String, dynamic> result) {
+    final lat = (result['lat'] as num?)?.toDouble();
+    final lon = (result['lon'] as num?)?.toDouble();
+    final label = result['label']?.toString() ?? '';
+    if (lat == null || lon == null || label.isEmpty) return;
+    final entry = {
+      'label': label,
+      'sublabel': result['sublabel']?.toString() ?? '',
+      'lat': lat,
+      'lon': lon,
+    };
+    _recents = [
+      entry,
+      ..._recents.where((r) => r['label'] != label),
+    ].take(_maxRecents).toList();
+    notifyListeners();
+    _saveRecents();
+  }
+
+  Future<void> _saveRecents() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(
+          _kRecents, _recents.map(jsonEncode).toList());
+    } catch (_) {}
+  }
 }

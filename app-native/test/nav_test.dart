@@ -201,6 +201,65 @@ void main() {
     expect(m('straight').warn, isNull);
   });
 
+  test('elevation profile and per-step climb parse', () {
+    final route = NavRoute.fromFeature({
+      'geometry': {
+        'type': 'LineString',
+        'coordinates': [
+          [-82.40, 34.85],
+          [-82.40, 34.86],
+        ],
+      },
+      'properties': {
+        'climb_ft': 120,
+        'elevation_profile': [
+          [0, 900],
+          [500.5, 980],
+          [1100, 1020],
+        ],
+        'steps': [
+          {
+            'maneuver': 'depart',
+            'instruction': 'Head north',
+            'distance_m': 100.0,
+            'start_index': 0,
+            'climb_ft': 40,
+          },
+        ],
+      },
+    });
+    expect(route.elevationProfile, isNotNull);
+    expect(route.elevationProfile!.length, 3);
+    expect(route.elevationProfile![1][0], 500.5);
+    expect(route.steps.first.climbFt, 40);
+    expect(route.steps.first.isSteepClimb, isTrue,
+        reason: '40 ft over 100 m is a 12% grade');
+  });
+
+  test('no elevation profile stays null and flat steps are not steep', () {
+    final route = NavRoute.fromFeature({
+      'geometry': {
+        'type': 'LineString',
+        'coordinates': [
+          [-82.40, 34.85],
+          [-82.40, 34.86],
+        ],
+      },
+      'properties': {
+        'steps': [
+          {
+            'maneuver': 'depart',
+            'instruction': 'Head north',
+            'distance_m': 100.0,
+            'start_index': 0,
+          },
+        ],
+      },
+    });
+    expect(route.elevationProfile, isNull);
+    expect(route.steps.first.isSteepClimb, isFalse);
+  });
+
   test('distances format imperially', () {
     expect(formatDistance(30), '100 ft');
     expect(formatDistance(1609.344), '1.0 mi');

@@ -1,6 +1,6 @@
 # Handoff — work continues on host `omega` (repo at `~/projects/bikewalkgreenville`)
 
-Updated 2026-08-01 (sixth session on omega). Read this + `DATA.md` before touching anything.
+Updated 2026-08-02 (seventh session on omega). Read this + `DATA.md` before touching anything.
 
 ## ⚠️ Repo is PUBLIC on GitHub
 
@@ -15,6 +15,59 @@ Updated 2026-08-01 (sixth session on omega). Read this + `DATA.md` before touchi
 - **Prod jobs registered** inside `mrsm-api-bwg-1`: `transit` (daily GTFS sync) and `bike-parking` (daily Overpass sync), alongside `annex-watch`, `trails-output`, `duke`, `who-owns-the-roads`, `parking`. Both verified running with successful first syncs (`mrsm show logs <job>`).
 - **walk-audit config** moved off env vars onto Meerschaum config (`plugins:walk-audit:{smtp,notify}`). Prod values live in the container volume at `/meerschaum/config/plugins.json` (chmod 600); the `/meerschaum/.env` hack has been **deleted**.
 - `WalkAudit.reports` is empty (the deploy-check row was removed).
+
+### Shipped 2026-08-02 (seventh session) — map-layers v0.6.0, app v1.6.0+36
+
+Nav overhaul + new layers + submissions. Design doc:
+`docs/superpowers/specs/2026-08-02-nav-layers-ux-design.md`. Reviewed by Codex
+(8 findings; 7 fixed — route-shadowing of the garages endpoint, NaN 500s,
+notification cancel race, stale-route race on rapid pill taps, gesture
+detection rework to distance-based, submit-point rate limit + 8 MB photo cap +
+coordinate validation; the 8th is the composite-plan elevation gap below).
+
+1. **Navigation usable**: follow camera throttled to ≤1/800 ms with 600 ms
+   animations (was: a queued 900 ms animation per GPS fix — the jitter). User
+   pan detaches the camera (detected by DISTANCE from the rider, >120 m, not
+   by timing — follow animations overlap any time window); a **Re-center**
+   chip re-attaches. Ongoing silent notification (`flutter_local_notifications`,
+   `NavNotifier`, ops serialized) shows next turn + distance + ETA; updated on
+   step change or 15 s; POST_NOTIFICATIONS added; gradle got core-library
+   desugaring. Full background/foreground-service nav deliberately NOT done
+   (manifest still strips FOREGROUND_SERVICE_LOCATION for Play review).
+2. **SRT bias**: srt factors bike 0.28 balanced / 0.2 quiet / 0.4 direct,
+   walk 0.55, roll 0.5. `balanced` no longer byte-reproduces v0.5.0 routes
+   (traffic weights unchanged, trail discount deeper). Tests pin the
+   trail-over-parallel-street choice both ways (bike takes it, walk doesn't).
+3. **Pill cycle**: tapping a selected mode pill cycles Bike→E-bike→off /
+   Walk→Roll→off (AppState.cyclePill; SegmentedButton `emptySelectionAllowed`
+   is how "tapped the last selected pill" is detected — the empty set is never
+   applied). Last mode never deselects; variants reset on the way out.
+4. **New layers**: `bike-businesses` (curated list in map-layers.py, default
+   ON), `parking-garages` live occupancy (per Bennett: reads the cached
+   `Parking.garages_counts_map` pipe, NOT nwave directly; default off),
+   `parking-landuse` fill polygons lots-vs-garages (default off; first fill
+   layer in the app — `LayerDef.isFill` + matchProp/matchColors),
+   merged `sidewalks` layer (county ∪ city-not-near-county, 80 ft dedupe)
+   replacing the two sidewalk toggles in the app. Bus routes icon now
+   `Icons.route` (was identical to stops).
+5. **Search recents** (8, MRU, shared_preferences) shown on focus; focusing a
+   field with text re-runs the search — clearing a route no longer strands the
+   user. "Finding your route…" chip while planning (was: dead air).
+6. **Point submissions**: `/map-layers/submit-point` → `MapLayers.point_submissions`
+   + AddPointSheet ("Add a missing place here" in the map actions sheet).
+   NO usernames — shelved until Jasmine's feedback. OSM upstream = manual.
+7. **BCycle launch fix**: manifest `<queries>` (scheme `bcycle` + package
+   `com.bcycle`) — Android 11+ package visibility was why it always fell to
+   the browser; launches try `externalNonBrowserApplication` first.
+8. **Elevation preview**: `elevation_profile` from the router (plain plans),
+   sparkline in the preview (steep >8% stretches red), per-step "↑ N ft" +
+   steep-climb callouts in the steps sheet/maneuver card (client-side, from
+   per-step `climb_ft`, mirroring the server's 8 ft noise gate).
+
+Known limitations (seventh session): composite transit/BCycle plans carry
+`climb_ft` but no `elevation_profile` (the app just omits the graph); the
+in-process rate limit resets on container restart and is per-worker;
+**everything above is untested on hardware** — same warning as before.
 
 ### Shipped 2026-08-01 (sixth session) — map-layers v0.5.0, app v1.5.0+35
 

@@ -3,6 +3,8 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <!-- Android 13+: the ongoing turn-by-turn notification. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <!-- One-shot getCurrentPosition only; strip geolocator's foreground service
          so Play review doesn't require FOREGROUND_SERVICE_LOCATION justification. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" tools:node="remove"/>
@@ -52,6 +54,18 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- Package visibility (Android 11+): without these, launchUrl cannot
+             resolve the BCycle app and every deep link falls through to the
+             browser / Play Store. -->
+        <package android:name="com.bcycle"/>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="bcycle"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="https"/>
         </intent>
     </queries>
 </manifest>

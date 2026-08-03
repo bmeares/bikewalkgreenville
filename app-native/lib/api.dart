@@ -130,6 +130,36 @@ class Api {
     return Map<String, dynamic>.from(r.data);
   }
 
+  /// A missing point on the map (bike rack, repair station, fountain…).
+  /// Anonymous; the server moderates before anything is published.
+  Future<void> submitPoint({
+    required String category,
+    required String name,
+    required String comment,
+    required double lat,
+    required double lon,
+    Uint8List? photoBytes,
+    String? photoName,
+  }) async {
+    await _pin();
+    final form = FormData.fromMap({
+      'category': category,
+      'name': name,
+      'comment': comment,
+      'lat': lat,
+      'lon': lon,
+      if (photoBytes != null)
+        'photo': MultipartFile.fromBytes(photoBytes,
+            filename: photoName ?? 'photo.jpg'),
+    });
+    final r = await _dio.post('$base/map-layers/submit-point', data: form);
+    if ((r.statusCode ?? 500) >= 400 || r.data is! Map || r.data['ok'] != true) {
+      final detail = (r.data is Map) ? r.data['error'] : null;
+      throw ApiError(
+          detail?.toString() ?? 'Could not submit the place. Please try again.');
+    }
+  }
+
   Future<void> submitBikeParkingFeedback({
     required String spotName,
     required double lat,

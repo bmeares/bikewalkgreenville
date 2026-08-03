@@ -96,8 +96,16 @@ class LayerDef {
   final String label;
   final String path;
   final bool isPoint;
+
+  /// Polygon layers (parking land use) render as translucent fills.
+  final bool isFill;
   final String color; // hex, ignored when colorByStress
   final bool colorByStress;
+
+  /// Data-driven coloring: match [matchProp] against [matchColors] keys,
+  /// falling back to [color]. (Parking land use: lots vs garages.)
+  final String? matchProp;
+  final Map<String, String>? matchColors;
   final double width;
   final Set<TravelMode> modes;
   final bool defaultOn;
@@ -122,7 +130,10 @@ class LayerDef {
     required this.color,
     required this.modes,
     this.isPoint = false,
+    this.isFill = false,
     this.colorByStress = false,
+    this.matchProp,
+    this.matchColors,
     this.width = 2.5,
     this.defaultOn = true,
     this.icon = Icons.timeline,
@@ -162,20 +173,14 @@ const layerDefs = <LayerDef>[
     modes: {TravelMode.cyclist, TravelMode.pedestrian},
     icon: Icons.cruelty_free, // Material's rabbit
   ),
+  // One sidewalks layer: the server merges the county lines with the city
+  // lines that aren't the same sidewalk digitized twice (heavy overlap in
+  // city limits made two separate toggles meaningless).
   LayerDef(
-    id: 'sidewalks-city',
-    label: 'Sidewalks (city)',
-    path: '/map-layers/sidewalks-city.geojson',
+    id: 'sidewalks',
+    label: 'Sidewalks',
+    path: '/map-layers/sidewalks.geojson',
     color: '#1565C0',
-    width: 1.8,
-    modes: {TravelMode.pedestrian},
-    icon: Icons.directions_walk,
-  ),
-  LayerDef(
-    id: 'sidewalks-county',
-    label: 'Sidewalks (county)',
-    path: '/map-layers/sidewalks-county.geojson',
-    color: '#0288D1',
     width: 1.8,
     modes: {TravelMode.pedestrian},
     icon: Icons.directions_walk,
@@ -187,7 +192,8 @@ const layerDefs = <LayerDef>[
     color: '#7B1FA2',
     width: 2.5,
     modes: {TravelMode.transit},
-    icon: Icons.directions_bus,
+    // Distinct from the bus-stops icon so the layers sheet reads at a glance.
+    icon: Icons.route,
   ),
   LayerDef(
     id: 'bus-stops',
@@ -233,6 +239,46 @@ const layerDefs = <LayerDef>[
     modes: {TravelMode.cyclist},
     icon: Icons.build,
     minZoom: 11,
+  ),
+  // Places that welcome riders — curated by BWG, starting with the Swamp
+  // Rabbit Cafe & Grocery. Deliberately on by default: it's the layer that
+  // makes the map feel like Greenville's, not a generic basemap.
+  LayerDef(
+    id: 'bike-businesses',
+    label: 'Bike friendly businesses',
+    path: '/map-layers/bike-businesses.geojson',
+    color: '#00897B',
+    isPoint: true,
+    modes: {TravelMode.cyclist, TravelMode.pedestrian, TravelMode.transit},
+    icon: Icons.storefront,
+    pinScale: 1.1,
+  ),
+  // Downtown garage occupancy, refreshed from the city's counters. Off by
+  // default — it's context for a car-adjacent trip, not core to the map.
+  LayerDef(
+    id: 'parking-garages',
+    label: 'Parking garages (live)',
+    path: '/map-layers/parking-garages.geojson',
+    color: '#5C6BC0',
+    isPoint: true,
+    modes: {TravelMode.cyclist, TravelMode.pedestrian, TravelMode.transit},
+    defaultOn: false,
+    icon: Icons.garage,
+    minZoom: 12,
+    live: true,
+  ),
+  // Land use: what downtown ground is given to parking (lots vs garages).
+  LayerDef(
+    id: 'parking-landuse',
+    label: 'Parking land use',
+    path: '/map-layers/parking-landuse.geojson',
+    color: '#8D6E63',
+    isFill: true,
+    matchProp: 'kind',
+    matchColors: {'lot': '#BCAAA4', 'garage': '#6D4C41'},
+    modes: {TravelMode.cyclist, TravelMode.pedestrian, TravelMode.transit},
+    defaultOn: false,
+    icon: Icons.crop_square,
   ),
   // Community reports are the point of the app — always on, always drawn.
   LayerDef(

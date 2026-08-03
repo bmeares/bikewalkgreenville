@@ -74,7 +74,84 @@ void main() {
       expect(planIcons[key], isNotNull, reason: 'missing icon for $key');
     }
   });
+  group('pill cycle (multi-tap on a selected pill)', () {
+    test('bike cycles off -> bike -> e-bike -> off', () {
+      final state = AppState();
+      state.setModes({TravelMode.transit});
+      state.cyclePill(TravelMode.cyclist); // off -> bike
+      expect(state.modes, contains(TravelMode.cyclist));
+      expect(state.useEbike, isFalse);
+      state.cyclePill(TravelMode.cyclist); // bike -> e-bike
+      expect(state.modes, contains(TravelMode.cyclist));
+      expect(state.useEbike, isTrue);
+      state.cyclePill(TravelMode.cyclist); // e-bike -> off, variant reset
+      expect(state.modes, isNot(contains(TravelMode.cyclist)));
+      expect(state.useEbike, isFalse,
+          reason: 're-selecting later must start at the base variant');
+    });
+
+    test('walk cycles off -> walk -> roll -> off', () {
+      final state = AppState();
+      expect(state.modes, {TravelMode.cyclist});
+      state.cyclePill(TravelMode.pedestrian);
+      expect(state.modes, contains(TravelMode.pedestrian));
+      expect(state.roll, isFalse);
+      state.cyclePill(TravelMode.pedestrian);
+      expect(state.roll, isTrue);
+      state.cyclePill(TravelMode.pedestrian);
+      expect(state.modes, isNot(contains(TravelMode.pedestrian)));
+      expect(state.roll, isFalse);
+    });
+
+    test('the last mode never deselects; its cycle wraps to the base variant',
+        () {
+      final state = AppState();
+      expect(state.modes, {TravelMode.cyclist});
+      state.cyclePill(TravelMode.cyclist); // bike -> e-bike
+      expect(state.useEbike, isTrue);
+      state.cyclePill(TravelMode.cyclist); // would deselect; wraps instead
+      expect(state.modes, {TravelMode.cyclist},
+          reason: 'an empty selection has nothing to route or show');
+      expect(state.useEbike, isFalse);
+    });
+
+    test('bus is a plain toggle', () {
+      final state = AppState();
+      state.cyclePill(TravelMode.transit);
+      expect(state.modes, contains(TravelMode.transit));
+      state.cyclePill(TravelMode.transit);
+      expect(state.modes, isNot(contains(TravelMode.transit)));
+    });
+  });
+
+  group('recent searches', () {
+    test('newest first, deduped by label, capped at 8', () {
+      final state = AppState();
+      for (var i = 0; i < 10; i++) {
+        state.addRecentSearch(
+            {'label': 'Place $i', 'lat': 34.85, 'lon': -82.39});
+      }
+      expect(state.recentSearches.length, 8);
+      expect(state.recentSearches.first['label'], 'Place 9');
+      state.addRecentSearch(
+          {'label': 'Place 5', 'lat': 34.85, 'lon': -82.39});
+      expect(state.recentSearches.first['label'], 'Place 5');
+      expect(
+        state.recentSearches.where((r) => r['label'] == 'Place 5').length,
+        1,
+        reason: 're-picking a place must move it up, not duplicate it',
+      );
+    });
+
+    test('entries without a resolvable coordinate are ignored', () {
+      final state = AppState();
+      state.addRecentSearch({'label': 'Nowhere'});
+      expect(state.recentSearches, isEmpty);
+    });
+  });
+
   group('bike sub-options', () {
+
     test('default to a plain bike at balanced tolerance', () {
       final state = AppState();
       expect(state.useEbike, isFalse);
