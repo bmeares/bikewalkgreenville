@@ -72,6 +72,9 @@ class _MapScreenState extends State<MapScreen> {
   Timer? _navWatchdog;
   DateTime _lastFixAt = DateTime.fromMillisecondsSinceEpoch(0);
   bool _gpsDryToastShown = false;
+  /// Last raw fix while navigating — feeds the live speed / GPS-health line
+  /// in the trip bar, the visible proof the screen is tracking, not frozen.
+  Position? _lastNavFix;
   FlutterTts? _tts;
   bool _voice = true;
   int _spokenStep = -1;
@@ -1055,6 +1058,9 @@ class _MapScreenState extends State<MapScreen> {
     _navWatchdog?.cancel();
     _navWatchdog = Timer.periodic(const Duration(seconds: 5), (_) {
       if (!_navigating) return;
+      // Repaint so the trip bar's GPS line can go stale visibly even when no
+      // fix arrives to trigger a rebuild.
+      if (mounted) setState(() {});
       if (DateTime.now().difference(_lastFixAt) <
           const Duration(seconds: 10)) {
         return;
@@ -1148,6 +1154,7 @@ class _MapScreenState extends State<MapScreen> {
     setState(() {
       _navigating = false;
       _progress = null;
+      _lastNavFix = null;
     });
     _applyVisibility();
     final here = _map?.cameraPosition?.target;
@@ -1168,7 +1175,10 @@ class _MapScreenState extends State<MapScreen> {
     final progress = NavProgress.of(route, here);
     if (progress == null || !mounted) return;
     final advanced = progress.stepIndex != _progress?.stepIndex;
-    setState(() => _progress = progress);
+    setState(() {
+      _progress = progress;
+      _lastNavFix = pos;
+    });
     _lastNavPos = here;
     // Course-up: GPS heading while moving, else the route's own bearing —
     // which is what puts the next turn at the top of the screen from the
@@ -2301,6 +2311,7 @@ class _MapScreenState extends State<MapScreen> {
                 ),
                 Text('${formatDistance(remaining)} left',
                     style: const TextStyle(color: Colors.black54)),
+                _gpsStatusLine(),
               ],
             ),
             const Spacer(),
@@ -2321,6 +2332,23 @@ class _MapScreenState extends State<MapScreen> {
         ),
       ),
     );
+  }
+
+  /// Live "am I actually being tracked?" line: current speed + GPS accuracy
+  /// while fixes flow, a red warning once they stop. This is the motion
+  /// feedback that tells a rider the screen is navigating, not frozen.
+  Widget _gpsStatusLine() {
+    const style = TextStyle(color: Colors.black54, fontSize: 12);
+    final fix = _lastNavFix;
+    final age = DateTime.now().difference(_lastFixAt);
+    if (fix == null || age > const Duration(seconds: 8)) {
+      return const Text('GPS lost — searching…',
+          style: TextStyle(color: Colors.red, fontSize: 12));
+    }
+    final mph = fix.speed * 2.23694;
+    final accFt = fix.accuracy * 3.28084;
+    final speed = mph < 0.7 ? 'stopped' : '${mph.round()} mph';
+    return Text('$speed · GPS ±${accFt.round()} ft', style: style);
   }
 
   /// Horizontal ribbon of the turns still ahead. Scrollable, so a long trip is

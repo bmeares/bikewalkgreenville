@@ -41,9 +41,16 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <!-- geolocator's bound service is REQUIRED for getPositionStream — with
+             it removed, navigation gets one fix and then silently freezes
+             (StreamHandlerImpl bails when the service is null). Keep the
+             service but strip its foregroundServiceType: we never start it
+             foreground (no foregroundNotificationConfig), and with the
+             FOREGROUND_SERVICE_LOCATION permission removed above, Play review
+             sees no location-FGS declaration to justify. -->
         <service
             android:name="com.baseflow.geolocator.GeolocatorLocationService"
-            tools:node="remove"/>
+            tools:remove="android:foregroundServiceType"/>
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and
