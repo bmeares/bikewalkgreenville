@@ -269,6 +269,12 @@ class NavRoute {
   final String? dockStation;
   final String? rentStationUri;
 
+  /// Which alternate of this plan the server returned (`?alt=N`); 0 = the
+  /// base route. [altDistinct] is false when the Nth alternate came back
+  /// identical to the base — there is no genuinely different way.
+  final int alt;
+  final bool altDistinct;
+
   NavRoute._({
     required this.points,
     required this.steps,
@@ -293,6 +299,8 @@ class NavRoute {
     required this.rentStation,
     required this.dockStation,
     required this.rentStationUri,
+    required this.alt,
+    required this.altDistinct,
   });
 
   factory NavRoute.fromFeature(Map<String, dynamic> feature) {
@@ -348,6 +356,8 @@ class NavRoute {
       rentStation: props['rent_station']?.toString(),
       dockStation: props['dock_station']?.toString(),
       rentStationUri: props['rent_station_uri']?.toString(),
+      alt: (props['alt'] as num?)?.toInt() ?? 0,
+      altDistinct: props['alt_distinct'] != false,
     );
   }
 
@@ -356,6 +366,43 @@ class NavRoute {
   LatLng get destination => points.last;
 
   bool get isTransit => mode == 'transit';
+
+  /// "Bike" becomes "E-bike" when the rider's e-bike priced this plan — the
+  /// server's plan key and label stay plain `bike` on purpose (they name the
+  /// itinerary, not the rider's equipment).
+  String get planDisplayLabel =>
+      ebike && plan == 'bike' ? 'E-bike' : planLabel;
+
+  IconData get planIcon => ebike && plan == 'bike'
+      ? legModeIcons['ebike']!
+      : (planIcons[plan] ?? Icons.directions);
+
+  /// How the rider reaches / leaves the bus or dock on their own power.
+  /// `access_mode` can arrive as a composite profile (`ebike:direct`), so it
+  /// is reduced to a [routeLegColors] key.
+  String get footMode {
+    final a = (accessMode ?? (mode == 'roll' ? 'roll' : 'walk'))
+        .split(':')
+        .first;
+    return a == 'ebike' ? 'bike' : a;
+  }
+
+  /// The mode each step is travelled with (indexes match [steps]): the foot
+  /// or bike legs to a stop/dock, `transit` from board through alight,
+  /// `bcycle` from rent through dock. Keys match [routeLegColors].
+  List<String> stepModes() {
+    final foot = footMode;
+    var current = isTransit ? foot : (plan == 'bcycle' ? 'walk' : mode);
+    final out = <String>[];
+    for (final s in steps) {
+      if (s.maneuver == 'board' || s.maneuver == 'ride') current = 'transit';
+      if (s.maneuver == 'rent') current = 'bcycle';
+      out.add(current);
+      if (s.maneuver == 'alight') current = foot;
+      if (s.maneuver == 'dock') current = 'walk';
+    }
+    return out;
+  }
 
   /// GeoJSON for the "watch out here" overlay: one LineString per gap, drawn
   /// dashed on top of the route so a rider can see before starting exactly
@@ -385,7 +432,7 @@ class NavRoute {
   /// color of how the rider travels it — bike to the stop, bus, walk the rest.
   Map<String, dynamic> routeCollection() {
     String colorFor(String m) => routeLegColors[m] ?? routeLegColors['bike']!;
-    final foot = accessMode ?? 'walk';
+    final foot = footMode;
     // (coordinate index where a leg starts, its color)
     final cuts = <(int, String)>[];
     if (isTransit) {

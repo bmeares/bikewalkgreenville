@@ -73,6 +73,10 @@ class Api {
   /// traffic the rider will accept (`quiet` / `balanced` / `direct`). Both
   /// apply to every pedalling leg, including the ride to a bus stop. Omitting
   /// them is the server's historical behaviour.
+  ///
+  /// [alt] (with [plan] pinned to a plain bike/walk/roll plan) asks for that
+  /// plan's Nth alternate route; `alt_distinct: false` in the response means
+  /// no genuinely different way exists.
   Future<Map<String, dynamic>> route(
     double fromLat,
     double fromLon,
@@ -84,6 +88,7 @@ class Api {
     String? plan,
     bool ebike = false,
     String? stress,
+    int alt = 0,
   }) async =>
       Map<String, dynamic>.from(await _get('/map-layers/route', {
         'from': '$fromLat,$fromLon',
@@ -92,6 +97,7 @@ class Api {
         if (roll) 'roll': '1',
         if (bcycle) 'bcycle': '1',
         if (ebike) 'ebike': '1',
+        if (alt > 0) 'alt': '$alt',
         'stress': ?stress,
         'plan': ?plan,
       }));

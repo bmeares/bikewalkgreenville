@@ -62,11 +62,11 @@ class RouteGraphTestCase(unittest.TestCase):
             ml._route_source_rows = original_rows
             ml._node_elevations = original_elev
 
-    def _route(self, graph, origin, destination, mode='bike'):
+    def _route(self, graph, origin, destination, mode='bike', **kwargs):
         original = ml._get_route_graph
         ml._get_route_graph = lambda debug=False: graph
         try:
-            return ml._route_core(*origin, *destination, mode=mode)
+            return ml._route_core(*origin, *destination, mode=mode, **kwargs)
         finally:
             ml._get_route_graph = original
 
@@ -540,6 +540,78 @@ class TestModeKeyHelpers(unittest.TestCase):
                     self.assertIn(key, table)
                 self.assertIn(ml._mode_family(key), ml.CLIMB_FACTOR)
                 self.assertIn(ml._mode_family(key), ml.CLIMB_SEC_PER_M)
+
+
+class TestAlternateRoutes(RouteGraphTestCase):
+    """`?alt=N`: penalizing the previous route's edges finds the parallel
+    street when one exists, and honestly returns the same route when not."""
+
+    # Two ways east: Main St straight across, or the longer North Ave detour.
+    W = (34.8500, -82.3960)
+    E = (34.8500, -82.3900)
+    N = (34.8510, -82.3930)
+
+    def _rows(self):
+        return [
+            (_line(self.W, self.E), 'M', 'MAIN ST', True),
+            (_line(self.W, self.N), 'M', 'NORTH AVE', True),
+            (_line(self.N, self.E), 'M', 'NORTH AVE', True),
+        ]
+
+    def test_avoid_pairs_take_the_other_street(self):
+        graph = self._graph(self._rows())
+        pairs = set()
+        base = self._route(graph, self.W, self.E, pairs_out=pairs)
+        self.assertTrue(pairs, "the base route should report its node pairs")
+        alt = self._route(graph, self.W, self.E, avoid_pairs=pairs)
+        self.assertNotEqual(
+            base['geometry']['coordinates'], alt['geometry']['coordinates'],
+            "with Main St penalized, the route should take North Ave",
+        )
+        base_names = {s['name'] for s in base['properties']['steps'] if s.get('name')}
+        alt_names = {s['name'] for s in alt['properties']['steps'] if s.get('name')}
+        self.assertIn('Main St', base_names)
+        self.assertIn('North Ave', alt_names)
+        self.assertNotIn('Main St', alt_names)
+        self.assertGreater(
+            alt['properties']['distance_m'], base['properties']['distance_m'],
+            "the alternate exists because it lost on distance the first time",
+        )
+
+    def test_compute_plan_marks_a_distinct_alternate(self):
+        graph = self._graph(self._rows())
+        original = ml._get_route_graph
+        ml._get_route_graph = lambda debug=False: graph
+        ml._ROUTE_CACHE.clear()
+        try:
+            base = ml._compute_plan('bike', *self.W, *self.E)
+            alt = ml._compute_plan('bike', *self.W, *self.E, alt=1)
+        finally:
+            ml._get_route_graph = original
+            ml._ROUTE_CACHE.clear()
+        self.assertNotIn('alt', base['properties'])
+        self.assertEqual(alt['properties']['alt'], 1)
+        self.assertTrue(alt['properties']['alt_distinct'])
+        self.assertNotEqual(
+            base['geometry']['coordinates'], alt['geometry']['coordinates'],
+        )
+
+    def test_no_alternative_is_disclosed_not_invented(self):
+        # Only Main St exists: the "alternate" is the same route, and says so.
+        graph = self._graph([(_line(self.W, self.E), 'M', 'MAIN ST', True)])
+        original = ml._get_route_graph
+        ml._get_route_graph = lambda debug=False: graph
+        ml._ROUTE_CACHE.clear()
+        try:
+            base = ml._compute_plan('bike', *self.W, *self.E)
+            alt = ml._compute_plan('bike', *self.W, *self.E, alt=1)
+        finally:
+            ml._get_route_graph = original
+            ml._ROUTE_CACHE.clear()
+        self.assertFalse(alt['properties']['alt_distinct'])
+        self.assertEqual(
+            base['geometry']['coordinates'], alt['geometry']['coordinates'],
+        )
 
 
 if __name__ == '__main__':

@@ -833,6 +833,7 @@ class _MapScreenState extends State<MapScreen> {
     TripEndpoint? from,
     TripEndpoint? to,
     String? plan,
+    int alt = 0,
     bool silent = false,
   }) async {
     final state = context.read<AppState>();
@@ -869,6 +870,7 @@ class _MapScreenState extends State<MapScreen> {
         ebike: state.useEbike,
         stress: state.stressApiName,
         plan: plan,
+        alt: alt,
       );
       // A newer plan superseded this one while it was in flight.
       if (seq != _planSeq) return;
@@ -890,6 +892,12 @@ class _MapScreenState extends State<MapScreen> {
         _place = null;
       });
       if (!_navigating) await _fitRoute(route);
+      // The rider asked for a different route and there isn't one — say so
+      // rather than silently redrawing the same line.
+      if (mounted && alt > 0 && !route.altDistinct) {
+        toast(context, 'No genuinely different route found — '
+            'this is the practical way.');
+      }
     } on Exception catch (e) {
       if (!mounted || seq != _planSeq) return;
       setState(() => _routing = _navRoute != null);
@@ -1867,13 +1875,17 @@ class _MapScreenState extends State<MapScreen> {
         : (route.plan == 'bcycle'
             ? hexColor(bcycleRed)
             : const Color(0xFF1565C0));
-    final subtitle = route.isTransit && route.transitRoute != null
+    final base = route.isTransit && route.transitRoute != null
         ? 'Greenlink Route ${route.transitRoute}'
             '${route.boardStop != null ? ' · board at ${route.boardStop}' : ''}'
         : (route.plan == 'bcycle' && route.rentStation != null
             ? 'BCycle from ${route.rentStation}'
-            : (route.planLabel.isNotEmpty ? route.planLabel : 'Route'));
-    final icon = planIcons[route.plan] ?? Icons.directions;
+            : (route.planDisplayLabel.isNotEmpty
+                ? route.planDisplayLabel
+                : 'Route'));
+    final subtitle =
+        route.alt > 0 ? '$base · alternate route ${route.alt}' : base;
+    final icon = route.planIcon;
     // Tiny infrastructure gaps stay quiet (threshold in Settings); the hill
     // disclosure is computed client-side from the elevation profile.
     final warnings =
@@ -1885,7 +1897,8 @@ class _MapScreenState extends State<MapScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (route.alternatives.isNotEmpty) _alternativesRow(route),
+          if (route.alternatives.isNotEmpty || _canAlt(route))
+            _alternativesRow(route),
           if (route.fallbackNote != null ||
               warnings.isNotEmpty ||
               hillNote != null)
@@ -2024,8 +2037,16 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  /// The other itineraries the router costed — one tap swaps to them.
-  Widget _alternativesRow(NavRoute route) => Padding(
+  /// Alternate routes only make sense for plain plans: a transit or BCycle
+  /// itinerary's shape is fixed by the stop/dock locations, not street choice.
+  bool _canAlt(NavRoute route) =>
+      const {'bike', 'walk', 'roll'}.contains(route.plan);
+
+  /// The other itineraries the router costed — one tap swaps to them — plus
+  /// "Different route" to ask for another way with the same plan.
+  Widget _alternativesRow(NavRoute route) {
+    final ebike = context.read<AppState>().useEbike;
+    return Padding(
         padding: const EdgeInsets.only(bottom: 6),
         child: SizedBox(
           height: 38,
@@ -2036,18 +2057,37 @@ class _MapScreenState extends State<MapScreen> {
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
                   child: ActionChip(
-                    avatar: Icon(planIcons[alt.plan] ?? Icons.directions,
+                    // The alt was costed with the rider's e-bike too; the
+                    // server's label stays plain "Bike" on purpose.
+                    avatar: Icon(
+                        ebike && alt.plan == 'bike'
+                            ? legModeIcons['ebike']!
+                            : (planIcons[alt.plan] ?? Icons.directions),
                         size: 18),
                     label: Text(
-                        '${alt.label} · ${formatDuration(alt.durationMin)}'),
+                        '${ebike && alt.plan == 'bike' ? 'E-bike' : alt.label}'
+                        ' · ${formatDuration(alt.durationMin)}'),
                     backgroundColor: Colors.white,
                     onPressed: () => _planTrip(plan: alt.plan),
+                  ),
+                ),
+              if (_canAlt(route))
+                ActionChip(
+                  avatar: const Icon(Icons.alt_route, size: 18),
+                  label: Text(
+                      route.alt > 0 ? 'Another route' : 'Different route'),
+                  backgroundColor: Colors.white,
+                  // Cycle through up to 3 alternates, then back to the base.
+                  onPressed: () => _planTrip(
+                    plan: route.plan,
+                    alt: route.alt >= 3 ? 0 : route.alt + 1,
                   ),
                 ),
             ],
           ),
         ),
       );
+  }
 
   /// Turn-by-turn top chrome: maneuver card + the upcoming-turns strip.
   /// (The trip bar renders in the shared bottom overlay — see build().)
@@ -2316,7 +2356,8 @@ class _MapScreenState extends State<MapScreen> {
                   Text(
                     '${formatDistance(route.distanceM)} · '
                     '${formatDuration(route.durationMin)}'
-                    '${route.planLabel.isNotEmpty ? ' · ${route.planLabel}' : ''}',
+                    '${route.planDisplayLabel.isNotEmpty ? ' · ${route.planDisplayLabel}' : ''}'
+                    '${route.alt > 0 ? ' · alternate ${route.alt}' : ''}',
                     style: Theme.of(ctx).textTheme.titleMedium,
                   ),
                   if (route.fallbackNote != null)
@@ -2357,13 +2398,19 @@ class _MapScreenState extends State<MapScreen> {
                 ],
               ),
             ),
-            for (var i = 0; i < route.steps.length; i++)
+            // Maneuver icons are tinted by the mode of travel for that step
+            // (bike blue, walk teal, bus purple, BCycle red — the same colors
+            // as the route line's legs), so a multi-modal itinerary reads as
+            // "these turns are on the bike, these are the bus". Missing
+            // infrastructure stays disclosed in the red subtitle line.
+            for (final (i, stepMode) in route.stepModes().indexed)
               ListTile(
                 dense: true,
                 leading: Icon(route.steps[i].icon,
                     color: i < current
                         ? Colors.black26
-                        : (route.steps[i].warn != null ? warnRed : brandGreen)),
+                        : hexColor(routeLegColors[stepMode] ??
+                            routeLegColors['bike']!)),
                 title: Text(
                   route.steps[i].instruction,
                   style: TextStyle(

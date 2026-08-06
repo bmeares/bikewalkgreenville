@@ -17,7 +17,46 @@ Updated 2026-08-06 (eighth session, Bennett's laptop — paused mid-stream, see
 - **walk-audit config** moved off env vars onto Meerschaum config (`plugins:walk-audit:{smtp,notify}`). Prod values live in the container volume at `/meerschaum/config/plugins.json` (chmod 600); the `/meerschaum/.env` hack has been **deleted**.
 - `WalkAudit.reports` is empty (the deploy-check row was removed).
 
-### ⚠️ IN FLIGHT 2026-08-06 (eighth session) — app v1.7.0+38 (BUILT + SIGNED on omega), map-layers v0.7.0 (DEPLOYED)
+### 2026-08-06 late (ninth session, omega) — app v1.8.0+39 (BUILT + SIGNED), map-layers v0.8.0 (DEPLOYED + curl-verified)
+
+Bennett's follow-up feedback on the multi-modal work, all implemented, tested
+(`flutter analyze` clean, `flutter test` 58/58, Python tests 34/34), built
+(signed APK + AAB, versionCode 39, SRA key `537F9A88…A843`) — but, as ever,
+**not device-verified** (no phone on omega).
+
+1. **Alternate routes** (the new feature). Backend `?alt=N` (1–3, `plan`
+   pinned to bike/walk/roll): penalty-method k-shortest — each pass re-runs
+   A* with the previous passes' edges costing `ALT_AVOID_FACTOR` (1.5×);
+   virtual terminus edges are never penalized (would just degrade the snap).
+   `alt_distinct: false` discloses "no genuinely different way" instead of
+   inventing a detour. Composite transit/BCycle plans ignore `alt` (shape is
+   fixed by stops/docks). Verified live on the 101 N Main → Rutherford Rd
+   trip: alt 0/1/2 = three distinct geometries (3.5 / 4.14 / 3.22 mi), sane
+   durations; one-block trip honestly returns `alt_distinct: false`. Cost:
+   N+1 plain A* passes (~40 ms each) — nothing for the VPS. App: "Different
+   route" chip in the alternatives row (only for plain plans), cycles alt
+   1→2→3→base; toast when the alternate came back identical; "· alternate N"
+   marker in the preview subtitle + steps-sheet header. Reroute during nav
+   deliberately returns to the base route (old avoid-pairs are meaningless
+   from a new position).
+2. **Thematic line layers subdued** so the route line owns the screen
+   (Bennett: "far too many colors"): bus-routes opacity 0.45/width 2.2
+   (faintest — per-route colors made the worst tangle), bike-lanes 0.55,
+   bike-stress 0.6, srt 0.65 (sidewalks already 0.5). Route line unchanged
+   (white casing 8 + color 5 reads fine over the faded context).
+3. **E-bike labelling**: preview banner icon/word and steps-sheet header now
+   say "E-bike" (`Icons.electric_bike`) when the plan was priced for one
+   (`NavRoute.planDisplayLabel` / `planIcon` — server keeps plan key + label
+   plain `bike` on purpose; alternatives chips relabel via
+   `AppState.useEbike`).
+4. **Steps sheet colors steps by mode**: maneuver icon tinted with the leg's
+   `routeLegColors` color (bike blue / walk teal / bus purple / BCycle red)
+   via `NavRoute.stepModes()` (walks the board/alight + rent/dock maneuvers;
+   composite `access_mode` profiles like `ebike:direct` normalize via
+   `footMode`). Warn-red icon dropped — missing infrastructure still
+   disclosed by the red subtitle line + dashed map spans.
+
+### Superseded 2026-08-06 (eighth session) — app v1.7.0+38, map-layers v0.7.0
 
 Bennett is demoing to executive director **Jasmine Vanadore in a few days** —
 this session's goal is production-ready navigation. Work was paused on the
@@ -138,8 +177,22 @@ device-verified yet**.
 
 1. **Device testing** (needs the phone — Bennett will drive): checklist
    below. Sideload: `adb install -r app-release.apk` (release-over-release
-   upgrades in place since versionCode rose to 38).
+   upgrades in place since versionCode rose to 39).
 2. Play upload when Bennett says go (see item 6 of the older list below).
+
+#### Device test checklist (v1.8.0+39; the v1.7 items below still apply)
+
+- Route with Bike selected → "Different route" chip next to the alternatives
+  chips → tap: new line drawn, subtitle says "· alternate route 1"; tap
+  through 2, 3, then back to the base. On a one-block trip: toast "No
+  genuinely different route found".
+- E-bike toggled on → preview bottom-left says "E-bike" with the electric
+  bike icon (not "Bike"); steps-sheet header too; the Bike alternatives chip
+  relabels.
+- Bike + Bus route → steps sheet: bike-leg maneuver icons blue, bus steps
+  purple, walk steps teal.
+- Bus routes / bike lanes / SRT / bike stress layers on + a multi-modal
+  route drawn → route line clearly dominant, layers read as faded context.
 
 #### Device test checklist (v1.7.0+38)
 

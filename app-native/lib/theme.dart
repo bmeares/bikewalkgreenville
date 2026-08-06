@@ -66,6 +66,17 @@ const planIcons = {
   'bike-transit': Icons.directions_bus,
 };
 
+/// Icon per travel-leg mode (steps sheet, the e-bike relabel). Keys match
+/// [routeLegColors].
+const legModeIcons = <String, IconData>{
+  'bike': Icons.directions_bike,
+  'ebike': Icons.electric_bike,
+  'walk': Icons.directions_walk,
+  'roll': Icons.accessible_forward,
+  'transit': Icons.directions_bus,
+  'bcycle': Icons.pedal_bike,
+};
+
 /// Stretches of a route that lack the infrastructure the mode needs, drawn in
 /// this colour and called out in a banner. Not a "bad route" — a disclosure.
 const warnRed = Color(0xFFD32F2F);
@@ -168,6 +179,10 @@ class LayerDef {
   });
 }
 
+// Thematic LINE layers all render below 0.7 opacity (sidewalks fainter
+// still): they are context, and at full strength a multi-modal route line —
+// itself several colors — disappeared into the Greenlink purples and bike-lane
+// greens drawn under it.
 const layerDefs = <LayerDef>[
   LayerDef(
     id: 'bike-stress',
@@ -176,6 +191,7 @@ const layerDefs = <LayerDef>[
     color: '#1a9850',
     colorByStress: true,
     width: 2.0,
+    opacity: 0.6,
     modes: {TravelMode.cyclist},
     defaultOn: false,
     icon: Icons.speed,
@@ -185,7 +201,8 @@ const layerDefs = <LayerDef>[
     label: 'Bike lanes & sharrows',
     path: '/map-layers/bike-lanes.geojson',
     color: '#2E7D32',
-    width: 3.0,
+    width: 2.5,
+    opacity: 0.55,
     modes: {TravelMode.cyclist},
     icon: Icons.directions_bike,
   ),
@@ -194,7 +211,8 @@ const layerDefs = <LayerDef>[
     label: 'Prisma Health Swamp Rabbit Trail',
     path: '/map-layers/srt.geojson',
     color: '#FF6F00',
-    width: 3.5,
+    width: 3.0,
+    opacity: 0.65,
     modes: {TravelMode.cyclist, TravelMode.pedestrian},
     icon: Icons.cruelty_free, // Material's rabbit
   ),
@@ -218,7 +236,10 @@ const layerDefs = <LayerDef>[
     label: 'Greenlink bus routes',
     path: '/map-layers/bus-routes.geojson',
     color: '#7B1FA2',
-    width: 2.5,
+    width: 2.2,
+    // Faintest of the colored lines: every Greenlink route has its own color,
+    // and at full strength the tangle drowned out a multi-modal route line.
+    opacity: 0.45,
     modes: {TravelMode.transit},
     // Distinct from the bus-stops icon so the layers sheet reads at a glance.
     icon: Icons.route,

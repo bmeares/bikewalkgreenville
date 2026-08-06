@@ -410,6 +410,111 @@ void main() {
     });
   });
 
+  group('per-step modes (the steps sheet coloring)', () {
+    test('a plain route travels every step in its own mode', () {
+      final route = NavRoute.fromFeature(_feature());
+      expect(route.stepModes(), ['bike', 'bike', 'bike']);
+    });
+
+    test('a transit itinerary switches at board and alight', () {
+      final f = _feature();
+      final props = f['properties'] as Map<String, dynamic>;
+      props['mode'] = 'transit';
+      props['access_mode'] = 'bike';
+      props['steps'] = <dynamic>[...props['steps'] as List]..insertAll(1, [
+        {'maneuver': 'board', 'instruction': 'Board', 'start_index': 1},
+        {'maneuver': 'ride', 'instruction': 'Ride', 'start_index': 1},
+        {'maneuver': 'alight', 'instruction': 'Get off', 'start_index': 2},
+      ]);
+      final route = NavRoute.fromFeature(f);
+      // depart(bike) board(transit) ride(transit) alight(transit) then back
+      // on the bike for the last turn and the arrival.
+      expect(route.stepModes(),
+          ['bike', 'transit', 'transit', 'transit', 'bike', 'bike']);
+    });
+
+    test('a composite access profile still colors as a bike', () {
+      final f = _feature();
+      final props = f['properties'] as Map<String, dynamic>;
+      props['mode'] = 'transit';
+      props['access_mode'] = 'ebike:direct';
+      final route = NavRoute.fromFeature(f);
+      expect(route.footMode, 'bike');
+      expect(route.stepModes().first, 'bike');
+    });
+
+    test('a bike-share trip walks, rides red, then walks again', () {
+      final f = _feature();
+      final props = f['properties'] as Map<String, dynamic>;
+      props['plan'] = 'bcycle';
+      props['steps'] = <dynamic>[...props['steps'] as List]..insertAll(1, [
+        {'maneuver': 'rent', 'instruction': 'Unlock', 'start_index': 1},
+        {'maneuver': 'dock', 'instruction': 'Dock', 'start_index': 2},
+      ]);
+      final route = NavRoute.fromFeature(f);
+      expect(route.stepModes(),
+          ['walk', 'bcycle', 'bcycle', 'walk', 'walk']);
+    });
+
+    test('every step mode has a route-leg color', () {
+      for (final m in ['bike', 'walk', 'roll', 'transit', 'bcycle']) {
+        expect(routeLegColors[m], isNotNull, reason: m);
+        expect(legModeIcons[m], isNotNull, reason: m);
+      }
+    });
+  });
+
+  group('e-bike labelling', () {
+    test('an e-bike plan shows E-bike, not Bike', () {
+      final f = _feature();
+      final props = f['properties'] as Map<String, dynamic>;
+      props['plan'] = 'bike';
+      props['plan_label'] = 'Bike';
+      props['ebike'] = true;
+      final route = NavRoute.fromFeature(f);
+      expect(route.planDisplayLabel, 'E-bike');
+      expect(route.planIcon, legModeIcons['ebike']);
+    });
+
+    test('a plain bike stays a bike', () {
+      final f = _feature();
+      final props = f['properties'] as Map<String, dynamic>;
+      props['plan'] = 'bike';
+      props['plan_label'] = 'Bike';
+      final route = NavRoute.fromFeature(f);
+      expect(route.planDisplayLabel, 'Bike');
+      expect(route.planIcon, planIcons['bike']);
+    });
+
+    test('the e-bike relabel never touches other plans', () {
+      final f = _feature();
+      final props = f['properties'] as Map<String, dynamic>;
+      props['plan'] = 'walk';
+      props['plan_label'] = 'Walk';
+      props['ebike'] = true; // nonsense combination, but stay honest
+      final route = NavRoute.fromFeature(f);
+      expect(route.planDisplayLabel, 'Walk');
+    });
+  });
+
+  group('alternate routes', () {
+    test('alt and alt_distinct parse with safe defaults', () {
+      final route = NavRoute.fromFeature(_feature());
+      expect(route.alt, 0);
+      expect(route.altDistinct, isTrue);
+    });
+
+    test('an identical alternate is disclosed', () {
+      final f = _feature();
+      final props = f['properties'] as Map<String, dynamic>;
+      props['alt'] = 2;
+      props['alt_distinct'] = false;
+      final route = NavRoute.fromFeature(f);
+      expect(route.alt, 2);
+      expect(route.altDistinct, isFalse);
+    });
+  });
+
   group('warning presentation', () {
     test('every server warning kind has its own wording and icon', () {
       for (final kind in ['no_sidewalk', 'no_bike_lane', 'steep']) {

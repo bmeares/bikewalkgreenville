@@ -35,7 +35,7 @@ from meerschaum.actions import make_action
 from meerschaum.plugins import api_plugin
 from meerschaum.utils.warnings import info, warn
 
-__version__ = '0.7.0'
+__version__ = '0.8.0'
 
 bwg = mrsm.Plugin('bwg')
 
@@ -839,6 +839,13 @@ TRANSIT_BIKE_MAX_M = 5000.0
 #: over the fastest single-mode plan as long as it isn't slower than this
 #: factor — picking bike + bus means "use them together", not "race them".
 MULTIMODAL_MAX_SLOWDOWN = 1.6
+
+#: Alternate routes (`?alt=N`): edges the previous route used cost this much
+#: extra on the next pass. High enough to prefer a real parallel option,
+#: low enough that when none exists the same route comes back (which the
+#: response discloses via `alt_distinct`) instead of an absurd detour.
+ALT_AVOID_FACTOR = 1.5
+ALT_MAX = 3
 
 # Bike share (Greenville BCycle): how far someone will walk to a dock, how
 # long a ride has to be to justify the trip to one, and the unlock overhead.
@@ -1644,6 +1651,7 @@ def _astar(
     extra_nodes: dict | None = None,
     extra_elev: dict | None = None,
     climb_mode: str | None = None,
+    avoid_pairs: set | None = None,
 ):
     """Returns list of (node, edge) from start to goal, or None. edge is the
     adjacency tuple taken to arrive at node (None for start). Edge weights are
@@ -1721,6 +1729,11 @@ def _astar(
             nbr, weight = edge[0], edge_weight(edge)
             if climb_factor:
                 weight += _climb_m(_elev(cur), _elev(nbr)) * climb_factor
+            # Alternate routes: edges the previous route used cost extra, so
+            # the search prefers a genuinely different way when one exists.
+            # The penalty only ever ADDS cost, so `h` stays admissible.
+            if avoid_pairs and (cur, nbr) in avoid_pairs:
+                weight *= ALT_AVOID_FACTOR
             ng = g + weight
             if nbr not in dist or ng < dist[nbr]:
                 dist[nbr] = ng
@@ -2004,6 +2017,8 @@ def _route_core(
     mode: str = 'bike',
     snap_max_m: float = ROUTE_SNAP_MAX_M,
     warn_mode: str | None = None,
+    avoid_pairs: set | None = None,
+    pairs_out: set | None = None,
 ) -> dict[str, Any]:
     """One A* pass with `mode`'s weights; raises ValueError with a user-facing
     message when no route is possible.
@@ -2011,6 +2026,10 @@ def _route_core(
     `warn_mode` is the mode the DISCLOSURE is written for. It differs from
     `mode` on the street fallback: routed with flat street weights, but still
     told "you're walking, and this bit has no sidewalk".
+
+    `avoid_pairs` penalizes directed node pairs the previous route used (the
+    alternate-route mechanism); `pairs_out`, when given, collects this route's
+    own pairs (both directions, real nodes only) for the next pass.
     """
     graph = _get_route_graph()
     if not graph['nodes']:
@@ -2067,6 +2086,7 @@ def _route_core(
             graph, start, goal, mode=mode,
             extra_adj=extra_adj, extra_nodes=extra_nodes,
             extra_elev=extra_elev, climb_mode=warn_mode,
+            avoid_pairs=avoid_pairs,
         )
         if path is None:
             raise ValueError("Couldn't find a connected route.")
@@ -2105,6 +2125,16 @@ def _route_core(
                 if from_elev is not None and to_elev is not None
                 else 0.0
             )
+            # Virtual (per-request) nodes are excluded: penalizing the only
+            # edges that reach a terminus would just shove the next pass onto
+            # a worse snap, not a different street.
+            if (
+                pairs_out is not None
+                and prev_node in graph['nodes']
+                and _node in graph['nodes']
+            ):
+                pairs_out.add((prev_node, _node))
+                pairs_out.add((_node, prev_node))
             prev_node = _node
             leg_warn = _edge_deficiency(edge, warn_mode)
             # A hill only gets the callout when nothing worse is wrong with the
@@ -2175,6 +2205,8 @@ def _route(
     to_lon: float,
     mode: str = 'bike',
     street_fallback: bool = True,
+    avoid_pairs: set | None = None,
+    pairs_out: set | None = None,
 ) -> dict[str, Any]:
     """A bike / walk / roll route, falling back to plain streets when the
     mode's own network can't get there.
@@ -2187,7 +2219,10 @@ def _route(
     `fallback: 'street'` so the app can lead with the caveat.
     """
     try:
-        return _route_core(from_lat, from_lon, to_lat, to_lon, mode=mode)
+        return _route_core(
+            from_lat, from_lon, to_lat, to_lon, mode=mode,
+            avoid_pairs=avoid_pairs, pairs_out=pairs_out,
+        )
     except ValueError as first_error:
         if not street_fallback or mode == 'street':
             raise
@@ -2196,6 +2231,8 @@ def _route(
             mode='street',
             snap_max_m=ROUTE_SNAP_RELAXED_M,
             warn_mode=mode,
+            avoid_pairs=avoid_pairs,
+            pairs_out=pairs_out,
         )
         props = feature['properties']
         props['fallback'] = 'street'
@@ -2866,6 +2903,7 @@ def _compute_plan(
     to_lat: float,
     to_lon: float,
     bike_mode: str = 'bike',
+    alt: int = 0,
 ) -> dict[str, Any]:
     """One itinerary, memoized briefly. Raises ValueError when impossible.
 
@@ -2874,9 +2912,18 @@ def _compute_plan(
     plain (`bike`, `bike-transit`) because it names the itinerary, not the
     rider's preferences -- but the profile joins the cache key, or two riders
     with different tolerances would share a route.
+
+    `alt=N` asks for the Nth alternate of a plain (bike/walk/roll) plan:
+    each pass penalizes the edges every previous pass used, so a genuinely
+    different way wins when one exists. `alt_distinct` in the response says
+    whether it actually differs from the base route. Composite plans
+    (transit, bike share) ignore `alt` — their shape is fixed by the stop
+    and dock locations, not the street choice.
     """
+    if plan.endswith('-transit') or plan == 'bcycle':
+        alt = 0
     key = (
-        plan, bike_mode,
+        plan, bike_mode, alt,
         round(from_lat, 5), round(from_lon, 5),
         round(to_lat, 5), round(to_lon, 5),
     )
@@ -2902,10 +2949,25 @@ def _compute_plan(
             bike_mode=_bike_mode(False, _stress_level(bike_mode)),
         )
     else:
-        feature = _route(
-            from_lat, from_lon, to_lat, to_lon,
-            mode=(bike_mode if plan == 'bike' else plan),
-        )
+        route_mode = bike_mode if plan == 'bike' else plan
+        if alt <= 0:
+            feature = _route(from_lat, from_lon, to_lat, to_lon, mode=route_mode)
+        else:
+            avoid: set = set()
+            base_coords = None
+            for i in range(alt + 1):
+                pairs: set = set()
+                feature = _route(
+                    from_lat, from_lon, to_lat, to_lon, mode=route_mode,
+                    avoid_pairs=avoid or None, pairs_out=pairs,
+                )
+                if i == 0:
+                    base_coords = feature['geometry']['coordinates']
+                avoid |= pairs
+            feature['properties']['alt'] = alt
+            feature['properties']['alt_distinct'] = (
+                feature['geometry']['coordinates'] != base_coords
+            )
 
     label, icon_mode = PLAN_LABELS.get(plan, (plan.title(), plan))
     feature['properties']['plan'] = plan
@@ -2928,6 +2990,7 @@ def _route_multimodal(
     plan: str | None = None,
     ebike: bool = False,
     stress: str = DEFAULT_STRESS,
+    alt: int = 0,
 ) -> dict[str, Any]:
     """Pick the best itinerary across everything the rider is willing to use.
 
@@ -2939,6 +3002,9 @@ def _route_multimodal(
     `ebike` and `stress` describe the rider's own bike and how much traffic
     they will put up with; they apply to every pedalling leg, including the
     ride to the bus stop.
+
+    `alt=N` (with a pinned `plan`) swaps in that plan's Nth alternate route;
+    the other plans in `alternatives` stay their base selves.
     """
     bike_mode = _bike_mode(ebike, stress)
     keys = _plan_keys(modes, roll, bcycle)
@@ -2952,6 +3018,7 @@ def _route_multimodal(
             computed[key] = _compute_plan(
                 key, from_lat, from_lon, to_lat, to_lon,
                 bike_mode=bike_mode,
+                alt=(alt if key == plan else 0),
             )
         except ValueError as e:
             failures.append({'plan': key, 'reason': str(e)})
@@ -3396,6 +3463,7 @@ def init_app(app):
         plan: str = '',
         ebike: bool = False,
         stress: str = '',
+        alt: int = 0,
     ):
         """Multi-modal directions.
 
@@ -3408,6 +3476,10 @@ def init_app(app):
         `ebike=1` rides at e-bike pace and shrugs off hills; `stress=` is how
         much traffic the rider will accept (`quiet`, `balanced`, `direct`).
         Both default to today's behaviour, so an old client sees no change.
+
+        `alt=N` (1–3, with `plan` pinned to a plain bike/walk/roll plan)
+        returns that plan's Nth alternate route; `alt_distinct: false` in the
+        response means no genuinely different way exists.
         """
         # Sync def on purpose: FastAPI runs it in the threadpool, so the
         # multi-second first-call graph build never blocks the event loop.
@@ -3456,6 +3528,7 @@ def init_app(app):
                 plan=(plan or '').strip().lower() or None,
                 ebike=ebike,
                 stress=level,
+                alt=max(0, min(alt, ALT_MAX)),
             )
         except ValueError as e:
             return JSONResponse({'error': str(e)}, status_code=422)
