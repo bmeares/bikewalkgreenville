@@ -17,6 +17,34 @@ Updated 2026-08-06 (eighth session, Bennett's laptop — paused mid-stream, see
 - **walk-audit config** moved off env vars onto Meerschaum config (`plugins:walk-audit:{smtp,notify}`). Prod values live in the container volume at `/meerschaum/config/plugins.json` (chmod 600); the `/meerschaum/.env` hack has been **deleted**.
 - `WalkAudit.reports` is empty (the deploy-check row was removed).
 
+### Hotfix 2026-08-06 — app v1.8.1+40: nav froze on a real ride (GPS fix rate)
+
+Bennett rode with turn-by-turn and it "hangs on the first turn" — the follow
+camera never tracked him. TWO causes, one of them still latent in v1.8.0:
+
+1. **His phone was running v1.6.1+37.** Every nav fix since (distanceFilter
+   0, camera glide, arrow puck…) was built on omega and never sideloaded —
+   omega has no adb. Lesson: a "fixed" that never crossed the USB cable isn't
+   fixed.
+2. **geolocator's Android default fix interval is FIVE seconds.** The app
+   passed a generic `LocationSettings`, which sends no `timeInterval`, and
+   `geolocator_android` `LocationOptions.java` falls back to `5000` ms. One
+   fix per 5 s (FusedLocation can defer further) reads as a frozen map on a
+   bike — even v1.7's `distanceFilter: 0` build would have felt broken. Fix:
+   explicit `AndroidSettings(accuracy: bestForNavigation, distanceFilter: 0,
+   intervalDuration: 1 s)` in `_subscribeNavPositions()` (map_screen.dart).
+3. Defense in depth, since the position stream can also die silently
+   (platform error, provider stall, unnoticed onDone): every fix stamps
+   `_lastFixAt`; a 5 s `_navWatchdog` timer resubscribes whenever fixes go
+   quiet for >10 s and toasts "Waiting for GPS…" once per dry spell; the
+   stream's `onError` no longer tears anything down. Watchdog cancelled in
+   `_stopNav`/dispose.
+
+Device test (v1.8.1+40): sideload FIRST (`adb install -r`), ride a short
+route — camera must glide with you continuously (~1 Hz), maneuver card must
+advance through turns, and pulling the phone's location off/on mid-ride must
+recover within ~15 s with the GPS toast.
+
 ### 2026-08-06 late (ninth session, omega) — app v1.8.0+39 (BUILT + SIGNED), map-layers v0.8.0 (DEPLOYED + curl-verified)
 
 Bennett's follow-up feedback on the multi-modal work, all implemented, tested

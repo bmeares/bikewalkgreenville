@@ -65,6 +65,13 @@ class _MapScreenState extends State<MapScreen> {
   bool _navigating = false;
   NavProgress? _progress;
   StreamSubscription<Position>? _posSub;
+
+  // GPS watchdog: navigation is only as alive as its position stream, and the
+  // stream can die silently (platform channel error, provider stall, onDone).
+  // Every fix stamps [_lastFixAt]; the watchdog resubscribes when fixes stop.
+  Timer? _navWatchdog;
+  DateTime _lastFixAt = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _gpsDryToastShown = false;
   FlutterTts? _tts;
   bool _voice = true;
   int _spokenStep = -1;
@@ -115,6 +122,7 @@ class _MapScreenState extends State<MapScreen> {
   void dispose() {
     _searchDebounce?.cancel();
     _searchFocus.dispose();
+    _navWatchdog?.cancel();
     _posSub?.cancel();
     _tts?.stop();
     _navNotifier.cancel();
@@ -1038,18 +1046,53 @@ class _MapScreenState extends State<MapScreen> {
     });
     // Strip the thematic overlays so the street layout underneath is legible.
     _applyVisibility();
+    await _subscribeNavPositions();
+    // The watchdog is what makes navigation survive the real world: if fixes
+    // stop for any reason (stream error, provider stall, silent onDone), it
+    // resubscribes instead of leaving the rider staring at a frozen map.
+    _lastFixAt = DateTime.now();
+    _gpsDryToastShown = false;
+    _navWatchdog?.cancel();
+    _navWatchdog = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (!_navigating) return;
+      if (DateTime.now().difference(_lastFixAt) <
+          const Duration(seconds: 10)) {
+        return;
+      }
+      if (!_gpsDryToastShown && mounted) {
+        _gpsDryToastShown = true;
+        toast(context, 'Waiting for GPS…');
+      }
+      _subscribeNavPositions();
+    });
+    _onNavPosition(pos);
+  }
+
+  /// (Re)open the navigation position stream. Extracted so the watchdog can
+  /// bring a dead stream back mid-ride.
+  Future<void> _subscribeNavPositions() async {
     await _posSub?.cancel();
-    // distanceFilter 0: fixes keep coming (~1/s) even at a standstill — a
-    // filter of 5 m meant a stopped rider got NO fixes, so off-route
-    // detection and the follow camera both froze exactly when someone pulled
-    // over to look at the phone.
+    // distanceFilter 0: fixes keep coming even at a standstill — a filter of
+    // 5 m meant a stopped rider got NO fixes, so off-route detection and the
+    // follow camera both froze exactly when someone pulled over.
+    // intervalDuration 1 s: geolocator's Android default is FIVE seconds
+    // (LocationOptions.java falls back to 5000 ms when no timeInterval is
+    // sent, which is what the generic LocationSettings does) — a fix every
+    // 5 s reads as "navigation is frozen" on a bike. The follow camera's
+    // ~1.1 s glide is tuned for 1 Hz fixes.
     _posSub = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
+      locationSettings: AndroidSettings(
         accuracy: LocationAccuracy.bestForNavigation,
         distanceFilter: 0,
+        intervalDuration: const Duration(seconds: 1),
       ),
-    ).listen(_onNavPosition);
-    _onNavPosition(pos);
+    ).listen(
+      _onNavPosition,
+      // Never let an error tear the stream down silently mid-ride; the
+      // watchdog resubscribes once fixes go quiet.
+      onError: (_) {},
+      cancelOnError: false,
+    );
   }
 
   /// Register the rider marker bitmap the current settings call for; the puck
@@ -1093,6 +1136,8 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   Future<void> _stopNav({bool arrived = false}) async {
+    _navWatchdog?.cancel();
+    _navWatchdog = null;
     await _posSub?.cancel();
     _posSub = null;
     await _tts?.stop();
@@ -1115,6 +1160,8 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   Future<void> _onNavPosition(Position pos) async {
+    _lastFixAt = DateTime.now();
+    _gpsDryToastShown = false;
     final route = _navRoute;
     if (!_navigating || route == null) return;
     final here = LatLng(pos.latitude, pos.longitude);
