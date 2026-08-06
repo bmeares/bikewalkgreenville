@@ -17,7 +17,7 @@ Updated 2026-08-06 (eighth session, Bennett's laptop — paused mid-stream, see
 - **walk-audit config** moved off env vars onto Meerschaum config (`plugins:walk-audit:{smtp,notify}`). Prod values live in the container volume at `/meerschaum/config/plugins.json` (chmod 600); the `/meerschaum/.env` hack has been **deleted**.
 - `WalkAudit.reports` is empty (the deploy-check row was removed).
 
-### ⚠️ IN FLIGHT 2026-08-06 (eighth session) — app v1.7.0+38 (UNBUILT), map-layers v0.7.0 (DEPLOYED)
+### ⚠️ IN FLIGHT 2026-08-06 (eighth session) — app v1.7.0+38 (BUILT + SIGNED on omega), map-layers v0.7.0 (DEPLOYED)
 
 Bennett is demoing to executive director **Jasmine Vanadore in a few days** —
 this session's goal is production-ready navigation. Work was paused on the
@@ -112,24 +112,34 @@ device-verified yet**.
    decluttering handles overlap; dense layers (bus-stops, bike-parking) keep
    their minZoom.
 
-#### NOT yet done (continue on omega)
+#### DONE 2026-08-06 evening (ninth session, omega)
 
-1. **Build**: `flutter build apk --release` + `flutter build appbundle
-   --release` on omega (pubspec already bumped to 1.7.0+38; signing config
-   already on omega). NOTE: `android/gradle.properties` pins
-   `org.gradle.java.home=/home/bmeares/sdk/jdk21` — that path is
-   **omega's**; on Bennett's laptop it must be temporarily
-   `/usr/lib/jvm/java-21-temurin-jdk` (do NOT commit that change; it was
-   reverted before push).
-2. **Device testing** (needs the phone — Bennett will drive): checklist
-   below.
-3. **Parking garages "not rendering" root cause UNCONFIRMED.** The prod
-   endpoint is verified fine (10 features with occupancy). Prime suspect was
-   `minZoom: 12` (toggling the layer on while zoomed out showed nothing) —
-   now removed. If it still fails on device: look at the `_refreshLive()` /
-   `_ensureLayer()` race (`setGeoJsonSource` can fire before `addSource`
-   completes; the failure is silently swallowed).
-4. Play upload when Bennett says go (see item 6 of the older list below).
+1. **Build**: signed release APK (87.3 MB) + AAB (58.4 MB) built on omega,
+   both verified — signer SHA-1 `537F9A88…A843` (SRA upload key),
+   versionCode 38 / versionName 1.7.0:
+   - `app-native/build/app/outputs/flutter-apk/app-release.apk`
+   - `app-native/build/app/outputs/bundle/release/app-release.aab`
+   Pre-build verification: `flutter analyze` clean, `flutter test` 48/48,
+   `python3 tests/test_route_graph.py` 31/31. NOTE for other hosts:
+   `android/gradle.properties` pins `org.gradle.java.home=/home/bmeares/sdk/jdk21`
+   (omega's path; laptop = `/usr/lib/jvm/java-21-temurin-jdk`, don't commit).
+2. **VPS repo checkout pulled** to `99b4991`; prod re-verified live via curl:
+   multimodal returns `bike-transit` (default) + `bike` alternative,
+   parking-landuse kinds `{roadway: 701, lot: 823, garage: 33}`,
+   parking-garages 10 features with same-day occupancy.
+3. **Garages `_refreshLive()`/`_ensureLayer()` race triaged — harmless, not
+   fixed on purpose.** `addSource(data: url)` points MapLibre at the live URL,
+   so the layer self-loads even if the first `setGeoJsonSource` races and
+   throws (swallowed); later refreshes land after add completes. The real
+   rendering bug was `minZoom: 12`, already removed. If garages STILL don't
+   render on device, the race is exonerated — look elsewhere.
+
+#### NOT yet done
+
+1. **Device testing** (needs the phone — Bennett will drive): checklist
+   below. Sideload: `adb install -r app-release.apk` (release-over-release
+   upgrades in place since versionCode rose to 38).
+2. Play upload when Bennett says go (see item 6 of the older list below).
 
 #### Device test checklist (v1.7.0+38)
 
