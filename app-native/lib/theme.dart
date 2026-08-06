@@ -70,6 +70,26 @@ const planIcons = {
 /// this colour and called out in a banner. Not a "bad route" — a disclosure.
 const warnRed = Color(0xFFD32F2F);
 
+/// Per-mode colors for the route line. A single-mode route draws in the bike
+/// blue like it always has; a multi-modal itinerary colors each leg by how the
+/// rider travels it (bike to the stop, bus, walk the rest).
+const routeLegColors = <String, String>{
+  'bike': '#1565C0',
+  'walk': '#00897B',
+  'roll': '#00897B',
+  'transit': '#7B1FA2',
+  'bcycle': '#E2231A',
+};
+
+/// Hill severity → route overlay color: moderate (5–8%) amber, steep (8–12%)
+/// deep orange, very steep (>12%) red. Matches the elevation preview's idea
+/// of "steep" at the 8% (ADA 1:12) boundary.
+const hillColors = <String, String>{
+  'mod': '#FFB300',
+  'steep': '#F4511E',
+  'vsteep': '#C62828',
+};
+
 /// Greenville BCycle brand red, for the bike-share dock pins.
 const bcycleRed = '#E2231A';
 
@@ -123,6 +143,10 @@ class LayerDef {
   /// style-load time.
   final bool live;
 
+  /// Line layers only: stroke opacity. Sidewalks draw faint so they read as
+  /// context instead of competing with the route line.
+  final double opacity;
+
   const LayerDef({
     required this.id,
     required this.label,
@@ -140,6 +164,7 @@ class LayerDef {
     this.minZoom = 0,
     this.pinScale = 1.0,
     this.live = false,
+    this.opacity = 0.85,
   });
 }
 
@@ -176,12 +201,15 @@ const layerDefs = <LayerDef>[
   // One sidewalks layer: the server merges the county lines with the city
   // lines that aren't the same sidewalk digitized twice (heavy overlap in
   // city limits made two separate toggles meaningless).
+  // Light and faint on purpose: sidewalks are context, and the old solid blue
+  // was indistinguishable from the blue route line drawn over it.
   LayerDef(
     id: 'sidewalks',
     label: 'Sidewalks',
     path: '/map-layers/sidewalks.geojson',
-    color: '#1565C0',
+    color: '#7BAFDE',
     width: 1.8,
+    opacity: 0.5,
     modes: {TravelMode.pedestrian},
     icon: Icons.directions_walk,
   ),
@@ -226,7 +254,10 @@ const layerDefs = <LayerDef>[
     isPoint: true,
     modes: {TravelMode.cyclist},
     icon: Icons.pedal_bike,
-    minZoom: 11,
+    // No minZoom: ~13 docks citywide. Someone hunting the nearest dock zooms
+    // OUT to find it — hiding sparse layers at low zoom defeats their point.
+    // (Dense layers like bus stops keep a minZoom; MapLibre's symbol
+    // decluttering thins whatever overlaps in between.)
     pinScale: 1.05,
     live: true,
   ),
@@ -238,7 +269,7 @@ const layerDefs = <LayerDef>[
     isPoint: true,
     modes: {TravelMode.cyclist},
     icon: Icons.build,
-    minZoom: 11,
+    // No minZoom — sparse layer, see bcycle above.
   ),
   // Places that welcome riders — curated by BWG, starting with the Swamp
   // Rabbit Cafe & Grocery. Deliberately on by default: it's the layer that
@@ -257,17 +288,19 @@ const layerDefs = <LayerDef>[
   // default — it's context for a car-adjacent trip, not core to the map.
   LayerDef(
     id: 'parking-garages',
-    label: 'Parking garages (live)',
+    label: 'Parking garages',
     path: '/map-layers/parking-garages.geojson',
     color: '#5C6BC0',
     isPoint: true,
     modes: {TravelMode.cyclist, TravelMode.pedestrian, TravelMode.transit},
     defaultOn: false,
     icon: Icons.garage,
-    minZoom: 12,
+    // No minZoom — ten downtown garages, sparse layer, see bcycle above.
     live: true,
   ),
-  // Land use: what downtown ground is given to parking (lots vs garages).
+  // Land use: what downtown ground is given to cars — roadway pavement
+  // (green), surface lots (orange), garages (yellow); mirrors the parking
+  // Grafana dashboard's split.
   LayerDef(
     id: 'parking-landuse',
     label: 'Parking land use',
@@ -275,7 +308,11 @@ const layerDefs = <LayerDef>[
     color: '#8D6E63',
     isFill: true,
     matchProp: 'kind',
-    matchColors: {'lot': '#BCAAA4', 'garage': '#6D4C41'},
+    matchColors: {
+      'roadway': '#66BB6A',
+      'lot': '#F57C00',
+      'garage': '#FBC02D',
+    },
     modes: {TravelMode.cyclist, TravelMode.pedestrian, TravelMode.transit},
     defaultOn: false,
     icon: Icons.crop_square,

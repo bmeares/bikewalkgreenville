@@ -1,0 +1,133 @@
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../app_state.dart';
+import '../theme.dart';
+
+/// User preferences: how routes are chosen, what earns a warning, and how the
+/// rider is drawn on the map. Everything persists via [AppState].
+class SettingsScreen extends StatelessWidget {
+  const SettingsScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    return Scaffold(
+      appBar: AppBar(title: const Text('Settings')),
+      body: ListView(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        children: [
+          _header(context, 'Riding'),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('How much traffic is OK on a bike?',
+                    style: Theme.of(context).textTheme.labelLarge),
+                const SizedBox(height: 6),
+                SegmentedButton<BikeStress>(
+                  segments: [
+                    for (final level in BikeStress.values)
+                      ButtonSegment(
+                        value: level,
+                        label: Text(bikeStressLabels[level]!),
+                      ),
+                  ],
+                  selected: {state.stress},
+                  showSelectedIcon: false,
+                  onSelectionChanged: (sel) => state.setStress(sel.first),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  bikeStressBlurbs[state.stress]!,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+          SwitchListTile(
+            secondary: const Icon(Icons.electric_bike),
+            title: const Text('I ride an e-bike'),
+            subtitle: const Text('Faster, and hills cost you a lot less'),
+            value: state.useEbike,
+            onChanged: state.setUseEbike,
+          ),
+          SwitchListTile(
+            secondary: const Icon(Icons.accessible_forward),
+            title: const Text('I use a wheelchair (roll)'),
+            subtitle: const Text(
+                'Strongly prefers routes with sidewalks and flags the gaps'),
+            value: state.roll,
+            onChanged: state.setRoll,
+          ),
+          SwitchListTile(
+            secondary: Icon(Icons.pedal_bike, color: hexColor(bcycleRed)),
+            title: const Text('Include BCycle bike share'),
+            subtitle: const Text(
+                'Walk to a dock, ride a rental, dock it near the end'),
+            value: state.useBcycle,
+            onChanged: state.setUseBcycle,
+          ),
+          const Divider(),
+          _header(context, 'Route warnings'),
+          ListTile(
+            leading: const Icon(Icons.warning_amber_rounded),
+            title: const Text('Smallest gap worth a warning'),
+            subtitle: Text(
+              'Stretches with no bike lane or sidewalk shorter than '
+              '${state.warnFt.round()} ft won\'t show a warning banner.',
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Slider(
+              value: state.warnFt,
+              min: 0,
+              max: 1000,
+              divisions: 20,
+              label: '${state.warnFt.round()} ft',
+              activeColor: brandGreen,
+              onChanged: state.setWarnFt,
+            ),
+          ),
+          const Divider(),
+          _header(context, 'Navigation'),
+          RadioGroup<PuckStyle>(
+            groupValue: state.puckStyle,
+            onChanged: (v) => state.setPuckStyle(v!),
+            child: Column(
+              children: [
+                RadioListTile<PuckStyle>(
+                  value: PuckStyle.arrow,
+                  secondary: const Icon(Icons.navigation),
+                  title: const Text('Arrow'),
+                  subtitle:
+                      const Text('A classic navigation arrow marks you'),
+                ),
+                RadioListTile<PuckStyle>(
+                  value: PuckStyle.mode,
+                  secondary: Icon(state.iconFor(state.mode)),
+                  title: const Text('Travel mode icon'),
+                  subtitle: const Text(
+                      'A cyclist, walker or wheelchair user — whichever you are'),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _header(BuildContext context, String text) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+        child: Text(
+          text,
+          style: Theme.of(context)
+              .textTheme
+              .titleSmall
+              ?.copyWith(color: brandGreen, fontWeight: FontWeight.w700),
+        ),
+      );
+}

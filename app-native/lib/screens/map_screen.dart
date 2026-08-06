@@ -86,6 +86,13 @@ class _MapScreenState extends State<MapScreen> {
   int _notifiedStep = -1;
   DateTime _lastNotifyAt = DateTime.fromMillisecondsSinceEpoch(0);
 
+  /// Puck bitmaps already registered with the style (by image name).
+  final Set<String> _puckImages = {};
+  String _puckImage = 'puck-arrow';
+
+  /// Double-beep on reroute, Google Maps style (MainActivity's ToneGenerator).
+  static const _tone = MethodChannel('bwg/tone');
+
   AppState get app => context.read<AppState>();
 
   @override
@@ -182,6 +189,28 @@ class _MapScreenState extends State<MapScreen> {
       enableInteraction: false,
     );
 
+    // Hills, drawn over the route line and colored by severity (amber →
+    // red), so "how hard is this trip" is visible on the map itself and not
+    // only in the elevation graph.
+    await map.addSource(
+        'route-hills', GeojsonSourceProperties(data: _emptyCollection));
+    await map.addLineLayer(
+      'route-hills',
+      'lyr-route-hills',
+      LineLayerProperties(
+        lineColor: [
+          'match',
+          ['get', 'sev'],
+          for (final e in hillColors.entries) ...[e.key, e.value],
+          hillColors['mod']!,
+        ],
+        lineWidth: 5.0,
+        lineCap: 'round',
+        lineJoin: 'round',
+      ),
+      enableInteraction: false,
+    );
+
     // Gaps in the network, drawn dashed ON TOP of the route: the stretches with
     // no sidewalk (walk/roll) or no bike lane (bike). The route still goes
     // there — this is the disclosure, not a detour.
@@ -239,6 +268,25 @@ class _MapScreenState extends State<MapScreen> {
         circleRadius: 9.0,
         circleStrokeColor: '#ffffff',
         circleStrokeWidth: 3.0,
+      ),
+      enableInteraction: false,
+    );
+
+    // The rider themselves, during navigation: an arrow (or mode icon —
+    // Settings) rotated to the heading, above everything else. The native
+    // blue dot is hidden while this is on screen.
+    await map.addSource(
+        'puck', GeojsonSourceProperties(data: _emptyCollection));
+    await map.addSymbolLayer(
+      'puck',
+      'lyr-puck',
+      const SymbolLayerProperties(
+        iconImage: ['get', 'icon'],
+        iconRotate: ['get', 'bearing'],
+        iconRotationAlignment: 'map',
+        iconAllowOverlap: true,
+        iconIgnorePlacement: true,
+        iconSize: 1.0,
       ),
       enableInteraction: false,
     );
@@ -326,7 +374,7 @@ class _MapScreenState extends State<MapScreen> {
                   ]
                 : _layerColorExpr(def),
             lineWidth: def.width,
-            lineOpacity: 0.85,
+            lineOpacity: def.opacity,
             lineCap: 'round',
             lineJoin: 'round',
           ),
@@ -825,14 +873,10 @@ class _MapScreenState extends State<MapScreen> {
       // A newer plan superseded this one while it was in flight.
       if (seq != _planSeq) return;
       final route = NavRoute.fromFeature(feature);
-      // Transit routes draw in the official Greenlink route color.
-      final props = Map<String, dynamic>.from(feature['properties'] ?? {});
-      if (route.routeColor != null) props['color'] = route.routeColor;
-      feature['properties'] = props;
-      await _map?.setGeoJsonSource('route', {
-        'type': 'FeatureCollection',
-        'features': [feature],
-      });
+      // Per-leg colors: a multi-modal itinerary draws each leg in its mode's
+      // color (bus legs in the official Greenlink route color).
+      await _map?.setGeoJsonSource('route', route.routeCollection());
+      await _map?.setGeoJsonSource('route-hills', route.hillCollection());
       await _map?.setGeoJsonSource('route-warn', route.warnCollection());
       await _map?.setGeoJsonSource('route-steps', route.stepCollection());
       await _setPin(dest);
@@ -939,6 +983,7 @@ class _MapScreenState extends State<MapScreen> {
   Future<void> _clearRoute() async {
     await _stopNav();
     await _map?.setGeoJsonSource('route', _emptyCollection);
+    await _map?.setGeoJsonSource('route-hills', _emptyCollection);
     await _map?.setGeoJsonSource('route-warn', _emptyCollection);
     await _map?.setGeoJsonSource('route-steps', _emptyCollection);
     await _map?.setGeoJsonSource('pin', _emptyCollection);
@@ -969,6 +1014,7 @@ class _MapScreenState extends State<MapScreen> {
     }
     await _initTts();
     await WakelockPlus.enable();
+    await _ensurePuckImage();
     if (!mounted) return;
     setState(() {
       _navigating = true;
@@ -985,13 +1031,57 @@ class _MapScreenState extends State<MapScreen> {
     // Strip the thematic overlays so the street layout underneath is legible.
     _applyVisibility();
     await _posSub?.cancel();
+    // distanceFilter 0: fixes keep coming (~1/s) even at a standstill — a
+    // filter of 5 m meant a stopped rider got NO fixes, so off-route
+    // detection and the follow camera both froze exactly when someone pulled
+    // over to look at the phone.
     _posSub = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.bestForNavigation,
-        distanceFilter: 5,
+        distanceFilter: 0,
       ),
     ).listen(_onNavPosition);
     _onNavPosition(pos);
+  }
+
+  /// Register the rider marker bitmap the current settings call for; the puck
+  /// layer picks it by name per feature.
+  Future<void> _ensurePuckImage() async {
+    final map = _map;
+    if (map == null || !mounted) return;
+    final state = context.read<AppState>();
+    final byMode = state.puckStyle == PuckStyle.mode;
+    _puckImage = byMode ? 'puck-${state.labelFor(state.mode)}' : 'puck-arrow';
+    if (_puckImages.contains(_puckImage)) return;
+    try {
+      await map.addImage(
+        _puckImage,
+        await renderPuck(
+          color: byMode ? brandGreen : const Color(0xFF1A73E8),
+          devicePixelRatio: MediaQuery.of(context).devicePixelRatio,
+          icon: byMode ? state.iconFor(state.mode) : null,
+        ),
+      );
+      _puckImages.add(_puckImage);
+    } catch (_) {
+      _puckImage = 'puck-arrow'; // native dot still shows if this also fails
+    }
+  }
+
+  Future<void> _updatePuck(LatLng at, double bearing) async {
+    await _map?.setGeoJsonSource('puck', {
+      'type': 'FeatureCollection',
+      'features': [
+        {
+          'type': 'Feature',
+          'geometry': {
+            'type': 'Point',
+            'coordinates': [at.longitude, at.latitude],
+          },
+          'properties': {'icon': _puckImage, 'bearing': bearing},
+        }
+      ],
+    });
   }
 
   Future<void> _stopNav({bool arrived = false}) async {
@@ -1000,6 +1090,7 @@ class _MapScreenState extends State<MapScreen> {
     await _tts?.stop();
     await _navNotifier.cancel();
     await WakelockPlus.disable();
+    await _map?.setGeoJsonSource('puck', _emptyCollection);
     if (!mounted || !_navigating) return;
     setState(() {
       _navigating = false;
@@ -1024,10 +1115,18 @@ class _MapScreenState extends State<MapScreen> {
     final advanced = progress.stepIndex != _progress?.stepIndex;
     setState(() => _progress = progress);
     _lastNavPos = here;
-    // Course-up: GPS heading while moving, else the route's own bearing.
+    // Course-up: GPS heading while moving, else the route's own bearing —
+    // which is what puts the next turn at the top of the screen from the
+    // moment Start is tapped, before the rider is even rolling.
     _lastNavBearing = (pos.heading >= 0 && pos.speed > 0.8)
         ? pos.heading
         : progress.courseBearing;
+    // The rider's own marker rides the route, snapped onto the line so GPS
+    // scatter doesn't drag the arrow through front yards.
+    await _updatePuck(
+      progress.offRouteM < 30 ? progress.snapped : here,
+      _lastNavBearing!,
+    );
     // Drop the arrows for turns already made, so what's on the map is only
     // what's still ahead.
     if (advanced) {
@@ -1037,13 +1136,13 @@ class _MapScreenState extends State<MapScreen> {
       );
     }
 
-    // Follow camera, throttled: a fix every couple of seconds must not queue
-    // up a backlog of 900 ms animations — that is exactly the jitter that made
-    // nav mode unusable. One short animation, at most ~once a second, and only
-    // while the user hasn't panned away.
+    // Follow camera, throttled: a fix must not queue up a backlog of
+    // animations — that is exactly the jitter that made nav mode unusable.
+    // Fixes arrive ~1/s; a ~1 s animation started at most every ~600 ms keeps
+    // the camera gliding continuously instead of hopping fix to fix.
     if (_followNav &&
         DateTime.now().difference(_lastCamAt) >
-            const Duration(milliseconds: 800)) {
+            const Duration(milliseconds: 600)) {
       _moveNavCamera(here, _lastNavBearing!);
     }
 
@@ -1072,7 +1171,9 @@ class _MapScreenState extends State<MapScreen> {
         bearing: bearing,
         tilt: 60.0,
       )),
-      duration: const Duration(milliseconds: 600),
+      // Slightly longer than the ~1 s between GPS fixes, so consecutive
+      // animations blend into one continuous glide.
+      duration: const Duration(milliseconds: 1100),
     );
   }
 
@@ -1158,6 +1259,10 @@ class _MapScreenState extends State<MapScreen> {
     if (_offRouteHits < 3 || _rerouting || _destination == null) return;
     _rerouting = true;
     _offRouteHits = 0;
+    // The Google-style cue: a tone first, words second.
+    try {
+      await _tone.invokeMethod('reroute');
+    } catch (_) {}
     await _speak('Rerouting.');
     if (mounted) toast(context, 'Off route — recalculating…');
     // Recompute from where the rider actually is, keeping the same itinerary
@@ -1251,6 +1356,10 @@ class _MapScreenState extends State<MapScreen> {
     FocusScope.of(context).unfocus();
     final lat = (r['lat'] as num?)?.toDouble();
     final lon = (r['lon'] as num?)?.toDouble();
+    // Searching somewhere new retires the old trip — otherwise the previous
+    // blue route line stays on screen with its endpoint pointing nowhere.
+    if (_navRoute != null) await _clearRoute();
+    if (!mounted) return;
     setState(() {
       _results = [];
       _searchCtl.text = r['label']?.toString() ?? '';
@@ -1433,7 +1542,9 @@ class _MapScreenState extends State<MapScreen> {
             onMapClick: _onMapClick,
             onMapLongClick: _onMapLongClick,
             onCameraMove: _onCameraMove,
-            myLocationEnabled: _locationEnabled,
+            // The native dot hides while navigating — the rotated arrow puck
+            // (lyr-puck) is the rider then.
+            myLocationEnabled: _locationEnabled && !_navigating,
             trackCameraPosition: true,
             attributionButtonPosition: AttributionButtonPosition.bottomLeft,
             // Lift the (i) clear of the system navigation bar (3-button nav
@@ -1763,6 +1874,11 @@ class _MapScreenState extends State<MapScreen> {
             ? 'BCycle from ${route.rentStation}'
             : (route.planLabel.isNotEmpty ? route.planLabel : 'Route'));
     final icon = planIcons[route.plan] ?? Icons.directions;
+    // Tiny infrastructure gaps stay quiet (threshold in Settings); the hill
+    // disclosure is computed client-side from the elevation profile.
+    final warnings =
+        route.visibleWarnings(context.watch<AppState>().warnFt);
+    final hillNote = route.hillSummary();
     // Bottom-anchored: the summary + Start sit closest to the thumb, the
     // caveats and alternatives stack above them.
     return Column(
@@ -1770,8 +1886,10 @@ class _MapScreenState extends State<MapScreen> {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (route.alternatives.isNotEmpty) _alternativesRow(route),
-          if (route.fallbackNote != null || route.warnings.isNotEmpty)
-            _warningBanner(route),
+          if (route.fallbackNote != null ||
+              warnings.isNotEmpty ||
+              hillNote != null)
+            _warningBanner(route, warnings, hillNote),
           // The terrain, at a glance: where the trip climbs and where it
           // bites (steep stretches in red). Only worth the pixels once the
           // climb is enough to feel in your legs.
@@ -1852,10 +1970,12 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   /// The honest bit: what this route is missing, and why it looks like this.
-  Widget _warningBanner(NavRoute route) {
+  Widget _warningBanner(
+      NavRoute route, List<RouteWarning> warnings, String? hillNote) {
     final lines = <String>[
       if (route.fallbackNote != null) route.fallbackNote!,
-      for (final w in route.warnings) w.message,
+      for (final w in warnings) w.message,
+      ?hillNote,
     ];
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
@@ -1885,13 +2005,14 @@ class _MapScreenState extends State<MapScreen> {
                               style: const TextStyle(
                                   fontSize: 12.5, color: Color(0xFF6D3B00))),
                         ),
-                      const Text(
-                        'Those stretches are dashed red on the map.',
-                        style: TextStyle(
-                            fontSize: 11.5,
-                            color: Color(0xFF8D5A1B),
-                            fontStyle: FontStyle.italic),
-                      ),
+                      if (warnings.isNotEmpty)
+                        const Text(
+                          'Those stretches are dashed red on the map.',
+                          style: TextStyle(
+                              fontSize: 11.5,
+                              color: Color(0xFF8D5A1B),
+                              fontStyle: FontStyle.italic),
+                        ),
                     ],
                   ),
                 ),
@@ -2177,6 +2298,9 @@ class _MapScreenState extends State<MapScreen> {
     final route = _navRoute;
     if (route == null) return;
     final current = _progress?.stepIndex ?? 0;
+    final warnings =
+        route.visibleWarnings(context.read<AppState>().warnFt);
+    final hillNote = route.hillSummary();
     showModalBottomSheet(
       context: context,
       showDragHandle: true,
@@ -2202,7 +2326,7 @@ class _MapScreenState extends State<MapScreen> {
                           style: const TextStyle(
                               fontSize: 12.5, color: Color(0xFF6D3B00))),
                     ),
-                  for (final w in route.warnings)
+                  for (final w in warnings)
                     Padding(
                       padding: const EdgeInsets.only(top: 4),
                       child: Row(children: [
@@ -2211,6 +2335,20 @@ class _MapScreenState extends State<MapScreen> {
                         const SizedBox(width: 6),
                         Expanded(
                           child: Text(w.message,
+                              style: const TextStyle(
+                                  fontSize: 12.5, color: Color(0xFF6D3B00))),
+                        ),
+                      ]),
+                    ),
+                  if (hillNote != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Row(children: [
+                        const Icon(Icons.trending_up,
+                            size: 16, color: Color(0xFFE65100)),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(hillNote,
                               style: const TextStyle(
                                   fontSize: 12.5, color: Color(0xFF6D3B00))),
                         ),

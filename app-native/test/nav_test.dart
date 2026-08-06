@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
 import 'package:bwg_app_native/nav.dart';
+import 'package:bwg_app_native/theme.dart';
 
 /// A ~440 m dogleg: east along one block, then north along the next.
 Map<String, dynamic> _feature() => {
@@ -265,6 +266,148 @@ void main() {
     expect(formatDistance(1609.344), '1.0 mi');
     expect(formatDuration(0.5), '<1 min');
     expect(formatDuration(90), '1 hr 30 min');
+  });
+
+  group('hills from the elevation profile', () {
+    NavRoute hilly(List<List<double>> profile, {String mode = 'bike'}) {
+      final f = _feature();
+      final props = f['properties'] as Map<String, dynamic>;
+      props['mode'] = mode;
+      props['elevation_profile'] = profile;
+      return NavRoute.fromFeature(f);
+    }
+
+    test('a sustained steep stretch is flagged and drawn', () {
+      // ~183 m first leg: 50 ft over 150 m ≈ 10.2% — very steep.
+      final route = hilly([
+        [0, 900],
+        [150, 950],
+        [400, 952],
+      ]);
+      final hills = route.hillRanges();
+      expect(hills.length, 1);
+      expect(hills.single.severity, 'vsteep');
+      final features = route.hillCollection()['features'] as List;
+      expect(features.length, 1);
+      expect(features.single['properties']['sev'], 'vsteep');
+      expect(route.hillSummary(), contains('steep hills'));
+      expect(route.hillSummary(), contains('hard climb'));
+    });
+
+    test('a long 6% climb counts as steep even under the 7% line', () {
+      // 76 ft over 370 m ≈ 6.3% — the N Main St case.
+      final route = hilly([
+        [0, 900],
+        [370, 976],
+      ]);
+      expect(route.hillRanges().single.severity, 'steep');
+    });
+
+    test('contour noise stays quiet', () {
+      // 4 ft over 20 m would be 6% — but under both noise gates.
+      final route = hilly([
+        [0, 900],
+        [20, 904],
+        [400, 906],
+      ]);
+      expect(route.hillRanges(), isEmpty);
+      expect(route.hillSummary(), isNull);
+    });
+
+    test('e-bikes get the softened wording, walkers the hard one', () {
+      final profile = [
+        [0.0, 900.0],
+        [150.0, 950.0],
+      ];
+      final f = _feature();
+      final props = f['properties'] as Map<String, dynamic>;
+      props['mode'] = 'bike';
+      props['ebike'] = true;
+      props['elevation_profile'] = profile;
+      expect(NavRoute.fromFeature(f).hillSummary(), contains('motor'));
+      expect(hilly(profile, mode: 'walk').hillSummary(), contains('walk up'));
+      // Rolling keeps the server's ADA warning instead of a duplicate.
+      expect(hilly(profile, mode: 'roll').hillSummary(), isNull);
+    });
+  });
+
+  group('warning threshold', () {
+    test('tiny infrastructure gaps are dropped, steep never is', () {
+      final f = _feature();
+      final props = f['properties'] as Map<String, dynamic>;
+      props['warnings'] = [
+        {'kind': 'no_bike_lane', 'distance_m': 30.0, 'label': '', 'message': 'tiny'},
+        {'kind': 'no_bike_lane', 'distance_m': 300.0, 'label': '', 'message': 'real'},
+        {'kind': 'steep', 'distance_m': 10.0, 'label': '', 'message': 'steep'},
+      ];
+      final route = NavRoute.fromFeature(f);
+      final visible = route.visibleWarnings(200);
+      expect(visible.map((w) => w.message), ['real', 'steep']);
+      // Threshold 0 shows everything.
+      expect(route.visibleWarnings(0).length, 3);
+    });
+  });
+
+  group('per-mode route coloring', () {
+    test('a plain route is one feature in its mode color', () {
+      final route = NavRoute.fromFeature(_feature());
+      final features = route.routeCollection()['features'] as List;
+      expect(features.length, 1);
+      expect(features.single['properties']['color'], routeLegColors['bike']);
+    });
+
+    test('a transit itinerary splits at board and alight', () {
+      final f = _feature();
+      final props = f['properties'] as Map<String, dynamic>;
+      props['mode'] = 'transit';
+      props['access_mode'] = 'bike';
+      props['route_color'] = '#AB47BC';
+      props['steps'] = <dynamic>[...props['steps'] as List]..insertAll(1, [
+        {
+          'maneuver': 'board',
+          'instruction': 'Board Greenlink Route 503',
+          'distance_m': 0.0,
+          'start_index': 1,
+        },
+        {
+          'maneuver': 'alight',
+          'instruction': 'Get off',
+          'distance_m': 0.0,
+          'start_index': 2,
+        },
+      ]);
+      final route = NavRoute.fromFeature(f);
+      final features = route.routeCollection()['features'] as List;
+      expect(features.length, 2,
+          reason: 'alight at the last coordinate leaves no third leg');
+      expect(features[0]['properties']['color'], routeLegColors['bike']);
+      expect(features[1]['properties']['color'], '#AB47BC');
+    });
+
+    test('a bike-share trip draws walk legs around the red ride', () {
+      final f = _feature();
+      final props = f['properties'] as Map<String, dynamic>;
+      props['plan'] = 'bcycle';
+      props['steps'] = <dynamic>[...props['steps'] as List]..insertAll(1, [
+        {
+          'maneuver': 'rent',
+          'instruction': 'Unlock a BCycle',
+          'distance_m': 0.0,
+          'start_index': 1,
+        },
+        {
+          'maneuver': 'dock',
+          'instruction': 'Dock the bike',
+          'distance_m': 0.0,
+          'start_index': 2,
+        },
+      ]);
+      final route = NavRoute.fromFeature(f);
+      final features = route.routeCollection()['features'] as List;
+      expect(features.length, 2);
+      expect(features[0]['properties']['color'], routeLegColors['walk']);
+      expect(features[1]['properties']['color'], routeLegColors['bcycle']);
+    });
   });
 
   group('warning presentation', () {

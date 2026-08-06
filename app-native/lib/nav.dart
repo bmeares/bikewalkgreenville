@@ -3,6 +3,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
+import 'theme.dart';
+
 /// Turn-by-turn model + progress math for the bike / walk / transit router.
 ///
 /// The API (`/map-layers/route`) returns a LineString plus a `steps` list of
@@ -242,6 +244,9 @@ class NavRoute {
   final String? boardStop;
   final String? routeColor; // official route color, transit only
 
+  /// How the rider reaches the bus on a transit plan (`bike`, `walk`, `roll`).
+  final String? accessMode;
+
   /// Router plan key (`bike`, `bike-transit`, `bcycle`, …) and its label.
   final String plan;
   final String planLabel;
@@ -277,6 +282,7 @@ class NavRoute {
     required this.transitRoute,
     required this.boardStop,
     required this.routeColor,
+    required this.accessMode,
     required this.plan,
     required this.planLabel,
     required this.warnRanges,
@@ -325,6 +331,7 @@ class NavRoute {
       transitRoute: props['route']?.toString(),
       boardStop: props['board_stop']?.toString(),
       routeColor: props['route_color']?.toString(),
+      accessMode: props['access_mode']?.toString(),
       plan: (props['plan'] ?? mode).toString(),
       planLabel: (props['plan_label'] ?? '').toString(),
       warnRanges: ((props['warn_ranges'] as List?) ?? [])
@@ -372,6 +379,174 @@ class NavRoute {
         ],
       };
 
+  /// GeoJSON for the route line itself. A single-mode trip is one feature in
+  /// its mode's color; a composite itinerary (transit, bike share) splits at
+  /// the board/alight (or rent/dock) maneuvers so every leg draws in the
+  /// color of how the rider travels it — bike to the stop, bus, walk the rest.
+  Map<String, dynamic> routeCollection() {
+    String colorFor(String m) => routeLegColors[m] ?? routeLegColors['bike']!;
+    final foot = accessMode ?? 'walk';
+    // (coordinate index where a leg starts, its color)
+    final cuts = <(int, String)>[];
+    if (isTransit) {
+      cuts.add((0, colorFor(foot)));
+      for (final s in steps) {
+        if (s.maneuver == 'board') {
+          cuts.add((s.startIndex, routeColor ?? colorFor('transit')));
+        } else if (s.maneuver == 'alight') {
+          cuts.add((s.startIndex, colorFor(foot)));
+        }
+      }
+    } else if (plan == 'bcycle') {
+      cuts.add((0, colorFor('walk')));
+      for (final s in steps) {
+        if (s.maneuver == 'rent') {
+          cuts.add((s.startIndex, colorFor('bcycle')));
+        } else if (s.maneuver == 'dock') {
+          cuts.add((s.startIndex, colorFor('walk')));
+        }
+      }
+    } else {
+      cuts.add((0, routeColor ?? colorFor(mode)));
+    }
+    final features = <Map<String, dynamic>>[];
+    for (var c = 0; c < cuts.length; c++) {
+      final start = cuts[c].$1.clamp(0, points.length - 1);
+      final end = (c + 1 < cuts.length ? cuts[c + 1].$1 : points.length - 1)
+          .clamp(0, points.length - 1);
+      if (end <= start) continue;
+      features.add({
+        'type': 'Feature',
+        'geometry': {
+          'type': 'LineString',
+          'coordinates': [
+            for (final p in points.sublist(start, end + 1))
+              [p.longitude, p.latitude],
+          ],
+        },
+        'properties': {'color': cuts[c].$2},
+      });
+    }
+    return {'type': 'FeatureCollection', 'features': features};
+  }
+
+  // Hill severity thresholds. A stretch is "steep" past 7% grade — or past 5%
+  // when it climbs 60+ ft in one go, because a long 6% hill is a real hill
+  // whatever the arithmetic says. Noise gates mirror the server's: at least
+  // 8 ft of rise (two contour intervals) over at least 25 m of run.
+  static const hillModGrade = 0.04;
+  static const hillSteepGrade = 0.07;
+  static const hillVerySteepGrade = 0.10;
+  static const hillLongGrade = 0.05;
+  static const hillLongRiseFt = 60.0;
+  static const _hillMinRunM = 25.0;
+  static const _hillMinRiseFt = 8.0;
+
+  /// Hills along the route, from the elevation profile — both directions,
+  /// because descending a 10% grade is its own hazard on wheels.
+  List<HillRange> hillRanges() {
+    final prof = elevationProfile;
+    if (prof == null || prof.length < 2 || points.length < 2) return const [];
+    final out = <HillRange>[];
+    for (var i = 1; i < prof.length; i++) {
+      final run = prof[i][0] - prof[i - 1][0];
+      final riseFt = (prof[i][1] - prof[i - 1][1]).abs();
+      if (run < _hillMinRunM || riseFt < _hillMinRiseFt) continue;
+      final grade = (riseFt / 3.28084) / run;
+      if (grade < hillModGrade) continue;
+      final severity = grade >= hillVerySteepGrade
+          ? 'vsteep'
+          : (grade >= hillSteepGrade ||
+                  (grade >= hillLongGrade && riseFt >= hillLongRiseFt))
+              ? 'steep'
+              : 'mod';
+      out.add(HillRange(
+        startM: prof[i - 1][0],
+        endM: prof[i][0],
+        grade: grade,
+        severity: severity,
+      ));
+    }
+    return out;
+  }
+
+  /// Index of the route point nearest to [m] meters from the start.
+  int _indexAtDistance(double m) {
+    var lo = 0, hi = cumulative.length - 1;
+    while (lo < hi) {
+      final mid = (lo + hi) >> 1;
+      if (cumulative[mid] < m) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    return lo;
+  }
+
+  /// GeoJSON for the hill overlay, drawn on top of the route line and colored
+  /// by severity ([hillColors]).
+  Map<String, dynamic> hillCollection() => {
+        'type': 'FeatureCollection',
+        'features': [
+          for (final h in hillRanges())
+            if (_hillFeature(h) != null) _hillFeature(h)!,
+        ],
+      };
+
+  Map<String, dynamic>? _hillFeature(HillRange h) {
+    var si = _indexAtDistance(h.startM);
+    if (si > 0 && cumulative[si] > h.startM) si--;
+    final ei = _indexAtDistance(h.endM);
+    if (ei <= si) return null;
+    return {
+      'type': 'Feature',
+      'geometry': {
+        'type': 'LineString',
+        'coordinates': [
+          for (final p in points.sublist(si, ei + 1))
+            [p.longitude, p.latitude],
+        ],
+      },
+      'properties': {
+        'sev': h.severity,
+        'grade': (h.grade * 100).round(),
+      },
+    };
+  }
+
+  /// One-line hill disclosure for the preview banner, or null when the route
+  /// has nothing worth bracing for. Softened for e-bikes; wheelchair (roll)
+  /// trips already get the server's ADA-based steep warning instead.
+  String? hillSummary() {
+    final hills = hillRanges();
+    var steepM = 0.0;
+    var maxGrade = 0.0;
+    for (final h in hills) {
+      if (h.severity != 'mod') steepM += h.endM - h.startM;
+      maxGrade = math.max(maxGrade, h.grade);
+    }
+    if (steepM <= 0) return null;
+    if (mode == 'roll' && !ebike) return null;
+    final d = formatDistance(steepM);
+    final pct = (maxGrade * 100).round();
+    if (ebike) {
+      return 'About $d of this route is on steep hills (up to ~$pct% grade) — '
+          'your e-bike\'s motor will help.';
+    }
+    final effort = mode == 'walk' ? 'a hard walk up' : 'a hard climb';
+    return 'About $d of this route is on steep hills (up to ~$pct% grade) — '
+        'expect $effort. Steep stretches are shaded orange–red on the map.';
+  }
+
+  /// Infrastructure warnings worth the banner: gaps shorter than [minFt] feet
+  /// (default 200 in Settings) read as noise — "about 0 ft with no bike lane"
+  /// helps nobody. Steep warnings always show.
+  List<RouteWarning> visibleWarnings(double minFt) => [
+        for (final w in warnings)
+          if (w.kind == 'steep' || w.distanceM * 3.28084 >= minFt) w,
+      ];
+
   /// GeoJSON for the maneuver markers: one rotated chevron per turn, so the
   /// upcoming turns are visible on the map itself and not only in the card.
   /// [fromStep] skips maneuvers already behind the rider.
@@ -413,6 +588,22 @@ class NavRoute {
     final i = index.clamp(0, points.length - 2);
     return bearingBetween(points[i], points[i + 1]);
   }
+}
+
+/// A stretch of route steeper than the moderate-hill threshold, as distances
+/// from the start (the elevation profile's axis).
+class HillRange {
+  final double startM;
+  final double endM;
+  final double grade;
+  final String severity; // mod | steep | vsteep
+
+  const HillRange({
+    required this.startM,
+    required this.endM,
+    required this.grade,
+    required this.severity,
+  });
 }
 
 /// Where the rider is relative to [NavRoute] right now.

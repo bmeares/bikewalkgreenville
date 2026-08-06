@@ -73,6 +73,91 @@ Future<Uint8List> renderPin({
   return bytes!.buffer.asUint8List();
 }
 
+/// Size of the navigation puck bitmap, in dp.
+const puckSize = 44.0;
+
+/// Paints the rider's own marker for navigation: a Google-Maps-style arrow,
+/// or — when [icon] is given — the travelling mode's glyph (cyclist, walker,
+/// wheelchair user) in a disc with a heading wedge.
+///
+/// Painted pointing north; the symbol layer rotates it to the GPS bearing
+/// with `icon-rotation-alignment: map`, so it turns with the street grid the
+/// way the Google Maps arrow does.
+Future<Uint8List> renderPuck({
+  required Color color,
+  required double devicePixelRatio,
+  IconData? icon,
+}) async {
+  final ratio = devicePixelRatio;
+  final recorder = ui.PictureRecorder();
+  final canvas = Canvas(recorder);
+  canvas.scale(ratio);
+
+  const c = puckSize / 2;
+  if (icon == null) {
+    // The classic chevron: solid arrow, white outline, soft shadow.
+    final arrow = Path()
+      ..moveTo(c, c - 15.0)
+      ..lineTo(c + 11.0, c + 12.0)
+      ..lineTo(c, c + 6.0)
+      ..lineTo(c - 11.0, c + 12.0)
+      ..close();
+    canvas.drawShadow(arrow, Colors.black.withValues(alpha: 0.5), 3.0, false);
+    canvas.drawPath(
+      arrow,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 4.0
+        ..strokeJoin = StrokeJoin.round
+        ..isAntiAlias = true,
+    );
+    canvas.drawPath(arrow, Paint()..color = color..isAntiAlias = true);
+  } else {
+    // Mode glyph in a disc, with a wedge on top for the heading.
+    const r = puckSize / 2 - 8.0;
+    final wedge = Path()
+      ..moveTo(c, 1.0)
+      ..lineTo(c + 7.0, c - r + 3.0)
+      ..lineTo(c - 7.0, c - r + 3.0)
+      ..close();
+    final disc = Path()..addOval(Rect.fromCircle(center: const Offset(c, c), radius: r));
+    final shape = Path.combine(PathOperation.union, disc, wedge);
+    canvas.drawShadow(shape, Colors.black.withValues(alpha: 0.5), 3.0, false);
+    canvas.drawPath(shape, Paint()..color = color..isAntiAlias = true);
+    canvas.drawPath(
+      shape,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5
+        ..isAntiAlias = true,
+    );
+    final glyph = TextPainter(textDirection: TextDirection.ltr)
+      ..text = TextSpan(
+        text: String.fromCharCode(icon.codePoint),
+        style: TextStyle(
+          fontSize: r * 1.3,
+          fontFamily: icon.fontFamily,
+          package: icon.fontPackage,
+          color: Colors.white,
+          height: 1.0,
+        ),
+      )
+      ..layout();
+    glyph.paint(
+        canvas, Offset(c, c) - Offset(glyph.width / 2, glyph.height / 2));
+  }
+
+  final image = await recorder.endRecording().toImage(
+        (puckSize * ratio).ceil(),
+        (puckSize * ratio).ceil(),
+      );
+  final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+  image.dispose();
+  return bytes!.buffer.asUint8List();
+}
+
 /// Size of the turn marker bitmap, in dp.
 const turnMarkerSize = 22.0;
 

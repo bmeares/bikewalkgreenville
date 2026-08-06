@@ -35,7 +35,7 @@ from meerschaum.actions import make_action
 from meerschaum.plugins import api_plugin
 from meerschaum.utils.warnings import info, warn
 
-__version__ = '0.6.0'
+__version__ = '0.7.0'
 
 bwg = mrsm.Plugin('bwg')
 
@@ -113,8 +113,8 @@ LAYERS: dict[str, dict[str, Any]] = {
         'props': {},
         'color': '#1565C0',
     },
-    # Downtown land use: surface parking lots vs. parking garages, the same
-    # split the parking Grafana dashboard reports on.
+    # Downtown land use: roadway pavement, surface parking lots and parking
+    # garages — the same split the parking Grafana dashboard reports on.
     'parking-landuse': {
         'label': 'Parking Land Use',
         'kind': 'fill',
@@ -123,7 +123,11 @@ LAYERS: dict[str, dict[str, Any]] = {
         'color': '#8D6E63',
         'color_by': {
             'property': 'kind',
-            'map': {'lot': '#BCAAA4', 'garage': '#6D4C41'},
+            'map': {
+                'roadway': '#66BB6A',
+                'lot': '#F57C00',
+                'garage': '#FBC02D',
+            },
         },
     },
     # Curated, hand-maintained: extend BIKE_BUSINESSES below as more sign on.
@@ -271,12 +275,24 @@ def _build_merged_sidewalks(debug: bool = False) -> str | None:
 
 
 def _build_parking_landuse(debug: bool = False) -> str | None:
-    """Downtown parking land use: surface lots (paved/unpaved city parking
-    polygons in the DTMP study area) vs. garage building footprints."""
+    """Downtown parking land use: roadway pavement, surface lots (paved/unpaved
+    city parking polygons in the DTMP study area) and garage building
+    footprints. Roadway rows come first so lots and garages draw on top of the
+    street surface they overlap."""
     import json
 
     conn = mrsm.get_connector('sql:bwg')
     query = f'''
+    SELECT
+        ST_AsGeoJSON(
+            ST_Force2D(ST_Transform(
+                ST_SimplifyPreserveTopology(ST_MakeValid("geometry"), 5), 4326
+            )), 5
+        ) AS "gj",
+        'roadway' AS "kind",
+        NULL AS "name"
+    FROM "Parking".dtmp_pavement
+    UNION ALL
     SELECT
         ST_AsGeoJSON(
             ST_Force2D(ST_Transform(
@@ -818,6 +834,11 @@ TRANSIT_WAIT_MIN = 8.0
 #: Greenlink buses carry front-load racks, so a bike widens the catchment
 #: around a stop a long way past walking distance.
 TRANSIT_BIKE_MAX_M = 5000.0
+
+#: With several modes selected, the combined (transit) itinerary is preferred
+#: over the fastest single-mode plan as long as it isn't slower than this
+#: factor — picking bike + bus means "use them together", not "race them".
+MULTIMODAL_MAX_SLOWDOWN = 1.6
 
 # Bike share (Greenville BCycle): how far someone will walk to a dock, how
 # long a ride has to be to justify the trip to one, and the unlock overhead.
@@ -2946,10 +2967,24 @@ def _route_multimodal(
         )
         raise ValueError(reason)
 
-    chosen_key = (
-        plan if plan in computed
-        else min(computed, key=lambda k: computed[k]['properties']['duration_min'])
-    )
+    def _duration(k: str) -> float:
+        return computed[k]['properties']['duration_min']
+
+    fastest_key = min(computed, key=_duration)
+    chosen_key = fastest_key
+    if plan in computed:
+        chosen_key = plan
+    elif len(modes) > 1:
+        # Selecting several modes is a request to USE them together: a rider
+        # who picked bike + bus wants the bike-to-the-bus itinerary, not to be
+        # told the bike alone is faster (that stays one tap away in the
+        # alternatives). Only fall back to the fastest single-mode plan when
+        # the combined trip is a genuinely bad deal.
+        combined = [k for k in computed if k.endswith('-transit')]
+        if combined:
+            best_combined = min(combined, key=_duration)
+            if _duration(best_combined) <= _duration(fastest_key) * MULTIMODAL_MAX_SLOWDOWN:
+                chosen_key = best_combined
     # The plans are cached and shared; annotate a copy so a later request
     # doesn't inherit this one's alternatives list.
     feature = dict(computed[chosen_key])

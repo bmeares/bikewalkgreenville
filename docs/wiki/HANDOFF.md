@@ -1,6 +1,7 @@
 # Handoff — work continues on host `omega` (repo at `~/projects/bikewalkgreenville`)
 
-Updated 2026-08-02 (seventh session on omega). Read this + `DATA.md` before touching anything.
+Updated 2026-08-06 (eighth session, Bennett's laptop — paused mid-stream, see
+"IN FLIGHT" below). Read this + `DATA.md` before touching anything.
 
 ## ⚠️ Repo is PUBLIC on GitHub
 
@@ -15,6 +16,142 @@ Updated 2026-08-02 (seventh session on omega). Read this + `DATA.md` before touc
 - **Prod jobs registered** inside `mrsm-api-bwg-1`: `transit` (daily GTFS sync) and `bike-parking` (daily Overpass sync), alongside `annex-watch`, `trails-output`, `duke`, `who-owns-the-roads`, `parking`. Both verified running with successful first syncs (`mrsm show logs <job>`).
 - **walk-audit config** moved off env vars onto Meerschaum config (`plugins:walk-audit:{smtp,notify}`). Prod values live in the container volume at `/meerschaum/config/plugins.json` (chmod 600); the `/meerschaum/.env` hack has been **deleted**.
 - `WalkAudit.reports` is empty (the deploy-check row was removed).
+
+### ⚠️ IN FLIGHT 2026-08-06 (eighth session) — app v1.7.0+38 (UNBUILT), map-layers v0.7.0 (DEPLOYED)
+
+Bennett is demoing to executive director **Jasmine Vanadore in a few days** —
+this session's goal is production-ready navigation. Work was paused on the
+laptop (which has the phone + adb) and continues on omega (which does NOT have
+adb — Bennett will device-test with Claude later). All code below is
+committed on `main`, `flutter analyze` clean, `flutter test` **48/48 green**,
+Python `tests/test_route_graph.py` 31/31 green — but **nothing is built or
+device-verified yet**.
+
+#### Backend map-layers v0.7.0 — DEPLOYED to prod and verified via curl
+
+1. **parking-landuse**: new `roadway` kind (from `Parking.dtmp_pavement`, 701
+   features, listed first so lots/garages draw on top). Colors now match
+   Bennett's spec + the parking Grafana dashboard: roadway `#66BB6A` (green),
+   lot `#F57C00` (orange), garage `#FBC02D` (yellow). Verified live: kinds =
+   `{roadway: 701, lot: 823, garage: 33}`.
+2. **Multi-modal default** (`_route_multimodal`): with ≥2 modes selected and
+   no pinned plan, the transit-inclusive itinerary is chosen unless it's more
+   than `MULTIMODAL_MAX_SLOWDOWN` (1.6×) slower than the fastest single-mode
+   plan — picking bike + bus means "use them together", the pure-bike plan
+   stays one alternatives-chip tap away. Verified live: `modes=bike,transit`
+   on the test trip now returns `bike-transit` (30.0 min) with `bike`
+   (22.5 min) as the alternative; previously `bike` won outright.
+
+#### App v1.7.0+38 — code complete, NOT built, NOT device-tested
+
+1. **Nav follow camera responsive** (`map_screen.dart`): position stream
+   `distanceFilter` 5 → **0** (with 5 m, a stopped rider got NO fixes — the
+   follow camera AND off-route rerouting both froze exactly when someone
+   pulled over); camera throttle 800 → 600 ms; animation 600 → **1100 ms**
+   (slightly longer than the ~1 s between fixes ⇒ one continuous glide
+   instead of hop-per-fix). Course-up bearing (GPS heading while moving, else
+   the route segment's own bearing) already rotated the next turn to the top
+   of the screen from the moment Start is tapped — unchanged.
+2. **Arrow puck** (`map_icons.dart` `renderPuck`, `map_screen.dart`): new
+   `puck` source + `lyr-puck` symbol layer (topmost), rotated to the nav
+   bearing, updated every fix, snapped onto the route line when <30 m off it.
+   Two styles via Settings (`AppState.puckStyle`): Google-blue arrow
+   (default) or the travel mode's icon (cyclist / walker / wheelchair) in a
+   green disc with a heading wedge — this IS the "stylized person" feature
+   Bennett asked about, done as a rotated bitmap. (True animated 3D models
+   would need a custom MapLibre render layer; not worth it.) The native blue
+   dot hides while navigating (`myLocationEnabled: _locationEnabled &&
+   !_navigating`).
+3. **Reroute tone**: `MethodChannel('bwg/tone')` → `MainActivity.kt` plays
+   `ToneGenerator.TONE_PROP_BEEP2` (no plugin, no asset) before the
+   "Rerouting." TTS + toast. Reroute latency itself is fixed by the
+   `distanceFilter: 0` change above (3 consecutive fixes >45 m ≈ 3–4 s now;
+   previously unbounded). Backend load: one extra `/route` call per reroute —
+   nothing.
+4. **Hills on the route line** (`nav.dart`): computed CLIENT-side from
+   `elevation_profile` (`hillRanges` / `hillCollection` / `hillSummary`), so
+   no server graph changes and the server's carefully noise-gated ADA `steep`
+   disclosure for wheelchairs is untouched. Severity: `mod` ≥4% grade,
+   `steep` ≥7% **or** ≥5% with ≥60 ft rise (a long 6% hill is a real hill —
+   this is what catches N Main's sustained 6.3%/76 ft climb, verified against
+   the live profile: its max segment is 7.7%, so an 8% gate would show
+   NOTHING on Bennett's own test route), `vsteep` ≥10%. Noise gates mirror
+   the server (≥8 ft rise over ≥25 m). Drawn as `route-hills` layer over the
+   route line, amber → deep orange → red (`hillColors` in theme.dart); banner
+   + steps sheet get a summary line ("About 0.3 mi … up to ~8% grade —
+   expect a hard climb. Steep stretches are shaded orange–red on the map.").
+   E-bike wording softened ("your e-bike's motor will help"); `roll` returns
+   null (server ADA warning already covers it). Known gap (pre-existing):
+   composite transit/BCycle plans have no `elevation_profile`, so no hill
+   shading there.
+5. **Warning threshold** (`AppState.warnFt`, default 200 ft, Settings
+   slider 0–1000): `NavRoute.visibleWarnings(minFt)` drops
+   no_bike_lane/no_sidewalk warnings shorter than the threshold ("About 0 ft
+   of this route…" is dead). `steep` warnings are never filtered. Dashed-red
+   map spans still draw regardless — only the banner text is gated.
+6. **Per-mode route colors** (`NavRoute.routeCollection`): the route source
+   is now a FeatureCollection split at board/alight (transit) and rent/dock
+   (BCycle) maneuvers; each leg carries a `color` property (`routeLegColors`
+   in theme.dart: bike `#1565C0`, walk/roll `#00897B`, transit `#7B1FA2`,
+   bcycle `#E2231A`), bus legs use the official Greenlink `route_color`.
+   Single-mode routes = one feature in the mode's color. The old
+   "props['color'] = routeColor" hack in `_planTrip` is gone.
+7. **Search clears stale routes**: `_selectResult` calls `_clearRoute()`
+   when a route is drawn, so picking a new search result no longer leaves the
+   old blue line pointing nowhere.
+8. **Settings screen** (`lib/screens/settings_screen.dart`, NEW; linked from
+   the top of the Tools/hamburger screen): stress tolerance, e-bike, roll,
+   BCycle, warning threshold slider, puck style radio.
+9. **Layers**: label "Parking garages" (dropped " (live)"); sidewalks
+   lightened `#1565C0` → `#7BAFDE` at 0.5 opacity (new `LayerDef.opacity`
+   field) so the route line stands apart; parking-landuse `matchColors`
+   updated to the three-kind palette above; **minZoom removed** from
+   `bcycle`, `repair-stations` and `parking-garages` — the chosen mechanism
+   for "pins disappear when zoomed out": sparse layers (≤ a few dozen
+   features) simply stay visible at every zoom and MapLibre's symbol
+   decluttering handles overlap; dense layers (bus-stops, bike-parking) keep
+   their minZoom.
+
+#### NOT yet done (continue on omega)
+
+1. **Build**: `flutter build apk --release` + `flutter build appbundle
+   --release` on omega (pubspec already bumped to 1.7.0+38; signing config
+   already on omega). NOTE: `android/gradle.properties` pins
+   `org.gradle.java.home=/home/bmeares/sdk/jdk21` — that path is
+   **omega's**; on Bennett's laptop it must be temporarily
+   `/usr/lib/jvm/java-21-temurin-jdk` (do NOT commit that change; it was
+   reverted before push).
+2. **Device testing** (needs the phone — Bennett will drive): checklist
+   below.
+3. **Parking garages "not rendering" root cause UNCONFIRMED.** The prod
+   endpoint is verified fine (10 features with occupancy). Prime suspect was
+   `minZoom: 12` (toggling the layer on while zoomed out showed nothing) —
+   now removed. If it still fails on device: look at the `_refreshLive()` /
+   `_ensureLayer()` race (`setGeoJsonSource` can fire before `addSource`
+   completes; the failure is silently swallowed).
+4. Play upload when Bennett says go (see item 6 of the older list below).
+
+#### Device test checklist (v1.7.0+38)
+
+- Route **101 N Main → Other Lands (731 Rutherford Rd)**, Walk and Bike:
+  hill shading on the N Main climbs, hill line in the banner + steps sheet,
+  elevation graph unchanged.
+- Search a place, route to it, then search somewhere else → old route line
+  fully gone, green dot on the new place.
+- Bike + Bus selected → "Go here" → bike-transit itinerary by default,
+  bike/bus legs in different colors, pure-bike in the alternatives chips.
+- Start nav: view rotates to the route bearing immediately (next turn at
+  top), blue arrow puck (not the dot), camera glides ~continuously, ongoing
+  notification, pan away → Re-center chip.
+- Go off-route (~3 fixes >45 m): double-beep, "Rerouting.", route redraws
+  from current position, same itinerary.
+- Settings: switch puck to mode icon → nav shows cyclist/walker disc;
+  threshold slider up → small no-bike-lane warnings disappear from preview.
+- Layers sheet: "Parking garages" (no "(live)") renders pins + occupancy
+  sheet; Parking land use = green roadway / orange lots / yellow garages;
+  BCycle + repair stations visible when zoomed way out; sidewalks noticeably
+  fainter than the route line.
+- Regression: reports pin + submit, BCycle sheet/deep link, feature taps.
 
 ### Hotfix 2026-08-03 — app v1.6.1+37
 
