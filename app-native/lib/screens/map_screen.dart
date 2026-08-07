@@ -94,6 +94,10 @@ class _MapScreenState extends State<MapScreen> {
   LatLng? _lastNavPos;
   double? _lastNavBearing;
 
+  /// Current map rotation, degrees. Drives the rail's compass, which only
+  /// appears once the map is actually turned off north.
+  double _bearing = 0;
+
   // Persistent notification with the upcoming turn.
   final _navNotifier = NavNotifier();
   int _notifiedStep = -1;
@@ -1273,6 +1277,13 @@ class _MapScreenState extends State<MapScreen> {
   /// the two legitimately-far programmatic moves: the fly-in at nav start and
   /// the Re-center animation itself.
   void _onCameraMove(CameraPosition pos) {
+    // Feeds the rail's compass. Repaint only on a visible change, and never
+    // mid-navigation (the camera rotates with every GPS fix there, and the
+    // compass is hidden anyway).
+    if ((pos.bearing - _bearing).abs() > 2) {
+      _bearing = pos.bearing;
+      if (!_navigating) setState(() {});
+    }
     if (!_navigating || !_followNav) return;
     if (DateTime.now().isBefore(_progAnimUntil)) return;
     final here = _lastNavPos;
@@ -1280,6 +1291,13 @@ class _MapScreenState extends State<MapScreen> {
     if (metersBetween(pos.target, here) > 120) {
       setState(() => _followNav = false);
     }
+  }
+
+  /// Lay the map back north-up. The compass button disappears afterwards
+  /// because there is nothing left to correct.
+  void _resetBearing() {
+    _map?.animateCamera(CameraUpdate.bearingTo(0));
+    setState(() => _bearing = 0);
   }
 
   void _recenterNav() {
@@ -1671,6 +1689,11 @@ class _MapScreenState extends State<MapScreen> {
               c.onFeatureTapped.add(_onFeatureTap);
             },
             onStyleLoadedCallback: _onStyleLoaded,
+            // The native compass drew itself under the status bar and vanished
+            // the moment it was tapped (it fades out facing north). Ours lives
+            // in the control rail, inside the safe area, where it can be seen
+            // and hit.
+            compassEnabled: false,
             onMapClick: _onMapClick,
             onMapLongClick: _onMapLongClick,
             onCameraMove: _onCameraMove,
@@ -1854,10 +1877,12 @@ class _MapScreenState extends State<MapScreen> {
 
           if (_navigating) _navChrome(),
 
-          // One bottom overlay: FABs stacked above whichever card is active
+          // One bottom overlay: the control rail above whichever card is active
           // (route preview, place card, or the nav trip bar), the whole thing
           // lifted clear of the system navigation bar. Phones with 3-button
-          // nav have a ~48 dp inset here; gesture phones ~16 dp.
+          // nav have a ~48 dp inset here; gesture phones ~16 dp. Everything
+          // that is not the current decision hides behind a rail button — a
+          // map you cannot see is a map you cannot ride by.
           Positioned(
             left: 12,
             right: 12,
@@ -1866,7 +1891,11 @@ class _MapScreenState extends State<MapScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                _fabColumn(),
+                _controlRail(),
+                if (!_navigating && _navRoute == null) ...[
+                  const SizedBox(height: 10),
+                  _reportFab(),
+                ],
                 if (_navigating && !_followNav) ...[
                   const SizedBox(height: 10),
                   Align(
@@ -1903,50 +1932,83 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  /// FABs, right-aligned above the bottom card (recenter only while
-  /// navigating).
-  Widget _fabColumn() => Column(
+  /// One narrow control rail instead of a stack of separate round buttons:
+  /// compass, layers, hazards and locate read as a single object clinging to
+  /// the edge, so the map keeps its middle for panning and pinch-zoom. Buttons
+  /// that have nothing to say (compass facing north, a route with no hazards)
+  /// are simply absent.
+  ///
+  /// "Clear route" is gone on purpose — the ✕ on the route summary bar right
+  /// below already does exactly that, and two ways to cancel one route was
+  /// half the crowding.
+  Widget _controlRail() {
+    final hazards = _navRoute == null ? const [] : _hazards(_navRoute!);
+    return Material(
+      elevation: 3,
+      color: Theme.of(context).colorScheme.surface,
+      borderRadius: BorderRadius.circular(26),
+      child: Column(
         mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          if (!_navigating) ...[
-            FloatingActionButton.small(
-              heroTag: 'layers',
-              onPressed: _openLayersSheet,
-              child: const Icon(Icons.layers),
+          if (!_navigating && _bearing.abs() > 2)
+            _railButton(
+              tooltip: 'Face north',
+              onTap: _resetBearing,
+              // The needle keeps pointing north while the map turns under it.
+              icon: Transform.rotate(
+                angle: -_bearing * math.pi / 180,
+                child: const Icon(Icons.explore_outlined),
+              ),
             ),
-            const SizedBox(height: 10),
-          ],
-          FloatingActionButton.small(
-            heroTag: 'locate',
-            onPressed: _locateMe,
-            child: const Icon(Icons.my_location),
+          if (!_navigating)
+            _railButton(
+              tooltip: 'Map layers',
+              onTap: _openLayersSheet,
+              icon: const Icon(Icons.layers_outlined),
+            ),
+          if (hazards.isNotEmpty)
+            _railButton(
+              tooltip: 'What to expect on this route',
+              onTap: _openHazardsSheet,
+              icon: Badge(
+                label: Text('${hazards.length}'),
+                backgroundColor: warnAccent(context),
+                textColor: warnBg(context),
+                child: Icon(Icons.warning_amber_rounded,
+                    color: warnAccent(context)),
+              ),
+            ),
+          _railButton(
+            tooltip: 'My location',
+            onTap: _locateMe,
+            icon: const Icon(Icons.my_location),
           ),
-          // An explicit way out of a drawn trip: clears the line, the pin and
-          // the endpoints, and lays the camera back flat.
-          if (!_navigating && _navRoute != null) ...[
-            const SizedBox(height: 10),
-            FloatingActionButton.extended(
-              heroTag: 'clear-route',
-              backgroundColor: Theme.of(context).colorScheme.surface,
-              foregroundColor: Theme.of(context).colorScheme.onSurface,
-              icon: const Icon(Icons.close),
-              label: const Text('Clear route'),
-              onPressed: _clearRoute,
-            ),
-          ],
-          if (!_navigating && _navRoute == null) ...[
-            const SizedBox(height: 10),
-            FloatingActionButton.extended(
-              heroTag: 'report',
-              backgroundColor: brandGreen,
-              foregroundColor: Colors.white,
-              icon: const Icon(Icons.report_problem_outlined),
-              label: const Text('Report'),
-              onPressed: _reportAtMyLocation,
-            ),
-          ],
         ],
+      ),
+    );
+  }
+
+  Widget _railButton({
+    required Widget icon,
+    required String tooltip,
+    required VoidCallback onTap,
+  }) =>
+      IconButton(
+        icon: icon,
+        tooltip: tooltip,
+        onPressed: onTap,
+        visualDensity: VisualDensity.compact,
+      );
+
+  /// The one prominent action on an otherwise empty map. Only offered when no
+  /// route is drawn — with a trip on screen the bottom belongs to the trip.
+  Widget _reportFab() => FloatingActionButton.extended(
+        heroTag: 'report',
+        backgroundColor: brandGreen,
+        foregroundColor: Colors.white,
+        icon: const Icon(Icons.add_location_alt_outlined),
+        label: const Text('Report'),
+        onPressed: _reportAtMyLocation,
       );
 
   /// Immediate feedback that the router is working on it ("Bike here" used to
@@ -2026,39 +2088,15 @@ class _MapScreenState extends State<MapScreen> {
     final subtitle =
         route.alt > 0 ? '$base · alternate route ${route.alt}' : base;
     final icon = route.planIcon;
-    // Tiny infrastructure gaps stay quiet (threshold in Settings); the hill
-    // disclosure is computed client-side from the elevation profile.
-    final warnings =
-        route.visibleWarnings(context.watch<AppState>().warnFt);
-    final hillNote = route.hillSummary();
-    // Bottom-anchored: the summary + Start sit closest to the thumb, the
-    // caveats and alternatives stack above them.
+    // The caveats, the hills and the elevation graph used to stack here as
+    // three more cards; they live behind the rail's hazards button now. What
+    // stays is what you decide with: the alternatives and the trip itself.
     return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
           if (route.alternatives.isNotEmpty || _canAlt(route))
             _alternativesRow(route),
-          if (route.fallbackNote != null ||
-              warnings.isNotEmpty ||
-              hillNote != null)
-            _warningBanner(route, warnings, hillNote),
-          // The terrain, at a glance: where the trip climbs and where it
-          // bites (steep stretches in red). Only worth the pixels once the
-          // climb is enough to feel in your legs.
-          if (route.elevationProfile != null && route.climbFt >= 30)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: Material(
-                elevation: 2,
-                borderRadius: BorderRadius.circular(14),
-                color: Theme.of(context).colorScheme.surface,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                  child: ElevationProfile(profile: route.elevationProfile!),
-                ),
-              ),
-            ),
           Material(
             elevation: 4,
             borderRadius: BorderRadius.circular(16),
@@ -2122,56 +2160,77 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  /// The honest bit: what this route is missing, and why it looks like this.
-  Widget _warningBanner(
-      NavRoute route, List<RouteWarning> warnings, String? hillNote) {
-    final lines = <String>[
-      if (route.fallbackNote != null) route.fallbackNote!,
-      for (final w in warnings) w.message,
-      ?hillNote,
-    ];
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Material(
-        elevation: 2,
-        borderRadius: BorderRadius.circular(14),
-        color: warnBg(context),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(14),
-          onTap: _openStepsSheet,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(Icons.warning_amber_rounded,
-                    color: warnAccent(context), size: 20),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      for (final line in lines)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 2),
-                          child: Text(line,
-                              style: TextStyle(
-                                  fontSize: 12.5, color: warnFg(context))),
-                        ),
-                      if (warnings.isNotEmpty)
-                        Text(
-                          'Those stretches are dashed red on the map.',
-                          style: TextStyle(
-                              fontSize: 11.5,
-                              color: warnFg(context).withValues(alpha: 0.8),
-                              fontStyle: FontStyle.italic),
-                        ),
-                    ],
-                  ),
-                ),
-              ],
+  /// The honest bit, as data: what this route is missing, what it climbs, and
+  /// why it looks like this. Empty means the trip has nothing worth bracing
+  /// for — and then the hazards button never appears at all.
+  List<({IconData icon, String text})> _hazards(NavRoute route) => [
+        if (route.fallbackNote != null)
+          (icon: Icons.info_outline, text: route.fallbackNote!),
+        for (final w in route.visibleWarnings())
+          (icon: w.icon, text: w.message),
+        if (route.hillSummary() case final hill?)
+          (icon: Icons.trending_up, text: hill),
+      ];
+
+  /// The hazards view: everything the old banner shouted from the map, plus
+  /// the elevation graph, opened deliberately instead of occupying the
+  /// viewport on every route.
+  void _openHazardsSheet() {
+    final route = _navRoute;
+    if (route == null) return;
+    final hazards = _hazards(route);
+    final hasGaps = route.visibleWarnings().isNotEmpty;
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            ListTile(
+              leading: Icon(Icons.warning_amber_rounded,
+                  color: warnAccent(ctx)),
+              title: const Text('What to expect on this route',
+                  style: TextStyle(fontWeight: FontWeight.w600)),
+              subtitle: Text('${formatDistance(route.distanceM)} · '
+                  '${formatDuration(route.durationMin)}'
+                  '${route.climbFt >= 50 ? ' · ↑ ${route.climbFt} ft' : ''}'),
             ),
-          ),
+            for (final h in hazards)
+              ListTile(
+                dense: true,
+                leading: Icon(h.icon, size: 20, color: warnAccent(ctx)),
+                title: Text(h.text, style: const TextStyle(fontSize: 13.5)),
+              ),
+            if (hasGaps)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                child: Text(
+                  'Those stretches are dashed red on the map.',
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                      fontStyle: FontStyle.italic),
+                ),
+              ),
+            // The terrain, at a glance: where the trip climbs and where it
+            // bites (steep stretches in red). Only worth the pixels once the
+            // climb is enough to feel in your legs.
+            if (route.elevationProfile != null && route.climbFt >= 30)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                child: ElevationProfile(profile: route.elevationProfile!),
+              ),
+            if (route.steps.isNotEmpty)
+              ListTile(
+                leading: const Icon(Icons.list_alt),
+                title: const Text('See every turn'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _openStepsSheet();
+                },
+              ),
+          ],
         ),
       ),
     );
@@ -2515,9 +2574,6 @@ class _MapScreenState extends State<MapScreen> {
     final route = _navRoute;
     if (route == null) return;
     final current = _progress?.stepIndex ?? 0;
-    final warnings =
-        route.visibleWarnings(context.read<AppState>().warnFt);
-    final hillNote = route.hillSummary();
     showModalBottomSheet(
       context: context,
       showDragHandle: true,
@@ -2537,41 +2593,8 @@ class _MapScreenState extends State<MapScreen> {
                     '${route.alt > 0 ? ' · alternate ${route.alt}' : ''}',
                     style: Theme.of(ctx).textTheme.titleMedium,
                   ),
-                  if (route.fallbackNote != null)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Text(route.fallbackNote!,
-                          style: TextStyle(
-                              fontSize: 12.5, color: warnFg(ctx))),
-                    ),
-                  for (final w in warnings)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Row(children: [
-                        Icon(Icons.warning_amber_rounded,
-                            size: 16, color: warnAccent(ctx)),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(w.message,
-                              style: TextStyle(
-                                  fontSize: 12.5, color: warnFg(ctx))),
-                        ),
-                      ]),
-                    ),
-                  if (hillNote != null)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Row(children: [
-                        Icon(Icons.trending_up,
-                            size: 16, color: warnAccent(ctx)),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(hillNote,
-                              style: TextStyle(
-                                  fontSize: 12.5, color: warnFg(ctx))),
-                        ),
-                      ]),
-                    ),
+                  // Route-wide caveats live in the hazards sheet now; what
+                  // stays here is per-step, in the red subtitle lines below.
                 ],
               ),
             ),

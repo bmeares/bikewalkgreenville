@@ -1,6 +1,6 @@
 # Handoff — work continues on host `omega` (repo at `~/projects/bikewalkgreenville`)
 
-Updated 2026-08-07 (eleventh session). Read this + `DATA.md` before touching
+Updated 2026-08-07 (twelfth session). Read this + `DATA.md` before touching
 anything.
 
 ## ⚠️ Repo is PUBLIC on GitHub
@@ -16,6 +16,55 @@ anything.
 - **Prod jobs registered** inside `mrsm-api-bwg-1`: `transit` (daily GTFS sync) and `bike-parking` (daily Overpass sync), alongside `annex-watch`, `trails-output`, `duke`, `who-owns-the-roads`, `parking`. Both verified running with successful first syncs (`mrsm show logs <job>`).
 - **walk-audit config** moved off env vars onto Meerschaum config (`plugins:walk-audit:{smtp,notify}`). Prod values live in the container volume at `/meerschaum/config/plugins.json` (chmod 600); the `/meerschaum/.env` hack has been **deleted**.
 - `WalkAudit.reports` is empty (the deploy-check row was removed).
+
+### 2026-08-07 latest (twelfth session, omega) — app v1.10.0+43 (BUILT + SIGNED)
+
+Bennett: "the bike lane warning, Report, Clear route, layers/GPS are crowding
+the viewport — zooming in/out feels claustrophobic", plus a compass bug. App
+only; **no backend change**, so `map-layers` stays at v0.9.1 in prod and
+nothing was redeployed. `flutter analyze` clean, `flutter test` 67/67, signed
+APK (87 MB) + AAB (58 MB), signer SHA-1 `537F9A88…A843`, versionCode 43 —
+**not device-verified** (no phone on omega).
+
+1. **Hazards button replaces the warning banner.** `_hazards(route)` in
+   map_screen.dart builds one list — fallback note, `visibleWarnings()`, the
+   hill summary. When it is non-empty, the control rail grows a badged amber
+   ⚠ button opening `_openHazardsSheet()`: the same lines, the "dashed red on
+   the map" note, the elevation graph, and a "See every turn" row into the
+   steps sheet. `_warningBanner` is **deleted**; the elevation card is out of
+   `_routePreview` too. The steps sheet no longer repeats the route-wide
+   caveats (per-step red subtitles stay).
+2. **Warning threshold 200 ft → 1000 ft**, as `warnMinFt` in nav.dart, now the
+   default arg of `visibleWarnings([minFt])`. `AppState._warnFt` /
+   `warnFt` / `setWarnFt` / the `warn_ft` pref are **deleted** — the slider
+   went away in v1.9.1, so the persisted value was dead weight that would have
+   pinned old installs at 200. Almost every Greenville trip crosses a short
+   unmarked block; at 200 ft the banner cried wolf on routes that were fine.
+3. **Control rail replaces the FAB stack.** One rounded `Material` column of
+   `IconButton`s (compass / layers / hazards / locate) instead of 2–3 separate
+   round FABs — narrower, reads as one object, leaves the map's middle for
+   pinch-zoom. Buttons with nothing to say are absent.
+4. **"Clear route" FAB deleted** — the ✕ on the route summary bar directly
+   below already calls `_clearRoute`. Two cancels for one route was half the
+   crowding. "Report" stays an extended FAB (only shown when no route is
+   drawn, i.e. the least crowded state); its icon is now
+   `add_location_alt_outlined` so it never reads as the hazards triangle.
+5. **Compass fix**: the native MapLibre compass drew itself *under the status
+   bar* and vanished on tap (it fades out facing north). `compassEnabled:
+   false` now; ours is a rail button that appears only when `_bearing.abs() >
+   2`, rotates its needle to stay pointing north, and taps to
+   `CameraUpdate.bearingTo(0)`. `_onCameraMove` tracks `_bearing` and repaints
+   only on a >2° change, and never mid-navigation (the camera rotates on every
+   GPS fix there and the compass is hidden anyway).
+
+Device test checklist (v1.10.0+43):
+- Plan a route with a real bike-lane gap: NO banner on the map; the rail
+  shows a ⚠ with a count; tapping it lists the gaps + hills + elevation graph.
+- A route whose only gap is a block or two: no ⚠ button at all (1000 ft bar).
+- Rotate the map two-finger: compass appears in the rail *below* the status
+  bar, needle points north; tap → map swings north-up and the button leaves.
+- Idle map: rail + Report only. Route drawn: rail + alternatives + route bar
+  (✕ clears it). Mid-nav: rail is just locate (+ ⚠ if the route has any).
 
 ### 2026-08-07 later (eleventh session, omega) — app v1.9.1+42, map-layers v0.9.1 (DEPLOYED)
 

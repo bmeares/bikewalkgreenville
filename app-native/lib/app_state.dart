@@ -41,7 +41,6 @@ class AppState extends ChangeNotifier {
   static const _kEbike = 'ebike';
   static const _kStress = 'stress';
   static const _kRecents = 'recent_searches';
-  static const _kWarnFt = 'warn_ft';
   static const _kPuck = 'puck_style';
   static const _kTheme = 'theme_mode';
   static const _maxRecents = 8;
@@ -51,7 +50,6 @@ class AppState extends ChangeNotifier {
   bool _useBcycle = false;
   bool _useEbike = false;
   BikeStress _stress = BikeStress.balanced;
-  double _warnFt = 200;
   PuckStyle _puckStyle = PuckStyle.arrow;
   ThemeMode _themeMode = ThemeMode.system;
 
@@ -63,7 +61,6 @@ class AppState extends ChangeNotifier {
 
   /// Gaps shorter than this (feet of missing bike lane / sidewalk) don't earn
   /// a warning banner. Adjustable in Settings.
-  double get warnFt => _warnFt;
 
   PuckStyle get puckStyle => _puckStyle;
 
@@ -139,7 +136,6 @@ class AppState extends ChangeNotifier {
         (s) => s.name == savedStress,
         orElse: () => BikeStress.balanced,
       );
-      _warnFt = prefs.getDouble(_kWarnFt) ?? 200;
       final savedPuck = prefs.getString(_kPuck);
       _puckStyle = PuckStyle.values.firstWhere(
         (p) => p.name == savedPuck,
@@ -168,7 +164,6 @@ class AppState extends ChangeNotifier {
       await prefs.setBool(_kBcycle, _useBcycle);
       await prefs.setBool(_kEbike, _useEbike);
       await prefs.setString(_kStress, _stress.name);
-      await prefs.setDouble(_kWarnFt, _warnFt);
       await prefs.setString(_kPuck, _puckStyle.name);
       await prefs.setString(_kTheme, _themeMode.name);
     } catch (_) {}
@@ -258,13 +253,6 @@ class AppState extends ChangeNotifier {
   void setStress(BikeStress value) {
     if (value == _stress) return;
     _stress = value;
-    notifyListeners();
-    _save();
-  }
-
-  void setWarnFt(double value) {
-    if (value == _warnFt) return;
-    _warnFt = value;
     notifyListeners();
     _save();
   }

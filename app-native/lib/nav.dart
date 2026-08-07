@@ -137,7 +137,11 @@ class WarnRange {
       );
 }
 
-/// One kind of gap, totalled across the route — what the banner says.
+/// Shortest infrastructure gap worth telling a rider about, in feet. A block
+/// or two of missing bike lane is normal here; a fifth of a mile is a decision.
+const warnMinFt = 1000.0;
+
+/// One kind of gap, totalled across the route — what the hazards sheet says.
 class RouteWarning {
   final String kind;
   final double distanceM;
@@ -586,10 +590,11 @@ class NavRoute {
         'expect $effort. Steep stretches are shaded orange–red on the map.';
   }
 
-  /// Infrastructure warnings worth the banner: gaps shorter than [minFt] feet
-  /// (default 200 in Settings) read as noise — "about 0 ft with no bike lane"
-  /// helps nobody. Steep warnings always show.
-  List<RouteWarning> visibleWarnings(double minFt) => [
+  /// Infrastructure warnings worth surfacing: gaps shorter than [minFt] feet
+  /// read as noise — "about 0 ft with no bike lane" helps nobody, and in
+  /// Greenville almost every trip crosses a short unmarked block, so a low
+  /// threshold cried wolf on routes that were fine. Steep warnings always show.
+  List<RouteWarning> visibleWarnings([double minFt = warnMinFt]) => [
         for (final w in warnings)
           if (w.kind == 'steep' || w.distanceM * 3.28084 >= minFt) w,
       ];

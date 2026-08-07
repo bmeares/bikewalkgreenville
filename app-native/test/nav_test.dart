@@ -346,6 +346,20 @@ void main() {
       // Threshold 0 shows everything.
       expect(route.visibleWarnings(0).length, 3);
     });
+
+    test('the default threshold is 1000 ft — a 300 m gap is not a hazard', () {
+      final f = _feature();
+      final props = f['properties'] as Map<String, dynamic>;
+      props['warnings'] = [
+        // 300 m ≈ 984 ft: just under the bar, so it stays quiet.
+        {'kind': 'no_bike_lane', 'distance_m': 300.0, 'label': '', 'message': 'short'},
+        {'kind': 'no_bike_lane', 'distance_m': 400.0, 'label': '', 'message': 'long'},
+        {'kind': 'steep', 'distance_m': 10.0, 'label': '', 'message': 'steep'},
+      ];
+      expect(warnMinFt, 1000.0);
+      expect(NavRoute.fromFeature(f).visibleWarnings().map((w) => w.message),
+          ['long', 'steep']);
+    });
   });
 
   group('per-mode route coloring', () {
