@@ -744,6 +744,101 @@ class NavProgress {
   }
 }
 
+/// What a fix means for rerouting: nothing, a full announced reroute, a
+/// silent recalculation, or a silent recalculation with a one-time "I'll stay
+/// quiet now" notice.
+enum RerouteDecision { none, announce, silent, quietNotice }
+
+/// Decides when going off-route earns a recalculation and how loudly to say
+/// so.
+///
+/// The naive rule (3 fixes >45 m → beep + "Rerouting.") loops forever when a
+/// rider takes a real-world shortcut the graph doesn't know (the Springer St
+/// tunnel): every recalculation starts at the rider, the rider keeps not
+/// following it, and the app beeps at them the whole way. So:
+///
+///  * A rider heading back TOWARD the route is left alone — they're
+///    rejoining on their own.
+///  * Repeated reroutes in one off-route spell back off exponentially
+///    (15 s → 30 s → 60 s → 120 s between recalculations).
+///  * Only the FIRST reroute of a spell gets the tone + voice; the rest are
+///    silent, with a single spoken notice on the third so the rider knows
+///    the app is deliberately staying quiet, not dead.
+///  * The spell ends after ~[onRouteResetFixes] consecutive on-route fixes
+///    (long enough to mean "genuinely back", not "the new route momentarily
+///    passes through me").
+class RerouteGovernor {
+  /// Farther than this from the route line counts as off-route.
+  static const offRouteM = 45.0;
+
+  /// Consecutive off-route fixes before the first recalculation.
+  static const triggerFixes = 3;
+
+  /// A fix must be this much closer than the last one to read as "heading
+  /// back toward the route" (GPS scatter is a few metres).
+  static const approachToleranceM = 5.0;
+
+  /// Consecutive on-route fixes (~1 Hz → seconds) that end an off-route
+  /// spell. Short stretches where a fresh reroute passes through the rider
+  /// must NOT reset the backoff, or the loop comes right back.
+  static const onRouteResetFixes = 30;
+
+  int _offHits = 0;
+  int _onHits = 0;
+  int _spellReroutes = 0;
+  DateTime? _lastRerouteAt;
+  double? _prevOffM;
+
+  /// Reroutes so far in the current off-route spell.
+  int get spellReroutes => _spellReroutes;
+
+  /// Seconds to wait after the [n]th reroute of a spell before the next one.
+  static int cooldownSeconds(int n) => math.min(15 * (1 << (n - 1)), 120);
+
+  /// Call for every GPS fix with the current distance to the route line.
+  RerouteDecision onFix(double offM, DateTime now) {
+    if (offM <= offRouteM) {
+      _offHits = 0;
+      _prevOffM = null;
+      _onHits++;
+      if (_onHits >= onRouteResetFixes) {
+        _spellReroutes = 0;
+        _lastRerouteAt = null;
+      }
+      return RerouteDecision.none;
+    }
+    _onHits = 0;
+    final approaching =
+        _prevOffM != null && offM < _prevOffM! - approachToleranceM;
+    _prevOffM = offM;
+    if (approaching) {
+      _offHits = 0;
+      return RerouteDecision.none;
+    }
+    _offHits++;
+    if (_offHits < triggerFixes) return RerouteDecision.none;
+    if (_spellReroutes > 0 && _lastRerouteAt != null) {
+      final cool = Duration(seconds: cooldownSeconds(_spellReroutes));
+      if (now.difference(_lastRerouteAt!) < cool) return RerouteDecision.none;
+    }
+    _offHits = 0;
+    _lastRerouteAt = now;
+    _spellReroutes++;
+    if (_spellReroutes == 1) return RerouteDecision.announce;
+    if (_spellReroutes == 3) return RerouteDecision.quietNotice;
+    return RerouteDecision.silent;
+  }
+
+  /// A new navigation session starts clean.
+  void reset() {
+    _offHits = 0;
+    _onHits = 0;
+    _spellReroutes = 0;
+    _lastRerouteAt = null;
+    _prevOffM = null;
+  }
+}
+
 /// "400 ft" / "0.6 mi" — imperial, because Greenville.
 String formatDistance(double meters) {
   final feet = meters * 3.28084;

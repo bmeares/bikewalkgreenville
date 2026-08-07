@@ -614,5 +614,131 @@ class TestAlternateRoutes(RouteGraphTestCase):
         )
 
 
+class TestTurnDirectionLookahead(RouteGraphTestCase):
+    """Regression: the Anderson St -> Dunbar St wrong-way announcement.
+
+    The route geometry jogged a couple of metres RIGHT at the junction before
+    the real LEFT turn. Bearings measured on a single (metres-long) segment
+    read the jog as the turn, so the app said "Turn right" at a left turn --
+    the one mistake turn-by-turn navigation must never make. Maneuver bearings
+    are now measured over ~STEP_BEARING_LOOKAHEAD_M of geometry.
+    """
+
+    def test_a_tiny_jog_right_before_a_left_turn_reads_left(self):
+        # Heading north on Anderson, then a 3 m jog east-ish, then west on
+        # Dunbar. dLat of 1e-4 deg ~= 11 m; dLon of 1e-4 deg ~= 9 m.
+        anderson = {
+            'coords': [[-82.4000, 34.8480], [-82.4000, 34.8500]],
+            'name': 'ANDERSON ST', 'category': 'L', 'length_m': 222.0,
+            'start_index': 0, 'warn': None, 'climb_m': 0.0,
+        }
+        dunbar = {
+            # First segment jogs ~3 m NE (a right-hand bearing change), the
+            # rest runs clearly WEST -- the actual left turn.
+            'coords': [
+                [-82.4000, 34.8500],
+                [-82.399975, 34.850020],
+                [-82.4010, 34.850020],
+                [-82.4020, 34.850020],
+            ],
+            'name': 'DUNBAR ST', 'category': 'L', 'length_m': 190.0,
+            'start_index': 1, 'warn': None, 'climb_m': 0.0,
+        }
+        coordinates = anderson['coords'] + dunbar['coords'][1:]
+        steps = ml._build_steps([anderson, dunbar], coordinates)
+        turn = next(s for s in steps if s['name'] == 'Dunbar St')
+        self.assertIn(
+            'left', turn['maneuver'],
+            f"a left turn was announced as '{turn['maneuver']}' "
+            f"({turn['instruction']}) because of a {3:.0f} m junction jog",
+        )
+
+    def test_a_real_right_turn_still_reads_right(self):
+        a = {
+            'coords': [[-82.4000, 34.8480], [-82.4000, 34.8500]],
+            'name': 'ANDERSON ST', 'category': 'L', 'length_m': 222.0,
+            'start_index': 0, 'warn': None, 'climb_m': 0.0,
+        }
+        b = {
+            'coords': [[-82.4000, 34.8500], [-82.3990, 34.8500], [-82.3980, 34.8500]],
+            'name': 'EAST ST', 'category': 'L', 'length_m': 180.0,
+            'start_index': 1, 'warn': None, 'climb_m': 0.0,
+        }
+        steps = ml._build_steps([a, b], a['coords'] + b['coords'][1:])
+        turn = next(s for s in steps if s['name'] == 'East St')
+        self.assertIn('right', turn['maneuver'])
+
+
+class TestCustomPaths(RouteGraphTestCase):
+    """CUSTOM_PATHS entries (the Springer St tunnel) must be routable: an
+    off-grid connector beats the long way around once it's in the graph."""
+
+    # Springer St dead-ends at Church St; the tunnel + apartment lot connect
+    # it to University Ridge. Without the path, the only mapped way is a long
+    # detour south.
+    SPRINGER_W = (34.8380, -82.4030)
+    PORTAL_W = (34.8380391, -82.4008463)
+    U_RIDGE = (34.8399346, -82.4009103)
+    U_RIDGE_E = (34.8399, -82.3970)
+    DETOUR_S = (34.8340, -82.4008)
+
+    def _rows(self):
+        return [
+            (_line(self.SPRINGER_W, self.PORTAL_W), 'L', 'SPRINGER ST', True),
+            (_line(self.U_RIDGE, self.U_RIDGE_E), 'M', 'UNIVERSITY RIDGE', True),
+            # The long way around (Springer -> south -> east -> north).
+            (_line(self.PORTAL_W, self.DETOUR_S), 'M', 'CHURCH ST', True),
+            (_line(self.DETOUR_S, (34.8340, -82.3970)), 'M', 'LONG WAY', True),
+            (_line((34.8340, -82.3970), self.U_RIDGE_E), 'M', 'LONG WAY', True),
+            # The tunnel path itself, exactly as CUSTOM_PATHS feeds it in.
+            (
+                [
+                    [-82.4008463, 34.8380391],
+                    [-82.4004550, 34.8380570],
+                    [-82.4007000, 34.8390000],
+                    [-82.4009103, 34.8399346],
+                ],
+                'path', 'Springer St tunnel path', True,
+            ),
+        ]
+
+    def test_the_tunnel_wins_over_the_detour(self):
+        graph = self._graph(self._rows())
+        feature = self._route(graph, self.SPRINGER_W, self.U_RIDGE_E)
+        names = {s['name'] for s in feature['properties']['steps'] if s['name']}
+        self.assertIn('Springer St tunnel path', names,
+                      f"route skipped the tunnel: {sorted(names)}")
+        self.assertNotIn('Long Way', names)
+
+    def test_the_path_is_not_flagged_as_missing_infrastructure(self):
+        graph = self._graph(self._rows())
+        for mode in ('bike', 'walk', 'roll'):
+            feature = self._route(
+                graph, self.SPRINGER_W, self.U_RIDGE_E, mode=mode,
+            )
+            for w in feature['properties']['warn_ranges']:
+                for s in feature['properties']['steps']:
+                    if s['name'] and 'Tunnel' in s['name']:
+                        self.assertIsNone(
+                            s.get('warn'),
+                            f"{mode}: the path warned {s['warn']}",
+                        )
+
+    def test_custom_paths_reach_route_source_rows(self):
+        """The real _route_source_rows appends CUSTOM_PATHS (this suite mocks
+        it everywhere else, so pin the wiring itself)."""
+        self.assertTrue(ml.CUSTOM_PATHS, "the curated list must not be empty")
+        for p in ml.CUSTOM_PATHS:
+            self.assertGreaterEqual(len(p['coords']), 2)
+            self.assertTrue(p.get('name'))
+        # Category 'path' is wired into every table that gates routing.
+        self.assertIn('path', ml.OWN_SURFACE_CATEGORIES)
+        self.assertIn('path', ml.BIKE_FACILITY_CATEGORIES)
+        for level, factors in ml.BIKE_STRESS_FACTORS.items():
+            self.assertIn('path', factors, f"stress '{level}' missing 'path'")
+        for mode in ('walk', 'roll'):
+            self.assertIn('path', ml.MODE_FACTORS[mode])
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

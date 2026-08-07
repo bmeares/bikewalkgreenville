@@ -1,7 +1,7 @@
 # Handoff — work continues on host `omega` (repo at `~/projects/bikewalkgreenville`)
 
-Updated 2026-08-06 (eighth session, Bennett's laptop — paused mid-stream, see
-"IN FLIGHT" below). Read this + `DATA.md` before touching anything.
+Updated 2026-08-07 (tenth session). Read this + `DATA.md` before touching
+anything.
 
 ## ⚠️ Repo is PUBLIC on GitHub
 
@@ -16,6 +16,68 @@ Updated 2026-08-06 (eighth session, Bennett's laptop — paused mid-stream, see
 - **Prod jobs registered** inside `mrsm-api-bwg-1`: `transit` (daily GTFS sync) and `bike-parking` (daily Overpass sync), alongside `annex-watch`, `trails-output`, `duke`, `who-owns-the-roads`, `parking`. Both verified running with successful first syncs (`mrsm show logs <job>`).
 - **walk-audit config** moved off env vars onto Meerschaum config (`plugins:walk-audit:{smtp,notify}`). Prod values live in the container volume at `/meerschaum/config/plugins.json` (chmod 600); the `/meerschaum/.env` hack has been **deleted**.
 - `WalkAudit.reports` is empty (the deploy-check row was removed).
+
+### 2026-08-07 (tenth session, omega) — app v1.9.0+41 (BUILT + SIGNED), map-layers v0.9.0 (DEPLOYED + curl-verified)
+
+Bennett's feedback from a real ride (Springer St tunnel → South Ridge lot →
+University Ridge → Cleveland St). All implemented; `flutter analyze` clean,
+`flutter test` 66/66, `python3 tests/test_route_graph.py` 39/39; signed APK
+(84 MB) + AAB (56 MB) built, signer SHA-1 `537F9A88…A843`, versionCode 41 —
+**not device-verified** (no phone on omega, as ever).
+
+1. **WRONG-TURN FIX (backend)**: `_build_steps` measured maneuver bearings on
+   a single geometry segment, so a ~3 m junction jog right before a left turn
+   announced "Bear right" (the Anderson St → Dunbar St report). Bearings now
+   measured over ~15 m (`STEP_BEARING_LOOKAHEAD_M`, `_bearing_into` /
+   `_bearing_out_of`). Regression test reproduces the exact jog: old code says
+   right, new says left.
+2. **CUSTOM_PATHS (backend)**: curated off-grid connectors — new category
+   `path` (car-free; priced like a bike lane, neutral for roll, own-surface so
+   no `no_sidewalk`/`no_bike_lane` warnings). First entry: **Springer St
+   tunnel** (OSM way 338586347) + South Ridge Apartments lot up to University
+   Ridge. Served at `/map-layers/custom-paths.geojson` ("Shortcuts & tunnels"
+   layer in the app, bike+walk modes). Verified live: route Springer St →
+   University Ridge steps read "Bear left onto Springer St tunnel path";
+   route-stats shows `path: 4 edges / 0.2 km`. Add more entries to the
+   CUSTOM_PATHS list in map-layers.py and redeploy.
+3. **Reroute governor (app)**: `RerouteGovernor` in nav.dart (unit-tested).
+   Off-route rider heading BACK toward the route is left alone; repeat
+   reroutes in one spell back off 15→30→60→120 s; only the first reroute of a
+   spell beeps + speaks ("Rerouting."), the third says once "Looks like you
+   know a shortcut. I'll keep the route updated quietly", everything else is
+   silent. Spell resets after 30 consecutive on-route fixes (NOT a short blip
+   — a fresh reroute passing through the rider must not reset the backoff).
+   Tone softened: `TONE_PROP_ACK` at volume 70 (was BEEP2 @ 85).
+4. **Nav visibility (app)**: maneuver card icon 42→56, distance 26→34 w800,
+   instruction 16→20 w600 (2 lines), "then" row white70 @15, warning lines
+   12.5→14, upcoming strip 40 px tall w600 @14, trip bar ETA 20→24.
+5. **Route options row (app)**: the current plan now renders as the FIRST chip
+   (filled green, icon + label + duration) ahead of the alternatives — the row
+   reads as a set of selectable itineraries, so picking bike+bus over pure
+   bike is an explicit visible choice. Tapping the current chip opens steps.
+6. **Dark mode (app)**: Settings → Appearance (Match device / Light / Dark,
+   persisted `theme_mode`, default system). Dark Material theme + OpenFreeMap
+   `dark` basemap. A style swap wipes MapLibre sources/layers/images:
+   `build()` detects the URL change, clears `_styleReady`/`_addedLayers`/
+   `_puckImages`, and `_onStyleLoaded` re-adds everything and re-pushes the
+   active route + puck (`_activeStyle` field). Test dark toggle WITH a route
+   drawn and mid-nav.
+7. **TTS voice (app)**: `_initTts` picks a Google en-US "network" voice when
+   the engine offers one (falls back silently).
+
+Device test checklist (v1.9.0+41):
+- Ride past a turn where the route jogs: instruction must match the real
+  turn direction (Anderson → Dunbar was the failing case).
+- Go off-route and STAY off: one soft tone + "Rerouting", then silence except
+  a single "shortcut" notice; back on route for ~30 s then off again →
+  announced again.
+- Springer St tunnel: route 4 McHan St-ish → County Square area with bike;
+  route should use the tunnel path; "Shortcuts & tunnels" layer draws it.
+- Settings → Dark: map + app go dark; with a route drawn, the line survives
+  the swap; toggle back mid-nav and the puck/route re-appear.
+- Route preview: green filled chip = current plan with duration; alternatives
+  beside it.
+- Nav card legible at arm's length in sunlight.
 
 ### Hotfix 2026-08-06 — app v1.8.1+40: nav froze on a real ride (GPS fix rate)
 

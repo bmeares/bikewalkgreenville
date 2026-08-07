@@ -34,6 +34,12 @@ class _MapScreenState extends State<MapScreen> {
   bool _styleReady = false;
   bool _locationEnabled = false;
 
+  /// Basemap style currently on the widget. Changing it (dark mode) makes
+  /// MapLibre reload the whole style, which drops every source and layer we
+  /// added — [build] detects the swap and resets the bookkeeping so
+  /// [_onStyleLoaded] rebuilds them.
+  String? _activeStyle;
+
   // Search state.
   final _searchCtl = TextEditingController();
   final _searchFocus = FocusNode();
@@ -76,7 +82,7 @@ class _MapScreenState extends State<MapScreen> {
   bool _voice = true;
   int _spokenStep = -1;
   bool _spokenImminent = false;
-  int _offRouteHits = 0;
+  final _rerouteGovernor = RerouteGovernor();
   bool _rerouting = false;
 
   // Follow camera: on until the user pans away, then a Re-center chip brings
@@ -302,6 +308,25 @@ class _MapScreenState extends State<MapScreen> {
     _styleReady = true;
     _applyVisibility();
     _refreshLive();
+
+    // After a style reload (dark-mode swap) the freshly re-added sources are
+    // empty — put the trip back on the map.
+    final route = _navRoute;
+    if (route != null) {
+      await map.setGeoJsonSource('route', route.routeCollection());
+      await map.setGeoJsonSource('route-hills', route.hillCollection());
+      await map.setGeoJsonSource('route-warn', route.warnCollection());
+      await map.setGeoJsonSource(
+        'route-steps',
+        route.stepCollection(fromStep: _progress?.stepIndex ?? 0),
+      );
+      if (_destination != null) await _setPin(_destination!);
+    }
+    if (_navigating) {
+      await _ensurePuckImage();
+      final here = _lastNavPos;
+      if (here != null) await _updatePuck(here, _lastNavBearing ?? 0);
+    }
   }
 
   static const _emptyCollection = {
@@ -1037,13 +1062,13 @@ class _MapScreenState extends State<MapScreen> {
       _followNav = true;
       _spokenStep = -1;
       _spokenImminent = false;
-      _offRouteHits = 0;
       _notifiedStep = -1;
       _lastNotifyAt = DateTime.fromMillisecondsSinceEpoch(0);
       _lastCamAt = DateTime.fromMillisecondsSinceEpoch(0);
       // Ignore camera chatter from the initial fly-in.
       _progAnimUntil = DateTime.now().add(const Duration(seconds: 3));
     });
+    _rerouteGovernor.reset();
     // Strip the thematic overlays so the street layout underneath is legible.
     _applyVisibility();
     await _subscribeNavPositions();
@@ -1305,21 +1330,33 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
+  /// Off-route handling is delegated to [RerouteGovernor]: it holds off while
+  /// the rider is heading back, backs off exponentially when they keep
+  /// ignoring recalculations (a shortcut the graph doesn't know — the
+  /// Springer St tunnel), and only lets the FIRST reroute of a spell make
+  /// noise.
   Future<void> _maybeReroute(NavProgress p) async {
-    if (p.offRouteM > 45) {
-      _offRouteHits++;
-    } else {
-      _offRouteHits = 0;
-    }
-    if (_offRouteHits < 3 || _rerouting || _destination == null) return;
+    if (_rerouting || _destination == null) return;
+    final decision = _rerouteGovernor.onFix(p.offRouteM, DateTime.now());
+    if (decision == RerouteDecision.none) return;
     _rerouting = true;
-    _offRouteHits = 0;
-    // The Google-style cue: a tone first, words second.
-    try {
-      await _tone.invokeMethod('reroute');
-    } catch (_) {}
-    await _speak('Rerouting.');
-    if (mounted) toast(context, 'Off route — recalculating…');
+    if (decision == RerouteDecision.announce) {
+      // The Google-style cue: a tone first, words second.
+      try {
+        await _tone.invokeMethod('reroute');
+      } catch (_) {}
+      await _speak('Rerouting.');
+      if (mounted) toast(context, 'Off route — recalculating…');
+    } else if (decision == RerouteDecision.quietNotice) {
+      // Third recalculation in one spell: the rider clearly knows a way the
+      // map doesn't. Say so once, then stay quiet.
+      await _speak(
+          'Looks like you know a shortcut. I\'ll keep the route updated quietly.');
+      if (mounted) {
+        toast(context,
+            'Still off the mapped route — updating quietly from here.');
+      }
+    }
     // Recompute from where the rider actually is, keeping the same itinerary
     // (no silent switch from "bike + bus" to "walk" mid-trip).
     await _planTrip(
@@ -1340,6 +1377,29 @@ class _MapScreenState extends State<MapScreen> {
       await tts.setLanguage('en-US');
       await tts.setSpeechRate(0.5);
       await tts.setVolume(1.0);
+      // Android's default pick is often the robotic legacy voice. Prefer a
+      // Google "network" voice (their natural-sounding tier; the engine
+      // caches it after first use), else any modern en-us-x voice.
+      final voices = await tts.getVoices;
+      if (voices is List) {
+        final names = <String>[
+          for (final v in voices)
+            if (v is Map &&
+                (v['locale']?.toString().toLowerCase() ?? '')
+                    .startsWith('en-us'))
+              v['name']?.toString() ?? '',
+        ];
+        final pick = names.firstWhere(
+          (n) => n.contains('network'),
+          orElse: () => names.firstWhere(
+            (n) => n.contains('en-us-x'),
+            orElse: () => '',
+          ),
+        );
+        if (pick.isNotEmpty) {
+          await tts.setVoice({'name': pick, 'locale': 'en-US'});
+        }
+      }
     } catch (_) {
       // Voice is a nicety; the banner still guides the ride.
     }
@@ -1576,6 +1636,18 @@ class _MapScreenState extends State<MapScreen> {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
+    // Dark app = dark map. Theme.of resolves ThemeMode.system for us.
+    final styleUrl = Theme.of(context).brightness == Brightness.dark
+        ? basemapStyleDarkUrl
+        : basemapStyleUrl;
+    if (_activeStyle != null && _activeStyle != styleUrl) {
+      // The style reload wipes our sources/layers/images; forget them so
+      // _onStyleLoaded (which refires after the reload) re-adds everything.
+      _styleReady = false;
+      _addedLayers.clear();
+      _puckImages.clear();
+    }
+    _activeStyle = styleUrl;
     return Scaffold(
       // The map is fullscreen chrome — never let the keyboard resize it
       // (resizing left a white band behind after backgrounding the app with
@@ -1584,7 +1656,7 @@ class _MapScreenState extends State<MapScreen> {
       body: Stack(
         children: [
           MapLibreMap(
-            styleString: basemapStyleUrl,
+            styleString: styleUrl,
             initialCameraPosition: const CameraPosition(
               target: LatLng(homeLat, homeLon),
               zoom: homeZoom,
@@ -2089,8 +2161,11 @@ class _MapScreenState extends State<MapScreen> {
   bool _canAlt(NavRoute route) =>
       const {'bike', 'walk', 'roll'}.contains(route.plan);
 
-  /// The other itineraries the router costed — one tap swaps to them — plus
-  /// "Different route" to ask for another way with the same plan.
+  /// Every itinerary the router costed, as one row of choices: the plan on
+  /// screen first (filled green, so it reads as selected), the alternatives
+  /// beside it, and "Different route" to ask for another way with the same
+  /// plan. Making the whole set visible is what lets someone pick the
+  /// bike-to-the-bus trip even when pure bike is a few minutes faster.
   Widget _alternativesRow(NavRoute route) {
     final ebike = context.read<AppState>().useEbike;
     return Padding(
@@ -2100,6 +2175,20 @@ class _MapScreenState extends State<MapScreen> {
           child: ListView(
             scrollDirection: Axis.horizontal,
             children: [
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: ActionChip(
+                  avatar: Icon(route.planIcon, size: 18, color: Colors.white),
+                  label: Text(
+                    '${route.planDisplayLabel.isNotEmpty ? route.planDisplayLabel : 'Route'}'
+                    ' · ${formatDuration(route.durationMin)}',
+                    style: const TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.w600),
+                  ),
+                  backgroundColor: brandGreen,
+                  onPressed: _openStepsSheet,
+                ),
+              ),
               for (final alt in route.alternatives)
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
@@ -2171,7 +2260,9 @@ class _MapScreenState extends State<MapScreen> {
                 children: [
                   Row(
                     children: [
-                      Icon(step.icon, color: Colors.white, size: 42),
+                      // Sized to be read at arm's length from a handlebar
+                      // mount in sunlight — glanceable, not squintable.
+                      Icon(step.icon, color: Colors.white, size: 56),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Column(
@@ -2181,15 +2272,20 @@ class _MapScreenState extends State<MapScreen> {
                               formatDistance(toManeuver),
                               style: const TextStyle(
                                 color: Colors.white,
-                                fontSize: 26,
-                                fontWeight: FontWeight.w700,
+                                fontSize: 34,
+                                fontWeight: FontWeight.w800,
                                 height: 1.1,
                               ),
                             ),
                             Text(
                               step.instruction,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
-                                  color: Colors.white, fontSize: 16),
+                                  color: Colors.white,
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w600,
+                                  height: 1.15),
                             ),
                           ],
                         ),
@@ -2211,13 +2307,13 @@ class _MapScreenState extends State<MapScreen> {
                       child: Row(
                         children: [
                           const Icon(Icons.warning_amber_rounded,
-                              color: Color(0xFFFFB74D), size: 16),
+                              color: Color(0xFFFFB74D), size: 18),
                           const SizedBox(width: 6),
                           Expanded(
                             child: Text(
                               warnStepSentence(step.warn),
                               style: const TextStyle(
-                                  color: Color(0xFFFFB74D), fontSize: 12.5),
+                                  color: Color(0xFFFFB74D), fontSize: 14),
                             ),
                           ),
                         ],
@@ -2229,13 +2325,13 @@ class _MapScreenState extends State<MapScreen> {
                       child: Row(
                         children: [
                           const Icon(Icons.trending_up,
-                              color: Color(0xFFFFB74D), size: 16),
+                              color: Color(0xFFFFB74D), size: 18),
                           const SizedBox(width: 6),
                           Expanded(
                             child: Text(
                               'Steep climb ahead — ${step.climbFt} ft up',
                               style: const TextStyle(
-                                  color: Color(0xFFFFB74D), fontSize: 12.5),
+                                  color: Color(0xFFFFB74D), fontSize: 14),
                             ),
                           ),
                         ],
@@ -2246,15 +2342,19 @@ class _MapScreenState extends State<MapScreen> {
                       padding: const EdgeInsets.only(top: 6, left: 4),
                       child: Row(
                         children: [
+                          // white70, 15px: the "then" preview has to survive
+                          // sunlight too, just visibly quieter than the turn.
                           const Text('then ',
-                              style: TextStyle(color: Colors.white54)),
-                          Icon(after.icon, color: Colors.white54, size: 18),
+                              style: TextStyle(
+                                  color: Colors.white70, fontSize: 15)),
+                          Icon(after.icon, color: Colors.white70, size: 22),
                           const SizedBox(width: 6),
                           Expanded(
                             child: Text(
                               after.instruction,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(color: Colors.white54),
+                              style: const TextStyle(
+                                  color: Colors.white70, fontSize: 15),
                             ),
                           ),
                         ],
@@ -2297,10 +2397,11 @@ class _MapScreenState extends State<MapScreen> {
                 Text(
                   formatDuration(etaMin),
                   style: const TextStyle(
-                      fontSize: 20, fontWeight: FontWeight.w700),
+                      fontSize: 24, fontWeight: FontWeight.w800),
                 ),
                 Text('${formatDistance(remaining)} left',
-                    style: const TextStyle(color: Colors.black54)),
+                    style: const TextStyle(
+                        color: Colors.black54, fontSize: 15)),
               ],
             ),
             const Spacer(),
@@ -2333,7 +2434,7 @@ class _MapScreenState extends State<MapScreen> {
     return Padding(
       padding: const EdgeInsets.fromLTRB(10, 6, 10, 0),
       child: SizedBox(
-        height: 34,
+        height: 40,
         child: ListView(
           scrollDirection: Axis.horizontal,
           children: [
@@ -2341,15 +2442,15 @@ class _MapScreenState extends State<MapScreen> {
               Padding(
                 padding: const EdgeInsets.only(right: 6),
                 child: Material(
-                  color: Colors.white.withValues(alpha: 0.92),
-                  borderRadius: BorderRadius.circular(17),
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
                   elevation: 2,
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
                     child: Row(
                       children: [
                         Icon(route.steps[i].icon,
-                            size: 18,
+                            size: 22,
                             color: route.steps[i].warn != null ||
                                     route.steps[i].isSteepClimb
                                 ? warnRed
@@ -2360,14 +2461,17 @@ class _MapScreenState extends State<MapScreen> {
                               (route.steps[i].maneuver == 'arrive'
                                   ? 'Arrive'
                                   : 'Continue'),
-                          style: const TextStyle(fontSize: 12.5),
+                          style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.black87),
                         ),
                         if (route.steps[i].distanceM > 0) ...[
                           const SizedBox(width: 6),
                           Text(
                             formatDistance(route.steps[i].distanceM),
                             style: const TextStyle(
-                                fontSize: 11.5, color: Colors.black54),
+                                fontSize: 13, color: Colors.black54),
                           ),
                         ],
                       ],

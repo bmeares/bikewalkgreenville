@@ -537,4 +537,111 @@ void main() {
       expect(warnStepSentence(null), isNot(contains('bike lane')));
     });
   });
+
+  group('RerouteGovernor', () {
+    final t0 = DateTime(2026, 1, 1, 12);
+    DateTime at(int seconds) => t0.add(Duration(seconds: seconds));
+
+    test('three off-route fixes trigger one announced reroute', () {
+      final g = RerouteGovernor();
+      expect(g.onFix(60, at(0)), RerouteDecision.none);
+      expect(g.onFix(60, at(1)), RerouteDecision.none);
+      expect(g.onFix(60, at(2)), RerouteDecision.announce);
+    });
+
+    test('on-route fixes never trigger', () {
+      final g = RerouteGovernor();
+      for (var i = 0; i < 20; i++) {
+        expect(g.onFix(10, at(i)), RerouteDecision.none);
+      }
+    });
+
+    test('heading back toward the route holds the reroute', () {
+      final g = RerouteGovernor();
+      // Off-route but closing distance every fix: the rider is rejoining.
+      for (final (i, d) in const [90.0, 80.0, 70.0, 60.0, 55.0].indexed) {
+        expect(g.onFix(d, at(i)), RerouteDecision.none,
+            reason: 'fix $i at $d m, approaching');
+      }
+    });
+
+    test('a repeat reroute in the same spell is silent and backed off', () {
+      final g = RerouteGovernor();
+      var s = 0;
+      expect(g.onFix(60, at(s++)), RerouteDecision.none);
+      expect(g.onFix(60, at(s++)), RerouteDecision.none);
+      expect(g.onFix(60, at(s++)), RerouteDecision.announce);
+      // Still off-route (the Springer St tunnel): within the 15 s cooldown
+      // nothing happens no matter how many fixes accumulate.
+      for (; s < 17; s++) {
+        expect(g.onFix(60, at(s)), RerouteDecision.none,
+            reason: 'fix at ${s}s is inside the first cooldown');
+      }
+      // Past the cooldown: recalculate, but silently.
+      expect(g.onFix(60, at(19)), RerouteDecision.silent);
+    });
+
+    test('the third reroute of a spell says it will stay quiet', () {
+      final g = RerouteGovernor();
+      var t = 0;
+      RerouteDecision drive() {
+        // Feed off-route fixes until the governor acts.
+        for (var i = 0; i < 400; i++) {
+          final d = g.onFix(60, at(t++));
+          if (d != RerouteDecision.none) return d;
+        }
+        fail('governor never acted');
+      }
+
+      expect(drive(), RerouteDecision.announce);
+      expect(drive(), RerouteDecision.silent);
+      expect(drive(), RerouteDecision.quietNotice);
+      expect(drive(), RerouteDecision.silent);
+    });
+
+    test('a short on-route blip does not reset the backoff', () {
+      final g = RerouteGovernor();
+      var t = 0;
+      for (var i = 0; i < 3; i++) {
+        g.onFix(60, at(t++));
+      }
+      expect(g.spellReroutes, 1);
+      // A fresh reroute passes through the rider for a few seconds…
+      for (var i = 0; i < 5; i++) {
+        expect(g.onFix(5, at(t++)), RerouteDecision.none);
+      }
+      // …then they diverge again: still the same spell, so still silent.
+      RerouteDecision d = RerouteDecision.none;
+      for (var i = 0; i < 60 && d == RerouteDecision.none; i++) {
+        d = g.onFix(60, at(t++));
+      }
+      expect(d, RerouteDecision.silent);
+    });
+
+    test('a sustained return to the route ends the spell', () {
+      final g = RerouteGovernor();
+      var t = 0;
+      for (var i = 0; i < 3; i++) {
+        g.onFix(60, at(t++));
+      }
+      expect(g.spellReroutes, 1);
+      for (var i = 0; i < RerouteGovernor.onRouteResetFixes; i++) {
+        g.onFix(5, at(t++));
+      }
+      // Next divergence is a brand-new spell: announced again.
+      var d = RerouteDecision.none;
+      for (var i = 0; i < 10 && d == RerouteDecision.none; i++) {
+        d = g.onFix(60, at(t++));
+      }
+      expect(d, RerouteDecision.announce);
+    });
+
+    test('cooldowns escalate and cap', () {
+      expect(RerouteGovernor.cooldownSeconds(1), 15);
+      expect(RerouteGovernor.cooldownSeconds(2), 30);
+      expect(RerouteGovernor.cooldownSeconds(3), 60);
+      expect(RerouteGovernor.cooldownSeconds(4), 120);
+      expect(RerouteGovernor.cooldownSeconds(8), 120);
+    });
+  });
 }

@@ -35,7 +35,7 @@ from meerschaum.actions import make_action
 from meerschaum.plugins import api_plugin
 from meerschaum.utils.warnings import info, warn
 
-__version__ = '0.8.0'
+__version__ = '0.9.0'
 
 bwg = mrsm.Plugin('bwg')
 
@@ -130,6 +130,15 @@ LAYERS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    # Curated, hand-maintained: extend CUSTOM_PATHS below as riders report
+    # more shortcuts. Also fed into the routing graph as category 'path'.
+    'custom-paths': {
+        'label': 'Shortcuts & Tunnels',
+        'kind': 'line',
+        'builder': '_build_custom_paths',
+        'props': {'name': 'name', 'note': 'note'},
+        'color': '#AD1457',
+    },
     # Curated, hand-maintained: extend BIKE_BUSINESSES below as more sign on.
     'bike-businesses': {
         'label': 'Bike Friendly Businesses',
@@ -195,6 +204,48 @@ BIKE_BUSINESSES: list[dict[str, Any]] = [
         'note': 'Grocery, bakery & cafe right on the trail',
     },
 ]
+
+#: Off-grid connectors riders actually use but no GIS layer maps: tunnels,
+#: cut-throughs, paths across parking lots. Each entry is fed into the routing
+#: graph (category 'path' -- a car-free surface, discounted like a bike lane)
+#: AND served as the `custom-paths` map layer, so the routes exist on the map
+#: and the router stops fighting riders who know them. coords are [lon, lat]
+#: WGS84, drawn end to end. Endpoints within ~ROUTE_CONNECT_M (120 m) of the
+#: street grid get junction connectors at graph build, so an entry does not
+#: need to touch a mapped street exactly. Add an entry and redeploy.
+CUSTOM_PATHS: list[dict[str, Any]] = [
+    {
+        # Springer St passes UNDER Church St (OSM way 338586347), and the
+        # South Ridge Apartments lot connects it up to University Ridge --
+        # the neighborhood's shortcut between Haynie-Sirrine and County
+        # Square that riders take whether or not the router knows it.
+        'name': 'Springer St tunnel path',
+        'note': 'Tunnel under Church St, then the South Ridge Apartments '
+                'lot up to University Ridge',
+        'coords': [
+            [-82.4008463, 34.8380391],  # Springer St at the west portal
+            [-82.4004550, 34.8380570],  # east portal (under Church St)
+            [-82.4007000, 34.8390000],  # through the South Ridge lot
+            [-82.4009103, 34.8399346],  # University Ridge
+        ],
+    },
+]
+
+
+def _build_custom_paths(debug: bool = False) -> str | None:
+    import json
+    return json.dumps({
+        'type': 'FeatureCollection',
+        'features': [
+            {
+                'type': 'Feature',
+                'geometry': {'type': 'LineString', 'coordinates': p['coords']},
+                'properties': {k: v for k, v in p.items() if k != 'coords'},
+            }
+            for p in CUSTOM_PATHS
+        ],
+    })
+
 
 #: How close a city sidewalk line must run to a county line to count as the
 #: same sidewalk digitized twice. Both CRSes are ft-based (see DATA.md).
@@ -644,8 +695,11 @@ MODE_FACTORS = {
     'bike': {
         # The SRT is deliberately the cheapest surface for every human-powered
         # mode: BWG wants trips steered onto the trail network wherever it is
-        # remotely competitive.
+        # remotely competitive. 'path' is a curated CUSTOM_PATHS connector —
+        # car-free like the trail, priced like a bike lane (they cross parking
+        # lots and tunnels, not landscaped greenway).
         'srt': 0.28,
+        'path': 0.4,
         'bike-lane': 0.4,
         'L': 1.0,
         'ML': 1.3,
@@ -655,6 +709,7 @@ MODE_FACTORS = {
     },
     'walk': {
         'srt': 0.55,
+        'path': 0.9,
         'bike-lane': 1.0,
         'L': 1.0,
         'ML': 1.0,
@@ -663,7 +718,11 @@ MODE_FACTORS = {
         'H': 1.5,
     },
     'roll': {
+        # 'path' stays neutral for wheelchairs: a curated shortcut's surface
+        # and curb cuts are unverified, so don't steer rolls into it — just
+        # stop pretending it doesn't exist.
         'srt': 0.5,
+        'path': 1.0,
         'bike-lane': 1.0,
         'L': 1.0,
         'ML': 1.0,
@@ -689,11 +748,11 @@ MODE_NETWORK_NOUN = {
 #: severe enough that a much longer sidewalked detour wins.
 NO_SIDEWALK_FACTOR = {'walk': 1.6, 'roll': 8.0}
 #: Categories that ARE the walking/rolling surface, sidewalk data or not.
-OWN_SURFACE_CATEGORIES = ('srt',)
+OWN_SURFACE_CATEGORIES = ('srt', 'path')
 #: Bike-stress levels that need a bike facility to feel safe.
 STRESSFUL_CATEGORIES = ('M', 'MH', 'H')
 #: Categories that ARE a bike facility.
-BIKE_FACILITY_CATEGORIES = ('srt', 'bike-lane')
+BIKE_FACILITY_CATEGORIES = ('srt', 'bike-lane', 'path')
 
 #: How much traffic the rider is willing to put up with. A tolerance only
 #: RE-WEIGHTS; it never removes an edge, so a route always exists and the
@@ -706,17 +765,17 @@ DEFAULT_STRESS = 'balanced'
 #: MODE_FACTORS): the trail network is the backbone BWG wants trips on.
 BIKE_STRESS_FACTORS = {
     'quiet': {
-        'srt': 0.2, 'bike-lane': 0.35,
+        'srt': 0.2, 'path': 0.35, 'bike-lane': 0.35,
         'L': 1.0, 'ML': 2.0, 'M': 8.0, 'MH': 20.0, 'H': 40.0,
     },
     'balanced': {
-        'srt': 0.28, 'bike-lane': 0.4,
+        'srt': 0.28, 'path': 0.4, 'bike-lane': 0.4,
         'L': 1.0, 'ML': 1.3, 'M': 2.5, 'MH': 6.0, 'H': 12.0,
     },
     # "Shortest ride": the facility discount shrinks too, or a direct route
     # would still detour half a mile to pick up a bike lane.
     'direct': {
-        'srt': 0.4, 'bike-lane': 0.6,
+        'srt': 0.4, 'path': 0.6, 'bike-lane': 0.6,
         'L': 1.0, 'ML': 1.1, 'M': 1.4, 'MH': 2.0, 'H': 3.0,
     },
 }
@@ -959,6 +1018,13 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str, bool]]
             for part in parts:
                 if len(part) >= 2:
                     rows.append((part, rec.get('category'), name, has_sidewalk))
+    # Curated off-grid connectors (tunnels, cut-throughs): straight from the
+    # CUSTOM_PATHS constant, no database involved. Category 'path' is its own
+    # surface, so no sidewalk check applies.
+    for p in CUSTOM_PATHS:
+        coords = p.get('coords') or []
+        if len(coords) >= 2:
+            rows.append((coords, 'path', p.get('name'), True))
     return rows
 
 
@@ -1007,7 +1073,7 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
     bike_factors = MODE_FACTORS['bike']
     for coords, category, name, has_sidewalk in _route_source_rows(debug=debug):
         factor = bike_factors.get(category, MODE_DEFAULT_FACTOR['bike'])
-        is_path = category in ('srt', 'bike-lane')
+        is_path = category in ('srt', 'bike-lane', 'path')
         for chunk in _subdivide(coords):
             length_m = sum(
                 _equirect_m(a[1], a[0], b[1], b[0])
@@ -1759,6 +1825,12 @@ STEP_TURN_MIN_DEG = 22.0
 STEP_SAME_STREET_TURN_DEG = 60.0
 #: Steps shorter than this (meters) are folded into the previous one.
 STEP_MIN_M = 25.0
+#: Bearings for maneuver decisions are measured over this much geometry, not a
+#: single (possibly centimetres-long) segment. Junction geometry often jogs a
+#: few metres the WRONG way before the real turn -- measured segment-by-segment
+#: that announced "turn right" at a left turn, which is the one mistake
+#: turn-by-turn must never make.
+STEP_BEARING_LOOKAHEAD_M = 15.0
 
 
 def _bearing(a: list, b: list) -> float:
@@ -1771,6 +1843,30 @@ def _bearing(a: list, b: list) -> float:
         - math.sin(lat1) * math.cos(lat2) * math.cos(dlon)
     )
     return (math.degrees(math.atan2(y, x)) + 360.0) % 360.0
+
+
+def _bearing_into(coords: list, dist_m: float = STEP_BEARING_LOOKAHEAD_M) -> float:
+    """Bearing from a line's start to the point ~`dist_m` along it."""
+    acc = 0.0
+    for i in range(1, len(coords)):
+        acc += _equirect_m(
+            coords[i - 1][1], coords[i - 1][0], coords[i][1], coords[i][0],
+        )
+        if acc >= dist_m:
+            return _bearing(coords[0], coords[i])
+    return _bearing(coords[0], coords[-1])
+
+
+def _bearing_out_of(coords: list, dist_m: float = STEP_BEARING_LOOKAHEAD_M) -> float:
+    """Bearing from the point ~`dist_m` before a line's end to its end."""
+    acc = 0.0
+    for i in range(len(coords) - 2, -1, -1):
+        acc += _equirect_m(
+            coords[i][1], coords[i][0], coords[i + 1][1], coords[i + 1][0],
+        )
+        if acc >= dist_m:
+            return _bearing(coords[i], coords[-1])
+    return _bearing(coords[0], coords[-1])
 
 
 def _maneuver(delta: float) -> str:
@@ -1841,8 +1937,10 @@ def _build_steps(
         coords = leg['coords']
         if len(coords) < 2:
             continue
-        in_bearing = _bearing(coords[0], coords[1])
-        out_bearing = _bearing(coords[-2], coords[-1])
+        # Measured over ~15 m, not one segment: junction geometry that jogs a
+        # couple of metres right before a left turn must still read "left".
+        in_bearing = _bearing_into(coords)
+        out_bearing = _bearing_out_of(coords)
         if prev_out_bearing is None:
             maneuver, delta = 'depart', 0.0
         else:

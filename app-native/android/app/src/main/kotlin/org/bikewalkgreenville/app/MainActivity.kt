@@ -16,9 +16,11 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 if (call.method == "reroute") {
                     try {
-                        val tg = ToneGenerator(AudioManager.STREAM_MUSIC, 85)
-                        tg.startTone(ToneGenerator.TONE_PROP_BEEP2, 300)
-                        Handler(mainLooper).postDelayed({ tg.release() }, 600)
+                        // TONE_PROP_ACK: one soft mid-tone — audible over street
+                        // noise without the alarm-clock edge BEEP2 had.
+                        val tg = ToneGenerator(AudioManager.STREAM_MUSIC, 70)
+                        tg.startTone(ToneGenerator.TONE_PROP_ACK, 250)
+                        Handler(mainLooper).postDelayed({ tg.release() }, 500)
                         result.success(true)
                     } catch (e: Exception) {
                         result.success(false)

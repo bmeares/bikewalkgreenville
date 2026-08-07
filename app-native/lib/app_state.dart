@@ -43,6 +43,7 @@ class AppState extends ChangeNotifier {
   static const _kRecents = 'recent_searches';
   static const _kWarnFt = 'warn_ft';
   static const _kPuck = 'puck_style';
+  static const _kTheme = 'theme_mode';
   static const _maxRecents = 8;
 
   Set<TravelMode> _modes = {TravelMode.cyclist};
@@ -52,6 +53,7 @@ class AppState extends ChangeNotifier {
   BikeStress _stress = BikeStress.balanced;
   double _warnFt = 200;
   PuckStyle _puckStyle = PuckStyle.arrow;
+  ThemeMode _themeMode = ThemeMode.system;
 
   Set<TravelMode> get modes => _modes;
   bool get roll => _roll;
@@ -64,6 +66,10 @@ class AppState extends ChangeNotifier {
   double get warnFt => _warnFt;
 
   PuckStyle get puckStyle => _puckStyle;
+
+  /// Light / dark / follow-the-device. Drives both the Material theme and
+  /// which basemap style the map renders.
+  ThemeMode get themeMode => _themeMode;
 
   /// `stress=` query value for `/map-layers/route`.
   String get stressApiName => _stress.name;
@@ -139,6 +145,11 @@ class AppState extends ChangeNotifier {
         (p) => p.name == savedPuck,
         orElse: () => PuckStyle.arrow,
       );
+      final savedTheme = prefs.getString(_kTheme);
+      _themeMode = ThemeMode.values.firstWhere(
+        (t) => t.name == savedTheme,
+        orElse: () => ThemeMode.system,
+      );
       _recents = [
         for (final s in prefs.getStringList(_kRecents) ?? <String>[])
           Map<String, dynamic>.from(jsonDecode(s) as Map),
@@ -159,6 +170,7 @@ class AppState extends ChangeNotifier {
       await prefs.setString(_kStress, _stress.name);
       await prefs.setDouble(_kWarnFt, _warnFt);
       await prefs.setString(_kPuck, _puckStyle.name);
+      await prefs.setString(_kTheme, _themeMode.name);
     } catch (_) {}
   }
 
@@ -260,6 +272,13 @@ class AppState extends ChangeNotifier {
   void setPuckStyle(PuckStyle value) {
     if (value == _puckStyle) return;
     _puckStyle = value;
+    notifyListeners();
+    _save();
+  }
+
+  void setThemeMode(ThemeMode value) {
+    if (value == _themeMode) return;
+    _themeMode = value;
     notifyListeners();
     _save();
   }

@@ -92,6 +92,33 @@ class SettingsScreen extends StatelessWidget {
             ),
           ),
           const Divider(),
+          _header(context, 'Appearance'),
+          RadioGroup<ThemeMode>(
+            groupValue: state.themeMode,
+            onChanged: (v) => state.setThemeMode(v!),
+            child: const Column(
+              children: [
+                RadioListTile<ThemeMode>(
+                  value: ThemeMode.system,
+                  secondary: Icon(Icons.brightness_auto),
+                  title: Text('Match device'),
+                  subtitle: Text('Follows your phone\'s light/dark setting'),
+                ),
+                RadioListTile<ThemeMode>(
+                  value: ThemeMode.light,
+                  secondary: Icon(Icons.light_mode),
+                  title: Text('Light'),
+                ),
+                RadioListTile<ThemeMode>(
+                  value: ThemeMode.dark,
+                  secondary: Icon(Icons.dark_mode),
+                  title: Text('Dark'),
+                  subtitle: Text('Dark app and dark map'),
+                ),
+              ],
+            ),
+          ),
+          const Divider(),
           _header(context, 'Navigation'),
           RadioGroup<PuckStyle>(
             groupValue: state.puckStyle,

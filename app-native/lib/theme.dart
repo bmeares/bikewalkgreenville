@@ -7,6 +7,9 @@ const brandDark = Color(0xFF33470D);
 /// Free, keyless vector basemap (OpenFreeMap, OpenMapTiles schema).
 const basemapStyleUrl = 'https://tiles.openfreemap.org/styles/liberty';
 
+/// OpenFreeMap's dark companion style, used when the app renders dark.
+const basemapStyleDarkUrl = 'https://tiles.openfreemap.org/styles/dark';
+
 /// Greenville downtown.
 const homeLat = 34.8526;
 const homeLon = -82.3940;
@@ -216,6 +219,19 @@ const layerDefs = <LayerDef>[
     modes: {TravelMode.cyclist, TravelMode.pedestrian},
     icon: Icons.cruelty_free, // Material's rabbit
   ),
+  // Curated off-grid connectors (the Springer St tunnel and friends): the
+  // routes locals actually ride that no official GIS layer maps. The router
+  // uses them too — this layer is how a rider learns they exist.
+  LayerDef(
+    id: 'custom-paths',
+    label: 'Shortcuts & tunnels',
+    path: '/map-layers/custom-paths.geojson',
+    color: '#AD1457',
+    width: 3.0,
+    opacity: 0.75,
+    modes: {TravelMode.cyclist, TravelMode.pedestrian},
+    icon: Icons.fork_right,
+  ),
   // One sidewalks layer: the server merges the county lines with the city
   // lines that aren't the same sidewalk digitized twice (heavy overlap in
   // city limits made two separate toggles meaningless).
@@ -360,6 +376,17 @@ ThemeData buildTheme() => ThemeData(
       useMaterial3: true,
       // Floating, so toasts ride above the system navigation bar instead of
       // hiding behind 3-button nav.
+      snackBarTheme: const SnackBarThemeData(
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+
+ThemeData buildDarkTheme() => ThemeData(
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: brandGreen,
+        brightness: Brightness.dark,
+      ),
+      useMaterial3: true,
       snackBarTheme: const SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
       ),
