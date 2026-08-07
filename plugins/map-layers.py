@@ -35,7 +35,7 @@ from meerschaum.actions import make_action
 from meerschaum.plugins import api_plugin
 from meerschaum.utils.warnings import info, warn
 
-__version__ = '0.9.0'
+__version__ = '0.9.1'
 
 bwg = mrsm.Plugin('bwg')
 
@@ -552,6 +552,12 @@ SEARCH_BOUNDS = (-82.65, 34.58, -82.10, 35.10)
 #: Nominatim fallback cache: query -> (epoch, results).
 _NOMINATIM_CACHE: dict[str, tuple[float, list]] = {}
 _NOMINATIM_TTL_SECONDS = 15 * 60
+#: Nominatim asks for at most 1 request/second. Search now queries it on most
+#: keystrokes (it fills the POI/business slots, not just a fallback), so an
+#: outbound call inside this window returns empty instead of firing -- the
+#: next keystroke, or the cache, picks it up.
+_NOMINATIM_MIN_INTERVAL_S = 1.1
+_NOMINATIM_LAST_CALL = [0.0]
 
 
 def _escape_like(q: str) -> str:
@@ -647,6 +653,9 @@ def _search_nominatim(q: str) -> list[dict[str, Any]]:
     cached = _NOMINATIM_CACHE.get(q.lower())
     if cached and (time.time() - cached[0]) < _NOMINATIM_TTL_SECONDS:
         return cached[1]
+    if time.time() - _NOMINATIM_LAST_CALL[0] < _NOMINATIM_MIN_INTERVAL_S:
+        return []
+    _NOMINATIM_LAST_CALL[0] = time.time()
 
     minlon, minlat, maxlon, maxlat = SEARCH_BOUNDS
     resp = requests.get(
@@ -3726,12 +3735,33 @@ def init_app(app):
         except Exception as e:
             warn(f"Local search failed for {q!r}: {e}")
             results = []
-        if not results:
+        # Curated bike-friendly businesses match by name, ahead of everything.
+        ql = q.lower()
+        results = [
+            {
+                'label': b['name'],
+                'sublabel': b.get('note') or b.get('address') or 'Bike friendly business',
+                'lat': b['lat'],
+                'lon': b['lon'],
+                'kind': 'business',
+            }
+            for b in BIKE_BUSINESSES if ql in b['name'].lower()
+        ] + results
+        # Nominatim used to be a fallback only, so ANY local hit (a street
+        # prefix, one address) hid every business and POI. Now it fills the
+        # remaining slots whenever the query is specific enough — that is
+        # what makes "Willy Taco" work, not just streets and stops. Cached +
+        # debounced client-side, so the usage policy is respected.
+        if len(results) < limit and len(q) >= 3:
             try:
-                results = _search_nominatim(q)
+                seen = {r['label'].strip().lower() for r in results}
+                results += [
+                    r for r in _search_nominatim(q)
+                    if r['label'].strip().lower() not in seen
+                ]
             except Exception:
-                results = []
-        return JSONResponse({'results': results})
+                pass
+        return JSONResponse({'results': results[:limit]})
 
     @app.get('/map-layers/road-info')
     def map_layers_road_info(lat: float, lon: float):

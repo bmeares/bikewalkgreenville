@@ -55,7 +55,7 @@ class SettingsScreen extends StatelessWidget {
           ),
           SwitchListTile(
             secondary: const Icon(Icons.accessible_forward),
-            title: const Text('I use a wheelchair (roll)'),
+            title: const Text('I use a wheelchair'),
             subtitle: const Text(
                 'Strongly prefers routes with sidewalks and flags the gaps'),
             value: state.roll,
@@ -68,28 +68,6 @@ class SettingsScreen extends StatelessWidget {
                 'Walk to a dock, ride a rental, dock it near the end'),
             value: state.useBcycle,
             onChanged: state.setUseBcycle,
-          ),
-          const Divider(),
-          _header(context, 'Route warnings'),
-          ListTile(
-            leading: const Icon(Icons.warning_amber_rounded),
-            title: const Text('Smallest gap worth a warning'),
-            subtitle: Text(
-              'Stretches with no bike lane or sidewalk shorter than '
-              '${state.warnFt.round()} ft won\'t show a warning banner.',
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Slider(
-              value: state.warnFt,
-              min: 0,
-              max: 1000,
-              divisions: 20,
-              label: '${state.warnFt.round()} ft',
-              activeColor: brandGreen,
-              onChanged: state.setWarnFt,
-            ),
           ),
           const Divider(),
           _header(context, 'Appearance'),

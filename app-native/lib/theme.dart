@@ -392,6 +392,27 @@ ThemeData buildDarkTheme() => ThemeData(
       ),
     );
 
+/// Warning banner palette that reads on both themes: cream card with brown
+/// text in light mode, deep amber-brown card with light amber text in dark.
+Color warnBg(BuildContext c) => Theme.of(c).brightness == Brightness.dark
+    ? const Color(0xFF3E2A12)
+    : const Color(0xFFFFF3E0);
+
+Color warnFg(BuildContext c) => Theme.of(c).brightness == Brightness.dark
+    ? const Color(0xFFFFCC80)
+    : const Color(0xFF6D3B00);
+
+Color warnAccent(BuildContext c) => Theme.of(c).brightness == Brightness.dark
+    ? const Color(0xFFFFB74D)
+    : const Color(0xFFE65100);
+
+/// The brand green that reads on the current surface: full-dark line work
+/// (brandDark) disappears on a dark card, so dark mode gets a lighter leaf.
+Color brandOnSurface(BuildContext c) =>
+    Theme.of(c).brightness == Brightness.dark
+        ? const Color(0xFFABC77D)
+        : brandDark;
+
 void toast(BuildContext context, String msg) {
   ScaffoldMessenger.of(context)
     ..clearSnackBars()

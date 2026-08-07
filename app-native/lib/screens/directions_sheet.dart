@@ -260,7 +260,7 @@ class _DirectionsSheetState extends State<DirectionsSheet> {
                   dense: true,
                   contentPadding: EdgeInsets.zero,
                   secondary: const Icon(Icons.accessible_forward),
-                  title: const Text('I use a wheelchair (roll)'),
+                  title: const Text('I use a wheelchair'),
                   subtitle: const Text(
                       'Strongly prefers routes with sidewalks and flags the gaps'),
                   value: state.roll,

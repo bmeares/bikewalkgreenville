@@ -1,6 +1,6 @@
 # Handoff — work continues on host `omega` (repo at `~/projects/bikewalkgreenville`)
 
-Updated 2026-08-07 (tenth session). Read this + `DATA.md` before touching
+Updated 2026-08-07 (eleventh session). Read this + `DATA.md` before touching
 anything.
 
 ## ⚠️ Repo is PUBLIC on GitHub
@@ -16,6 +16,49 @@ anything.
 - **Prod jobs registered** inside `mrsm-api-bwg-1`: `transit` (daily GTFS sync) and `bike-parking` (daily Overpass sync), alongside `annex-watch`, `trails-output`, `duke`, `who-owns-the-roads`, `parking`. Both verified running with successful first syncs (`mrsm show logs <job>`).
 - **walk-audit config** moved off env vars onto Meerschaum config (`plugins:walk-audit:{smtp,notify}`). Prod values live in the container volume at `/meerschaum/config/plugins.json` (chmod 600); the `/meerschaum/.env` hack has been **deleted**.
 - `WalkAudit.reports` is empty (the deploy-check row was removed).
+
+### 2026-08-07 later (eleventh session, omega) — app v1.9.1+42, map-layers v0.9.1 (DEPLOYED)
+
+Bennett's dark-theme + polish feedback on v1.9.0. `flutter analyze` clean,
+`flutter test` 66/66, Python 39/39; signed APK + AAB versionCode 42.
+
+1. **Dark theme sweep**: mode pills, alternatives/"Different route" chips,
+   planning chip, elevation preview card (+ line/label colors via
+   `brandOnSurface`/painter param), warning banner (`warnBg`/`warnFg`/
+   `warnAccent` helpers in theme.dart — amber-on-dark-brown in dark mode),
+   nav trip bar (surface + onSurfaceVariant, End keeps white-on-red),
+   upcoming strip, steps sheet (done-steps use `disabledColor`; black26/45
+   were invisible on dark), bcycle/road-info secondary text. Pattern: map
+   overlays use `Theme.of(context).colorScheme.surface`, never Colors.white.
+2. **Settings**: "I use a wheelchair" (dropped " (roll)", also in the
+   directions sheet); "Smallest gap worth a warning" slider REMOVED (AppState
+   `warnFt` logic + persistence kept at default 200 ft — UI only).
+3. **Puck reads in isometric**: `iconPitchAlignment: 'viewport'` (billboard —
+   at 60° tilt a map-pitched icon foreshortened to a sliver; this was "too
+   flat"), and renderPuck redrawn 2.5D: radial-gradient sphere, grounded
+   blurred ellipse shadow, glyph drop shadow, 48 dp. TRUE 3D model would need
+   a custom native MapLibre render layer — deliberately not done.
+4. **Search finds businesses**: Nominatim was fallback-only, so ANY local hit
+   (street prefix) hid every POI. Now `/map-layers/search` = curated
+   BIKE_BUSINESSES matches + local (parking/stops/addresses/streets) +
+   Nominatim POIs filling remaining slots (q ≥ 3 chars), deduped by label,
+   with a server-side 1.1 s min-interval guard on Nominatim (usage policy).
+   Beyond OSM coverage would mean a paid geocoder (Google Places) — not done.
+5. **"Clear route" extended FAB** whenever a route is drawn and not
+   navigating: clears line/pin/endpoints, camera back to flat (tilt 0).
+6. **SRT geometry verified current — nothing was stale on the backend**: the
+   `srt` layer + routing graph read `SRT.segments_owners` (projects/srt.yaml,
+   sourced from the BWG Google My Map via plugin:gmaps). Gold Line (1.72 mi,
+   TR) is in the DB, in the served layer, and routable (curl-verified route
+   rides it end-to-end). If a segment ever goes missing on-device again:
+   check the pregenerated `srt.geojson` in the container's output dir and
+   the 24 h graph cache (restart the container to rebuild), and re-sync
+   `mrsm compose sync pipes --file projects/srt.yaml` if the My Map changed.
+
+Device test (v1.9.1+42): dark mode end-to-end (preview + warnings + nav bars
++ steps sheet legible); puck upright and readable at nav tilt; search "Willy
+Taco" / "Swamp Rabbit Cafe" returns results; Clear route FAB flattens map;
+wheelchair labels; no warn slider in Settings.
 
 ### 2026-08-07 (tenth session, omega) — app v1.9.0+41 (BUILT + SIGNED), map-layers v0.9.0 (DEPLOYED + curl-verified)
 

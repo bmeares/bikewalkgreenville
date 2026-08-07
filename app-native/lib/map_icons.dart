@@ -74,15 +74,18 @@ Future<Uint8List> renderPin({
 }
 
 /// Size of the navigation puck bitmap, in dp.
-const puckSize = 44.0;
+const puckSize = 48.0;
 
 /// Paints the rider's own marker for navigation: a Google-Maps-style arrow,
 /// or — when [icon] is given — the travelling mode's glyph (cyclist, walker,
-/// wheelchair user) in a disc with a heading wedge.
+/// wheelchair user) in a shaded sphere with a heading wedge.
 ///
 /// Painted pointing north; the symbol layer rotates it to the GPS bearing
-/// with `icon-rotation-alignment: map`, so it turns with the street grid the
-/// way the Google Maps arrow does.
+/// with `icon-rotation-alignment: map` and keeps it facing the camera with
+/// `icon-pitch-alignment: viewport`. The radial-gradient shading + grounded
+/// ellipse shadow are what make it read as an object standing ON the tilted
+/// map rather than paint flattened onto it. (A true 3D model needs a custom
+/// native MapLibre render layer — this is the honest 2.5D version.)
 Future<Uint8List> renderPuck({
   required Color color,
   required double devicePixelRatio,
@@ -94,13 +97,27 @@ Future<Uint8List> renderPuck({
   canvas.scale(ratio);
 
   const c = puckSize / 2;
+  final hsl = HSLColor.fromColor(color);
+  final lit = hsl.withLightness((hsl.lightness + 0.22).clamp(0.0, 1.0)).toColor();
+  final dark = hsl.withLightness((hsl.lightness - 0.18).clamp(0.0, 1.0)).toColor();
+
+  // Grounded ellipse shadow under the marker: the depth cue a flat
+  // drawShadow can't give once the icon is billboarded upright.
+  canvas.drawOval(
+    Rect.fromCenter(
+        center: const Offset(c, puckSize - 5.0), width: 26.0, height: 8.0),
+    Paint()
+      ..color = Colors.black.withValues(alpha: 0.35)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5),
+  );
+
   if (icon == null) {
-    // The classic chevron: solid arrow, white outline, soft shadow.
+    // The classic chevron, shaded top-to-bottom so it reads as a solid.
     final arrow = Path()
-      ..moveTo(c, c - 15.0)
-      ..lineTo(c + 11.0, c + 12.0)
-      ..lineTo(c, c + 6.0)
-      ..lineTo(c - 11.0, c + 12.0)
+      ..moveTo(c, c - 16.0)
+      ..lineTo(c + 12.0, c + 12.0)
+      ..lineTo(c, c + 5.5)
+      ..lineTo(c - 12.0, c + 12.0)
       ..close();
     canvas.drawShadow(arrow, Colors.black.withValues(alpha: 0.5), 3.0, false);
     canvas.drawPath(
@@ -112,21 +129,50 @@ Future<Uint8List> renderPuck({
         ..strokeJoin = StrokeJoin.round
         ..isAntiAlias = true,
     );
-    canvas.drawPath(arrow, Paint()..color = color..isAntiAlias = true);
+    canvas.drawPath(
+      arrow,
+      Paint()
+        ..shader = ui.Gradient.linear(
+          const Offset(c, c - 16.0),
+          const Offset(c, c + 12.0),
+          [lit, color, dark],
+          [0.0, 0.55, 1.0],
+        )
+        ..isAntiAlias = true,
+    );
   } else {
-    // Mode glyph in a disc, with a wedge on top for the heading.
-    const r = puckSize / 2 - 8.0;
+    // Mode glyph on a shaded sphere, with a wedge on top for the heading.
+    const r = puckSize / 2 - 9.0;
+    const center = Offset(c, c - 2.0);
     final wedge = Path()
       ..moveTo(c, 1.0)
-      ..lineTo(c + 7.0, c - r + 3.0)
-      ..lineTo(c - 7.0, c - r + 3.0)
+      ..lineTo(c + 7.5, center.dy - r + 3.0)
+      ..lineTo(c - 7.5, center.dy - r + 3.0)
       ..close();
-    final disc = Path()..addOval(Rect.fromCircle(center: const Offset(c, c), radius: r));
-    final shape = Path.combine(PathOperation.union, disc, wedge);
-    canvas.drawShadow(shape, Colors.black.withValues(alpha: 0.5), 3.0, false);
-    canvas.drawPath(shape, Paint()..color = color..isAntiAlias = true);
+    canvas.drawPath(wedge, Paint()..color = dark..isAntiAlias = true);
     canvas.drawPath(
-      shape,
+      wedge,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.0
+        ..isAntiAlias = true,
+    );
+    final disc = Rect.fromCircle(center: center, radius: r);
+    // Off-center highlight = sphere. The rim ring grounds it.
+    canvas.drawOval(
+      disc,
+      Paint()
+        ..shader = ui.Gradient.radial(
+          center - const Offset(r * 0.35, r * 0.45),
+          r * 1.7,
+          [lit, color, dark],
+          [0.0, 0.5, 1.0],
+        )
+        ..isAntiAlias = true,
+    );
+    canvas.drawOval(
+      disc,
       Paint()
         ..color = Colors.white
         ..style = PaintingStyle.stroke
@@ -142,11 +188,13 @@ Future<Uint8List> renderPuck({
           package: icon.fontPackage,
           color: Colors.white,
           height: 1.0,
+          shadows: const [
+            Shadow(color: Colors.black38, offset: Offset(0, 1), blurRadius: 2),
+          ],
         ),
       )
       ..layout();
-    glyph.paint(
-        canvas, Offset(c, c) - Offset(glyph.width / 2, glyph.height / 2));
+    glyph.paint(canvas, center - Offset(glyph.width / 2, glyph.height / 2));
   }
 
   final image = await recorder.endRecording().toImage(

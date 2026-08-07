@@ -298,6 +298,10 @@ class _MapScreenState extends State<MapScreen> {
         iconImage: ['get', 'icon'],
         iconRotate: ['get', 'bearing'],
         iconRotationAlignment: 'map',
+        // Billboard: keep the marker facing the camera instead of lying flat
+        // on the tilted ground plane — at the 60° isometric nav tilt a
+        // map-pitched icon foreshortens into an unreadable sliver.
+        iconPitchAlignment: 'viewport',
         iconAllowOverlap: true,
         iconIgnorePlacement: true,
         iconSize: 1.0,
@@ -775,10 +779,11 @@ class _MapScreenState extends State<MapScreen> {
     final docks = (props['docks'] as num?)?.toInt();
     final renting = props['is_renting'] != false;
     if (bikes == null && docks == null) {
-      return const Padding(
-        padding: EdgeInsets.only(bottom: 8),
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 8),
         child: Text('Live availability unavailable right now.',
-            style: TextStyle(color: Colors.black54)),
+            style:
+                TextStyle(color: Theme.of(ctx).colorScheme.onSurfaceVariant)),
       );
     }
     final color = !renting || (bikes ?? 0) == 0 ? warnRed : brandGreen;
@@ -1830,12 +1835,15 @@ class _MapScreenState extends State<MapScreen> {
                     backgroundColor: WidgetStateProperty.resolveWith(
                       (states) => states.contains(WidgetState.selected)
                           ? brandGreen.withValues(alpha: 0.9)
-                          : Colors.white.withValues(alpha: 0.92),
+                          : Theme.of(context)
+                              .colorScheme
+                              .surface
+                              .withValues(alpha: 0.92),
                     ),
                     foregroundColor: WidgetStateProperty.resolveWith(
                       (states) => states.contains(WidgetState.selected)
                           ? Colors.white
-                          : Colors.black87,
+                          : Theme.of(context).colorScheme.onSurface,
                     ),
                   ),
                 ),
@@ -1914,6 +1922,19 @@ class _MapScreenState extends State<MapScreen> {
             onPressed: _locateMe,
             child: const Icon(Icons.my_location),
           ),
+          // An explicit way out of a drawn trip: clears the line, the pin and
+          // the endpoints, and lays the camera back flat.
+          if (!_navigating && _navRoute != null) ...[
+            const SizedBox(height: 10),
+            FloatingActionButton.extended(
+              heroTag: 'clear-route',
+              backgroundColor: Theme.of(context).colorScheme.surface,
+              foregroundColor: Theme.of(context).colorScheme.onSurface,
+              icon: const Icon(Icons.close),
+              label: const Text('Clear route'),
+              onPressed: _clearRoute,
+            ),
+          ],
           if (!_navigating && _navRoute == null) ...[
             const SizedBox(height: 10),
             FloatingActionButton.extended(
@@ -1935,7 +1956,7 @@ class _MapScreenState extends State<MapScreen> {
         child: Material(
           elevation: 4,
           borderRadius: BorderRadius.circular(24),
-          color: Colors.white,
+          color: Theme.of(context).colorScheme.surface,
           child: const Padding(
             padding: EdgeInsets.symmetric(horizontal: 18, vertical: 12),
             child: Row(
@@ -2031,7 +2052,7 @@ class _MapScreenState extends State<MapScreen> {
               child: Material(
                 elevation: 2,
                 borderRadius: BorderRadius.circular(14),
-                color: Colors.white,
+                color: Theme.of(context).colorScheme.surface,
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
                   child: ElevationProfile(profile: route.elevationProfile!),
@@ -2114,7 +2135,7 @@ class _MapScreenState extends State<MapScreen> {
       child: Material(
         elevation: 2,
         borderRadius: BorderRadius.circular(14),
-        color: const Color(0xFFFFF3E0),
+        color: warnBg(context),
         child: InkWell(
           borderRadius: BorderRadius.circular(14),
           onTap: _openStepsSheet,
@@ -2123,8 +2144,8 @@ class _MapScreenState extends State<MapScreen> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Icon(Icons.warning_amber_rounded,
-                    color: Color(0xFFE65100), size: 20),
+                Icon(Icons.warning_amber_rounded,
+                    color: warnAccent(context), size: 20),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Column(
@@ -2134,15 +2155,15 @@ class _MapScreenState extends State<MapScreen> {
                         Padding(
                           padding: const EdgeInsets.only(bottom: 2),
                           child: Text(line,
-                              style: const TextStyle(
-                                  fontSize: 12.5, color: Color(0xFF6D3B00))),
+                              style: TextStyle(
+                                  fontSize: 12.5, color: warnFg(context))),
                         ),
                       if (warnings.isNotEmpty)
-                        const Text(
+                        Text(
                           'Those stretches are dashed red on the map.',
                           style: TextStyle(
                               fontSize: 11.5,
-                              color: Color(0xFF8D5A1B),
+                              color: warnFg(context).withValues(alpha: 0.8),
                               fontStyle: FontStyle.italic),
                         ),
                     ],
@@ -2203,7 +2224,7 @@ class _MapScreenState extends State<MapScreen> {
                     label: Text(
                         '${ebike && alt.plan == 'bike' ? 'E-bike' : alt.label}'
                         ' · ${formatDuration(alt.durationMin)}'),
-                    backgroundColor: Colors.white,
+                    backgroundColor: Theme.of(context).colorScheme.surface,
                     onPressed: () => _planTrip(plan: alt.plan),
                   ),
                 ),
@@ -2212,7 +2233,7 @@ class _MapScreenState extends State<MapScreen> {
                   avatar: const Icon(Icons.alt_route, size: 18),
                   label: Text(
                       route.alt > 0 ? 'Another route' : 'Different route'),
-                  backgroundColor: Colors.white,
+                  backgroundColor: Theme.of(context).colorScheme.surface,
                   // Cycle through up to 3 alternates, then back to the base.
                   onPressed: () => _planTrip(
                     plan: route.plan,
@@ -2385,7 +2406,7 @@ class _MapScreenState extends State<MapScreen> {
     return Material(
       elevation: 6,
       borderRadius: BorderRadius.circular(18),
-      color: Colors.white,
+      color: Theme.of(context).colorScheme.surface,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 10, 10, 10),
         child: Row(
@@ -2400,8 +2421,9 @@ class _MapScreenState extends State<MapScreen> {
                       fontSize: 24, fontWeight: FontWeight.w800),
                 ),
                 Text('${formatDistance(remaining)} left',
-                    style: const TextStyle(
-                        color: Colors.black54, fontSize: 15)),
+                    style: TextStyle(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        fontSize: 15)),
               ],
             ),
             const Spacer(),
@@ -2413,7 +2435,8 @@ class _MapScreenState extends State<MapScreen> {
             const SizedBox(width: 4),
             FilledButton.icon(
               style: FilledButton.styleFrom(
-                  backgroundColor: Colors.red.shade700),
+                  backgroundColor: Colors.red.shade700,
+                  foregroundColor: Colors.white),
               icon: const Icon(Icons.close),
               label: const Text('End'),
               onPressed: () => _stopNav(),
@@ -2442,7 +2465,7 @@ class _MapScreenState extends State<MapScreen> {
               Padding(
                 padding: const EdgeInsets.only(right: 6),
                 child: Material(
-                  color: Colors.white,
+                  color: Theme.of(context).colorScheme.surface,
                   borderRadius: BorderRadius.circular(20),
                   elevation: 2,
                   child: Padding(
@@ -2454,24 +2477,27 @@ class _MapScreenState extends State<MapScreen> {
                             color: route.steps[i].warn != null ||
                                     route.steps[i].isSteepClimb
                                 ? warnRed
-                                : brandDark),
+                                : brandOnSurface(context)),
                         const SizedBox(width: 5),
                         Text(
                           route.steps[i].name ??
                               (route.steps[i].maneuver == 'arrive'
                                   ? 'Arrive'
                                   : 'Continue'),
-                          style: const TextStyle(
+                          style: TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.w600,
-                              color: Colors.black87),
+                              color: Theme.of(context).colorScheme.onSurface),
                         ),
                         if (route.steps[i].distanceM > 0) ...[
                           const SizedBox(width: 6),
                           Text(
                             formatDistance(route.steps[i].distanceM),
-                            style: const TextStyle(
-                                fontSize: 13, color: Colors.black54),
+                            style: TextStyle(
+                                fontSize: 13,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant),
                           ),
                         ],
                       ],
@@ -2515,20 +2541,20 @@ class _MapScreenState extends State<MapScreen> {
                     Padding(
                       padding: const EdgeInsets.only(top: 4),
                       child: Text(route.fallbackNote!,
-                          style: const TextStyle(
-                              fontSize: 12.5, color: Color(0xFF6D3B00))),
+                          style: TextStyle(
+                              fontSize: 12.5, color: warnFg(ctx))),
                     ),
                   for (final w in warnings)
                     Padding(
                       padding: const EdgeInsets.only(top: 4),
                       child: Row(children: [
-                        const Icon(Icons.warning_amber_rounded,
-                            size: 16, color: Color(0xFFE65100)),
+                        Icon(Icons.warning_amber_rounded,
+                            size: 16, color: warnAccent(ctx)),
                         const SizedBox(width: 6),
                         Expanded(
                           child: Text(w.message,
-                              style: const TextStyle(
-                                  fontSize: 12.5, color: Color(0xFF6D3B00))),
+                              style: TextStyle(
+                                  fontSize: 12.5, color: warnFg(ctx))),
                         ),
                       ]),
                     ),
@@ -2536,13 +2562,13 @@ class _MapScreenState extends State<MapScreen> {
                     Padding(
                       padding: const EdgeInsets.only(top: 4),
                       child: Row(children: [
-                        const Icon(Icons.trending_up,
-                            size: 16, color: Color(0xFFE65100)),
+                        Icon(Icons.trending_up,
+                            size: 16, color: warnAccent(ctx)),
                         const SizedBox(width: 6),
                         Expanded(
                           child: Text(hillNote,
-                              style: const TextStyle(
-                                  fontSize: 12.5, color: Color(0xFF6D3B00))),
+                              style: TextStyle(
+                                  fontSize: 12.5, color: warnFg(ctx))),
                         ),
                       ]),
                     ),
@@ -2559,13 +2585,13 @@ class _MapScreenState extends State<MapScreen> {
                 dense: true,
                 leading: Icon(route.steps[i].icon,
                     color: i < current
-                        ? Colors.black26
+                        ? Theme.of(ctx).disabledColor
                         : hexColor(routeLegColors[stepMode] ??
                             routeLegColors['bike']!)),
                 title: Text(
                   route.steps[i].instruction,
                   style: TextStyle(
-                    color: i < current ? Colors.black45 : null,
+                    color: i < current ? Theme.of(ctx).disabledColor : null,
                     fontWeight: i == current ? FontWeight.w600 : null,
                   ),
                 ),
@@ -2596,7 +2622,9 @@ class _MapScreenState extends State<MapScreen> {
               : '↑ ${step.climbFt} ft of climb',
           style: TextStyle(
             fontSize: 12,
-            color: step.isSteepClimb ? warnRed : Colors.black54,
+            color: step.isSteepClimb
+                ? warnRed
+                : Theme.of(context).colorScheme.onSurfaceVariant,
             fontWeight: step.isSteepClimb ? FontWeight.w600 : null,
           ),
         ),
@@ -2703,12 +2731,14 @@ class RoadInfoSheet extends StatelessWidget {
               ContactRow(icon: Icons.open_in_new, value: 'Report an issue online',
                   uri: info['online_form']),
             if (info['email'] == null && info['online_form'] != null)
-              const Padding(
-                padding: EdgeInsets.only(top: 8),
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
                 child: Text(
                   'This office has no public email — use the online form above '
                   'to contact them directly.',
-                  style: TextStyle(fontSize: 12, color: Colors.black54),
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant),
                 ),
               ),
           ],
