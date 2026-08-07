@@ -17,7 +17,64 @@ anything.
 - **walk-audit config** moved off env vars onto Meerschaum config (`plugins:walk-audit:{smtp,notify}`). Prod values live in the container volume at `/meerschaum/config/plugins.json` (chmod 600); the `/meerschaum/.env` hack has been **deleted**.
 - `WalkAudit.reports` is empty (the deploy-check row was removed).
 
-### 2026-08-07 latest (twelfth session, omega) — app v1.10.0+43 (BUILT + SIGNED)
+### 2026-08-07 latest (twelfth session, omega) — app v1.10.1+44 (BUILT + SIGNED)
+
+**GPS navigation never worked on Android — root cause found, one line of XML.**
+`flutter analyze` clean, `flutter test` 69/69, signed APK + AAB, versionCode 44.
+
+`android/app/src/main/AndroidManifest.xml` had removed geolocator's service
+since the very first app commit (`c08570a`):
+
+```xml
+<service android:name="com.baseflow.geolocator.GeolocatorLocationService"
+         tools:node="remove"/>
+```
+
+That service is what serves the position **stream**. `GeolocatorPlugin` binds
+it at startup; `StreamHandlerImpl.onListen` then does:
+
+```java
+if (foregroundLocationService == null) {
+  Log.e(TAG, "Location background service has not started correctly");
+  return;   // no events.error, no endOfStream
+}
+```
+
+No exception, no Dart-visible error, no `onDone` — `getPositionStream` simply
+emits nothing, forever. `getCurrentPosition()` runs through
+`MethodCallHandlerImpl` and is unaffected, which is why Start always found the
+rider, `_locateMe` worked, and the blue dot worked, while the follow camera,
+step advancement, off-route detection and reroutes were dead from the first
+second of every trip.
+
+**This is why c0463dc did not fix it.** That session read "frozen map" as a
+fix-RATE problem and set `AndroidSettings(intervalDuration: 1s)` plus a
+watchdog — correct changes to a stream that was never alive. The watchdog then
+resubscribed every 5 s forever and converted a silent hang into a recurring
+"Waiting for GPS…" toast, which read as flaky GPS. Both of those changes are
+KEPT; they are right, they were just downstream of the real fault.
+
+Fix: restore the `<service>`, with `tools:remove="android:foregroundServiceType"`
+so it stays a plain **bound** service. `startForeground()` is reachable only
+from `enableBackgroundMode()`, which fires only when `AndroidSettings` carries
+a `foregroundNotificationConfig` — map_screen.dart passes none. So the
+`FOREGROUND_SERVICE` / `FOREGROUND_SERVICE_LOCATION` permission removals STAY,
+and there is still no Play justification to write. Verified in the merged
+manifest (`build/app/intermediates/merged_manifests/release/.../AndroidManifest.xml`):
+service present, `exported="false"`, no `foregroundServiceType`, and zero
+`FOREGROUND_SERVICE*` permissions in the APK.
+
+Regression guard: `test/android_manifest_test.dart` fails if the service is
+ever node-removed again, or if a foreground permission reappears without the
+config to back it.
+
+Device test (v1.10.1+44) — this is the one that matters, omega has no phone:
+- Start a trip and stand still: the puck must keep updating and the trip bar
+  ETA must tick. Before this fix, nothing moved and "Waiting for GPS…" toasted
+  every ~5 s.
+- Walk/ride a block: steps advance, voice announces, off-route + reroute work.
+
+### 2026-08-07 earlier (twelfth session, omega) — app v1.10.0+43 (BUILT + SIGNED)
 
 Bennett: "the bike lane warning, Report, Clear route, layers/GPS are crowding
 the viewport — zooming in/out feels claustrophobic", plus a compass bug. App
