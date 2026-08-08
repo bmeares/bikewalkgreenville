@@ -5,7 +5,10 @@ These run against synthetic source rows (no database): `_route_source_rows`
 and `_get_route_graph` are monkeypatched, so the graph builder, A* and the
 turn-by-turn step builder are exercised in isolation.
 
-    python3 -m pytest tests/test_route_graph.py     # or just run the file
+    python3 -m pytest tests/
+
+New tests are written pytest-style (plain functions + assert); the older
+unittest classes predate that and pytest collects both.
 """
 
 import importlib.util
@@ -841,6 +844,29 @@ class TestNominatimLabel(unittest.TestCase):
     def test_degenerate_inputs(self):
         self.assertEqual(ml._nominatim_label(''), ('', ''))
         self.assertEqual(ml._nominatim_label('4'), ('4', ''))
+
+
+# --- pytest-style from here down ---------------------------------------
+
+
+def test_titleize_preserves_mc_names():
+    """.title() alone mangles Mc surnames: 'MCHAN ST' -> 'Mchan St', and the
+    street is named after the McHans. Mirrors the DB's SMART_CAPITALIZE."""
+    assert ml._titleize('MCHAN ST') == 'McHan St'
+    assert ml._titleize('MCBEE AVE') == 'McBee Ave'
+    assert ml._titleize('MCDANIEL AVE') == 'McDaniel Ave'
+    assert ml._titleize('E WASHINGTON ST') == 'E Washington St'
+
+
+def test_titleize_leaves_mixed_case_alone():
+    assert ml._titleize('McHan St') == 'McHan St'
+    assert ml._titleize('Springer St tunnel path') == 'Springer St tunnel path'
+    assert ml._titleize(None) is None
+    assert ml._titleize('') is None
+
+
+def test_instruction_speaks_mchan_correctly():
+    assert ml._instruction('left', 'MCHAN ST', 90.0) == 'Turn left onto McHan St'
 
 
 if __name__ == '__main__':

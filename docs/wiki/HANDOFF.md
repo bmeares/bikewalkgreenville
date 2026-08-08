@@ -22,7 +22,16 @@ anything.
 Bennett's ride feedback round 2: jarring reroute audio, missing shortcuts
 (Springer tunnel class), stronger SRT pull, speed limits vs the stress layer,
 and "E Washington St" spoken as the letter E. `flutter analyze` clean,
-`flutter test` 74/74, `python3 tests/test_route_graph.py` 46/46.
+`flutter test` 74/74, `python3 -m pytest tests/` 53/53 (pytest is the test
+runner now; new Python tests are pytest-style plain functions).
+
+Post-release fixes on the same day (backend only, all deployed + verified):
+map-layers v0.11.0 moved the OSM ETL onto the `MapLayers.osm_paths` pipe
+(see item 1); v0.11.1 fixed Nominatim search labels showing a bare house
+number ("4" / "McHan Street, Downtown" → "4 McHan Street"); v0.11.2 fixed
+Mc-name casing everywhere — search arms now use the DB's SMART_CAPITALIZE
+(was INITCAP → "Mchan St") and `_titleize` mirrors it in Python for
+turn-by-turn step names.
 
 **Backend (map-layers v0.10.0):**
 

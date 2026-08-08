@@ -35,7 +35,7 @@ from meerschaum.actions import make_action
 from meerschaum.plugins import api_plugin
 from meerschaum.utils.warnings import info, warn
 
-__version__ = '0.11.1'
+__version__ = '0.11.2'
 
 bwg = mrsm.Plugin('bwg')
 
@@ -597,7 +597,7 @@ def _search_local(q: str, limit: int) -> list[dict[str, Any]]:
     ''')
     arms.append(r'''
     (SELECT DISTINCT ON ("FULLADDRES")
-        INITCAP("FULLADDRES") AS "label",
+        SMART_CAPITALIZE("FULLADDRES") AS "label",
         COALESCE("ZIPCODE"::text, 'Greenville') AS "sublabel",
         ST_Y(ST_Transform("geometry", 4326)) AS "lat",
         ST_X(ST_Transform("geometry", 4326)) AS "lon",
@@ -610,7 +610,7 @@ def _search_local(q: str, limit: int) -> list[dict[str, Any]]:
     ''')
     arms.append(r'''
     (SELECT
-        INITCAP("street_name") AS "label",
+        SMART_CAPITALIZE("street_name") AS "label",
         'Street' AS "sublabel",
         ST_Y(ST_Transform(ST_Centroid(ST_Collect("geometry")), 4326)) AS "lat",
         ST_X(ST_Transform(ST_Centroid(ST_Collect("geometry")), 4326)) AS "lon",
@@ -2137,10 +2137,19 @@ def _maneuver(delta: float) -> str:
 
 
 def _titleize(name: str | None) -> str | None:
-    """GIS street names are SHOUTED; instructions shouldn't be."""
+    """GIS street names are SHOUTED; instructions shouldn't be. Mirrors the
+    DB's SMART_CAPITALIZE: plain .title() mangles Mc names ("MCHAN ST" ->
+    "Mchan St", and it's McHan)."""
+    import re
     if not name:
         return None
-    return name.title() if name.isupper() else name
+    if not name.isupper():
+        return name
+    return re.sub(
+        r'\bMc([a-z])',
+        lambda m: 'Mc' + m.group(1).upper(),
+        name.title(),
+    )
 
 
 def _instruction(
