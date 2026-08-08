@@ -39,6 +39,7 @@ class _MapScreenState extends State<MapScreen> {
   /// added — [build] detects the swap and resets the bookkeeping so
   /// [_onStyleLoaded] rebuilds them.
   String? _activeStyle;
+  bool? _activeContrast;
 
   // Search state.
   final _searchCtl = TextEditingController();
@@ -456,6 +457,16 @@ class _MapScreenState extends State<MapScreen> {
           belowLayerId: 'lyr-highlight-line',
         );
       } else {
+        // Low vision support: high contrast bolds every thematic line, and
+        // satellite imagery (busy, dark) gets a milder boost so hairlines
+        // like sidewalks don't vanish into rooftops.
+        final appState = mounted ? context.read<AppState>() : null;
+        final boost = (appState?.highContrast ?? false)
+            ? 1.7
+            : (appState?.mapBase == MapBase.satellite ? 1.35 : 1.0);
+        final opacity = boost > 1.0
+            ? math.max(def.opacity, boost >= 1.7 ? 0.85 : 0.75)
+            : def.opacity;
         await map.addLineLayer(
           def.id,
           'lyr-${def.id}',
@@ -468,8 +479,8 @@ class _MapScreenState extends State<MapScreen> {
                     '#9e9e9e',
                   ]
                 : _layerColorExpr(def),
-            lineWidth: def.width,
-            lineOpacity: def.opacity,
+            lineWidth: def.width * boost,
+            lineOpacity: opacity,
             lineCap: 'round',
             lineJoin: 'round',
           ),
@@ -514,6 +525,23 @@ class _MapScreenState extends State<MapScreen> {
         _map!.setLayerVisibility('lyr-${def.id}', visible);
       }
     }
+  }
+
+  /// Drop and re-add every thematic LINE layer so a new width/opacity boost
+  /// (the high-contrast toggle) takes effect without a style reload.
+  Future<void> _restyleLineLayers() async {
+    final map = _map;
+    if (map == null) return;
+    for (final def in layerDefs
+        .where((d) => !d.isPoint && !d.isFill && !d.isHeatmap && !d.isCircle)) {
+      if (!_addedLayers.contains(def.id)) continue;
+      try {
+        await map.removeLayer('lyr-${def.id}');
+        await map.removeSource(def.id);
+      } catch (_) {}
+      _addedLayers.remove(def.id);
+    }
+    if (mounted) _applyVisibility();
   }
 
   /// Re-pull a layer whose contents go stale (bike-share availability).
@@ -967,6 +995,7 @@ class _MapScreenState extends State<MapScreen> {
         stress: state.stressApiName,
         plan: plan,
         alt: alt,
+        trail: state.preferTrail,
       );
       // A newer plan superseded this one while it was in flight.
       if (seq != _planSeq) return;
@@ -1729,6 +1758,14 @@ class _MapScreenState extends State<MapScreen> {
       _puckImages.clear();
     }
     _activeStyle = styleUrl;
+    // High contrast bolds the thematic lines (see _ensureLayer). Toggling it
+    // does NOT reload the style, so re-add the line layers by hand.
+    if (_activeContrast != null &&
+        _activeContrast != state.highContrast &&
+        _styleReady) {
+      _restyleLineLayers();
+    }
+    _activeContrast = state.highContrast;
     return Scaffold(
       // The map is fullscreen chrome — never let the keyboard resize it
       // (resizing left a white band behind after backgrounding the app with
@@ -2734,15 +2771,15 @@ class _MapScreenState extends State<MapScreen> {
               ),
               // Base map: light/dark here doubles as the quick theme-ish
               // toggle riders asked for; Settings → Appearance still drives
-              // the app chrome (and `Auto` follows it).
+              // the app chrome. `MapBase.auto` (the fresh-install default,
+              // follows the theme) stays internal — a fourth "Auto" pill
+              // squeezed "Satellite" into wrapping mid-word, so the picker
+              // shows auto as whichever base the theme currently resolves to
+              // and any tap simply makes the choice explicit.
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
                 child: SegmentedButton<MapBase>(
                   segments: const [
-                    ButtonSegment(
-                        value: MapBase.auto,
-                        label: Text('Auto'),
-                        icon: Icon(Icons.brightness_auto)),
                     ButtonSegment(
                         value: MapBase.light,
                         label: Text('Light'),
@@ -2756,7 +2793,13 @@ class _MapScreenState extends State<MapScreen> {
                         label: Text('Satellite'),
                         icon: Icon(Icons.satellite_alt)),
                   ],
-                  selected: {state.mapBase},
+                  selected: {
+                    state.mapBase == MapBase.auto
+                        ? (Theme.of(ctx).brightness == Brightness.dark
+                            ? MapBase.dark
+                            : MapBase.light)
+                        : state.mapBase
+                  },
                   showSelectedIcon: false,
                   onSelectionChanged: (s) => state.setMapBase(s.first),
                 ),

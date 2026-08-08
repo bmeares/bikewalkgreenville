@@ -60,8 +60,15 @@ android {
         release {
             signingConfig = if (hasReleaseSigning) signingConfigs.getByName("release")
                 else signingConfigs.getByName("debug")
-            isMinifyEnabled = false
-            isShrinkResources = false
+            // R8 code shrinking + resource shrinking: Google Play flags
+            // unoptimized releases. Flutter supplies the base rules;
+            // proguard-rules.pro keeps the plugins R8 can't see through.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 }

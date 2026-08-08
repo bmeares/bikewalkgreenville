@@ -35,7 +35,7 @@ from meerschaum.actions import make_action
 from meerschaum.plugins import api_plugin
 from meerschaum.utils.warnings import info, warn
 
-__version__ = '0.13.0'
+__version__ = '0.14.0'
 
 bwg = mrsm.Plugin('bwg')
 
@@ -95,7 +95,7 @@ LAYERS: dict[str, dict[str, Any]] = {
         'color': '#0288D1',
     },
     'srt': {
-        'label': 'Swamp Rabbit Trail',
+        'label': 'Prisma Health Swamp Rabbit Trail',
         'kind': 'line',
         'pipe': ('sql:bwg', 'srt_segments', 'owners'),
         'props': {'owner': 'Owner', 'segment': 'Segment'},
@@ -138,6 +138,16 @@ LAYERS: dict[str, dict[str, Any]] = {
         'builder': '_build_custom_paths',
         'props': {'name': 'name', 'note': 'note'},
         'color': '#AD1457',
+    },
+    # Named places riders navigate by that no basemap labels — trail
+    # landmarks like The Paperclip. Curated in LANDMARKS below.
+    'landmarks': {
+        'label': 'Trail Landmarks',
+        'kind': 'point',
+        'builder': '_build_landmarks',
+        'props': {'name': 'name', 'note': 'note'},
+        'color': '#5D4037',
+        'icon': 'flag',
     },
     # Curated, hand-maintained: extend BIKE_BUSINESSES below as more sign on.
     'bike-businesses': {
@@ -245,7 +255,7 @@ CUSTOM_PATHS: list[dict[str, Any]] = [
     {
         'name': 'Springer St',
         'note': 'Unmapped continuation of Springer St through the '
-                'Southernside Apartments to Briar St',
+                'South Ridge Apartments to Briar St',
         'coords': [
             [-82.4003886, 34.8380472],  # east tunnel portal (under Church St)
             [-82.3985862, 34.8380477],  # Briar St's south end
@@ -272,6 +282,70 @@ def _build_custom_paths(debug: bool = False) -> str | None:
 #: How close a city sidewalk line must run to a county line to count as the
 #: same sidewalk digitized twice. Both CRSes are ft-based (see DATA.md).
 SIDEWALK_DEDUPE_FT = 80.0
+
+
+#: Named spots riders navigate by that no dataset labels. "The Paperclip" is
+#: the Prisma Health Swamp Rabbit Trail's stacked switchback climb just north
+#: of Cleveland Park, between the trail's second Lakehurst St crossing and
+#: Traxler St. Add a dict (name, lat, lon, note) and redeploy — served as the
+#: `landmarks` layer and searchable by name.
+LANDMARKS: list[dict[str, Any]] = [
+    {
+        'name': 'The Paperclip',
+        'lat': 34.8487,
+        'lon': -82.3834,
+        'note': "The trail's switchback climb between Lakehurst St and "
+                'Traxler St — how the Prisma Health Swamp Rabbit Trail '
+                'scales the hill',
+    },
+]
+
+
+def _build_landmarks(debug: bool = False) -> str | None:
+    import json
+    return json.dumps({
+        'type': 'FeatureCollection',
+        'features': [
+            {
+                'type': 'Feature',
+                'geometry': {'type': 'Point', 'coordinates': [p['lon'], p['lat']]},
+                'properties': {k: v for k, v in p.items() if k not in ('lat', 'lon')},
+            }
+            for p in LANDMARKS
+        ],
+    })
+
+
+#: Streets renamed on the ground before the GIS caught up. Keys are the
+#: upper-case GIS spelling; values are the real, display-cased name. Applied
+#: where a name leaves the data — graph ingest (so steps and voice say the
+#: new name), search labels, road-info — never to the source tables, so the
+#: mapping simply becomes a no-op once the county updates. Searches for the
+#: NEW name are aliased back to the GIS name (see _search_local).
+STREET_RENAMES = {
+    # Renamed for Fred Garrett Sr., 2024; county centerlines still say Howe.
+    'HOWE ST': 'Fred Garrett St',
+    'HOWE STREET': 'Fred Garrett St',
+}
+
+
+def _gis_rename(name: str | None) -> str | None:
+    """The real street name for a GIS row's name (exact match)."""
+    if not name:
+        return name
+    return STREET_RENAMES.get(str(name).strip().upper(), name)
+
+
+def _rename_label(label: str | None) -> str | None:
+    """Apply STREET_RENAMES inside a longer label ("4 Howe St" and
+    "HOWE ST" alike)."""
+    import re
+    if not label:
+        return label
+    out = str(label)
+    for gis, real in STREET_RENAMES.items():
+        out = re.sub(rf'\b{re.escape(gis)}\b', real, out, flags=re.IGNORECASE)
+    return out
 
 
 def _build_bike_businesses(debug: bool = False) -> str | None:
@@ -589,7 +663,16 @@ def _escape_like(q: str) -> str:
 def _search_local(q: str, limit: int) -> list[dict[str, Any]]:
     """One UNION ALL round trip over bike parking, bus stops, city addresses,
     and PCC street names. ILIKE is fine at these row counts (<= 50k)."""
+    import re
     conn = mrsm.get_connector('sql:bwg')
+    # Riders search the street's REAL name; the GIS still holds the old one.
+    # Alias the query back to what the tables know, then rename the labels on
+    # the way out so what the rider typed is what they see.
+    for gis, real in STREET_RENAMES.items():
+        real_base = re.sub(r'\s+(St|Street)\s*$', '', real, flags=re.IGNORECASE)
+        gis_base = re.sub(r'\s+(St|Street)\s*$', '', gis, flags=re.IGNORECASE)
+        q = re.sub(rf'\b{re.escape(real_base)}\b', gis_base.title(), q,
+                   flags=re.IGNORECASE)
     params = {'q': f'%{_escape_like(q)}%', 'qp': f'{_escape_like(q)}%'}
 
     arms = []
@@ -657,7 +740,7 @@ def _search_local(q: str, limit: int) -> list[dict[str, Any]]:
         if lat is None or lon is None or lat != lat or lon != lon:
             continue
         results.append({
-            'label': row.get('label') or '',
+            'label': _rename_label(row.get('label')) or '',
             'sublabel': row.get('sublabel') or '',
             'lat': float(lat),
             'lon': float(lon),
@@ -983,22 +1066,31 @@ LANE_SPEED_PENALTY = ((45, 4.0), (40, 3.0), (35, 2.5))
 #: ...and by the PCC stress of the street under the paint (nearest stress
 #: segment to the lane's midpoint). Speed alone proved fragile — short
 #: 30 mph centerline pieces near junctions let Church St's lane price at
-#: the full 0.4 discount. The two proxies measure the same fear, so the
-#: edge takes the WORSE of them, not the product. Calibration (x the 0.4
-#: lane base): lane on an M street nets 0.8, on MH nets 1.5, on H nets 4.0
-#: — on the streets that kill, paint barely helps (Bennett: "we almost
-#: never recommend Church St"), so even a short hop on an H-street lane
-#: loses to a residential-plus-tunnel line.
-LANE_STRESS_PENALTY = {'M': 2.0, 'MH': 3.75, 'H': 10.0}
+#: the full 0.4 discount. Paint keeps LANE_STRESS_RELIEF of the underlying
+#: street's cost — about a third — so a lane on an H street prices at H/3
+#: whatever the rider's tolerance. This is applied at QUERY time against the
+#: rider's own stress factors (see _lane_stress_multiplier), because a fixed
+#: penalty calibrated for `balanced` was trivially cheap next to `quiet`'s
+#: 8x/20x/40x street factors: quiet riders — the ones most averse to Church
+#: St — were the only ones still routed onto its lane. Calibration for
+#: `balanced` is unchanged (x the 0.4 lane base: M nets ~0.8, H nets 4.0 —
+#: on the streets that kill, paint barely helps); under `quiet` an H-street
+#: lane now prices at 40/3 ≈ 13x, repellent as it should be.
+LANE_STRESS_RELIEF = 1.0 / 3.0
 
 
-def _lane_factor(speed_mph: float | None, lane_stress: str | None) -> float:
-    """Penalty multiplier for a painted bike lane, from the posted speed and
-    the stress rating of the street it is painted on (worse of the two)."""
-    return max(
-        _lane_speed_factor(speed_mph),
-        LANE_STRESS_PENALTY.get(lane_stress or '', 1.0),
-    )
+def _lane_stress_multiplier(factors: dict, lane_stress: str | None) -> float:
+    """How much of the paint discount the street under it takes back, for
+    THIS rider's stress factors. Never below 1.0 (a lane is never worse than
+    the penalty-free lane price), and 1.0 for modes whose factors don't fear
+    the street (walking a bike-lane street is just walking a street)."""
+    if not lane_stress:
+        return 1.0
+    lane = factors.get('bike-lane') or 1.0
+    street = factors.get(lane_stress)
+    if not street:
+        return 1.0
+    return max(1.0, street * LANE_STRESS_RELIEF / lane)
 
 #: Duke Energy streetlight poles (Ped.lighting, ~40k points). A street with
 #: fewer than one pole per LIT_SPACING_M of length counts as unlit, and after
@@ -1022,6 +1114,13 @@ NIGHT_HOURS = {
 import contextvars as _contextvars
 _NIGHT_OVERRIDE: _contextvars.ContextVar = _contextvars.ContextVar(
     'bwg_night', default=None,
+)
+
+#: Per-request trail preference (`?trail=0` turns the SRT bias off — most
+#: riders want the trail, some days you want the streets). Request-scoped
+#: like the night flag; the plan cache key includes it.
+_TRAIL_PREF: _contextvars.ContextVar = _contextvars.ContextVar(
+    'bwg_trail', default=True,
 )
 
 
@@ -1343,7 +1442,7 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str, bool]]
          'AND COALESCE(src."BIKE_TYPE", \'\') != \'SHARROW\''),
         # The trail IS the walking surface; asking whether it has a sidewalk
         # is a category error.
-        ('srt', 'srt', "'Swamp Rabbit Trail'", False, None),
+        ('srt', 'srt', "'Prisma Health Swamp Rabbit Trail'", False, None),
     ]
     rows = []
     for layer_id, category, name_expr, check_sidewalks, where in sources:
@@ -1485,7 +1584,7 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str, bool]]
                 else [geom['coordinates']]
             )
             name = rec.get('name')
-            name = None if not name or str(name).strip() in ('', 'N/A', 'None') else str(name).strip()
+            name = None if not name or str(name).strip() in ('', 'N/A', 'None') else _gis_rename(str(name).strip())
             has_sidewalk = bool(rec.get('has_sidewalk'))
             speed = _num(rec, 'speed_mph')
             category = _stress_floor(rec.get('category'), speed)
@@ -1496,8 +1595,17 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str, bool]]
                 if is_street and len_m > 0
                 else 1.0
             )
+            lane_stress = None
             if category == 'bike-lane':
-                danger *= _lane_factor(speed, rec.get('lane_stress'))
+                # Speed penalty is mode-agnostic and bakes into the edge;
+                # the stress penalty depends on the rider's tolerance, so
+                # the raw rating rides along and _astar applies it.
+                danger *= _lane_speed_factor(speed)
+                ls = rec.get('lane_stress')
+                lane_stress = (
+                    str(ls) if ls is not None and ls == ls and str(ls).strip()
+                    else None
+                )
             lights = _num(rec, 'lights')
             # Lit = at least one pole per LIT_SPACING_M of length (a short
             # block needs one light; a long one needs a series).
@@ -1507,7 +1615,10 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str, bool]]
             )
             for part in parts:
                 if len(part) >= 2:
-                    rows.append((part, category, name, has_sidewalk, danger, lit))
+                    rows.append(
+                        (part, category, name, has_sidewalk, danger, lit,
+                         lane_stress)
+                    )
     # County centerlines PCC never rated (~3.2k of 35k): without them the
     # graph has holes exactly where quiet residential streets live — the
     # Springer St bug: PCC carries only an 8 m stub east of the Church St
@@ -1574,7 +1685,7 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str, bool]]
             else [geom['coordinates']]
         )
         name = rec.get('name')
-        name = None if not name or str(name).strip() in ('', 'N/A', 'None') else str(name).strip()
+        name = None if not name or str(name).strip() in ('', 'N/A', 'None') else _gis_rename(str(name).strip())
         speed = rec.get('speed_mph')
         speed = None if speed is None or speed != speed else float(speed)
         category = _stress_floor('L', speed)
@@ -1646,11 +1757,12 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
     bike_factors = MODE_FACTORS['bike']
     for row in _route_source_rows(debug=debug):
         # Rows may be legacy 4-tuples (tests, custom paths) or carry the
-        # (danger, lit) safety context as elements 5 and 6.
+        # (danger, lit, lane_stress) safety context as elements 5-7.
         coords, category, name, has_sidewalk = row[:4]
         extras = (
             (float(row[4]) if len(row) > 4 else 1.0),
             (bool(row[5]) if len(row) > 5 else True),
+            (row[6] if len(row) > 6 else None),
         )
         factor = bike_factors.get(category, MODE_DEFAULT_FACTOR['bike'])
         is_path = category in ('srt', 'bike-lane', 'path', 'footway')
@@ -1696,8 +1808,8 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
             [nodes[v][1], nodes[v][0]],
         ]
         length = max(d, 1.0)
-        adj[u].append((v, length, length, 'connector', coords, False, None, None, (1.0, True)))
-        adj[v].append((u, length, length, 'connector', coords, True, None, None, (1.0, True)))
+        adj[u].append((v, length, length, 'connector', coords, False, None, None, (1.0, True, None)))
+        adj[v].append((u, length, length, 'connector', coords, True, None, None, (1.0, True, None)))
 
     def _spatial_hash(cells, cell_m):
         cell_lat = cell_m / M_PER_DEG_LAT
@@ -2330,6 +2442,10 @@ def _astar(
     glat, glon = _pos(goal)
     base = _base_mode(mode)
     factors = MODE_FACTORS[mode]
+    # "Prefer the trail" off (`?trail=0`): the SRT prices like a plain calm
+    # street — still routable, just no longer magnetic.
+    if not _TRAIL_PREF.get() and factors.get('srt'):
+        factors = {**factors, 'srt': max(factors['srt'], 1.0)}
     default_factor = MODE_DEFAULT_FACTOR[mode]
     no_sidewalk_factor = NO_SIDEWALK_FACTOR.get(base, 1.0)
     # Hills are priced for whoever is actually travelling, which is not always
@@ -2353,14 +2469,20 @@ def _astar(
         if category == 'connector':
             return edge[2]
         weight = edge[2] * factors.get(category, default_factor)
-        # (danger multiplier, lit?) — crash history + streetlight coverage,
-        # baked in at graph build. Danger is 1.0 on car-free surfaces.
+        # (danger multiplier, lit?, lane_stress) — crash history, streetlight
+        # coverage and the stress rating under a painted lane, baked in at
+        # graph build. Danger is 1.0 on car-free surfaces. The lane-stress
+        # penalty is priced HERE, against this rider's own factors: a fixed
+        # build-time penalty read as cheap precisely to the quiet riders who
+        # most wanted away from streets like Church St.
         extras = edge[8] if len(edge) > 8 else None
         if extras is not None:
             if extras[0] != 1.0:
                 weight *= extras[0]
             if night_factor != 1.0 and not extras[1]:
                 weight *= night_factor
+            if category == 'bike-lane' and len(extras) > 2 and extras[2]:
+                weight *= _lane_stress_multiplier(factors, extras[2])
         if no_sidewalk_factor != 1.0 and _edge_deficiency(edge, mode) == 'no_sidewalk':
             weight *= no_sidewalk_factor
         return weight
@@ -3624,7 +3746,7 @@ def _compute_plan(
     if plan.endswith('-transit') or plan == 'bcycle':
         alt = 0
     key = (
-        plan, bike_mode, alt, _is_night(),
+        plan, bike_mode, alt, _is_night(), _TRAIL_PREF.get(),
         round(from_lat, 5), round(from_lon, 5),
         round(to_lat, 5), round(to_lon, 5),
     )
@@ -4166,6 +4288,7 @@ def init_app(app):
         stress: str = '',
         alt: int = 0,
         night: int = -1,
+        trail: int = 1,
     ):
         """Multi-modal directions.
 
@@ -4186,6 +4309,9 @@ def init_app(app):
         After dark (Greenville local time), unlit street stretches cost
         extra (Duke streetlight coverage, NIGHT_UNLIT_FACTOR). `night=0/1`
         overrides the clock; the response reports the flag used.
+
+        `trail=0` turns off the Swamp Rabbit Trail bias: the trail prices
+        like a plain calm street instead of the heavily-discounted backbone.
         """
         # Sync def on purpose: FastAPI runs it in the threadpool, so the
         # multi-second first-call graph build never blocks the event loop.
@@ -4230,6 +4356,7 @@ def init_app(app):
         night_token = _NIGHT_OVERRIDE.set(
             None if night not in (0, 1) else bool(night)
         )
+        trail_token = _TRAIL_PREF.set(bool(trail))
         try:
             feature = _route_multimodal(
                 from_lat, from_lon, to_lat, to_lon,
@@ -4242,6 +4369,7 @@ def init_app(app):
                 alt=max(0, min(alt, ALT_MAX)),
             )
             feature['properties']['night'] = _is_night()
+            feature['properties']['trail'] = bool(trail)
         except ValueError as e:
             return JSONResponse({'error': str(e)}, status_code=422)
         except Exception as e:
@@ -4249,6 +4377,7 @@ def init_app(app):
             return JSONResponse({'error': 'Routing failed.'}, status_code=500)
         finally:
             _NIGHT_OVERRIDE.reset(night_token)
+            _TRAIL_PREF.reset(trail_token)
         return JSONResponse(feature)
 
     def _srt_gaps(graph, srt_adj):
@@ -4353,6 +4482,15 @@ def init_app(app):
                 'kind': 'business',
             }
             for b in BIKE_BUSINESSES if ql in b['name'].lower()
+        ] + [
+            {
+                'label': p['name'],
+                'sublabel': p.get('note') or 'Landmark',
+                'lat': p['lat'],
+                'lon': p['lon'],
+                'kind': 'landmark',
+            }
+            for p in LANDMARKS if ql in p['name'].lower()
         ] + results
         # Nominatim used to be a fallback only, so ANY local hit (a street
         # prefix, one address) hid every business and POI. Now it fills the

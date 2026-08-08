@@ -89,6 +89,7 @@ class Api {
     bool ebike = false,
     String? stress,
     int alt = 0,
+    bool trail = true,
   }) async =>
       Map<String, dynamic>.from(await _get('/map-layers/route', {
         'from': '$fromLat,$fromLon',
@@ -98,6 +99,9 @@ class Api {
         if (bcycle) 'bcycle': '1',
         if (ebike) 'ebike': '1',
         if (alt > 0) 'alt': '$alt',
+        // Default on: the trail bias is the app's personality. Off prices the
+        // Swamp Rabbit Trail like any calm street.
+        if (!trail) 'trail': '0',
         'stress': ?stress,
         'plan': ?plan,
       }));

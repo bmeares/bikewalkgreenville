@@ -44,6 +44,9 @@ class AppState extends ChangeNotifier {
   static const _kPuck = 'puck_style';
   static const _kTheme = 'theme_mode';
   static const _kMapBase = 'map_base';
+  static const _kPreferTrail = 'prefer_trail';
+  static const _kHighContrast = 'high_contrast';
+  static const _kLargeUi = 'large_ui';
   static const _maxRecents = 8;
 
   Set<TravelMode> _modes = {TravelMode.cyclist};
@@ -54,6 +57,9 @@ class AppState extends ChangeNotifier {
   PuckStyle _puckStyle = PuckStyle.arrow;
   ThemeMode _themeMode = ThemeMode.system;
   MapBase _mapBase = MapBase.auto;
+  bool _preferTrail = true;
+  bool _highContrast = false;
+  bool _largeUi = false;
 
   Set<TravelMode> get modes => _modes;
   bool get roll => _roll;
@@ -72,6 +78,16 @@ class AppState extends ChangeNotifier {
 
   /// The map's own base: follow the theme, force light/dark, or satellite.
   MapBase get mapBase => _mapBase;
+
+  /// Bias routes onto the Prisma Health Swamp Rabbit Trail (the default).
+  /// Off sends `trail=0` and the trail prices like any calm street.
+  bool get preferTrail => _preferTrail;
+
+  /// Low-vision support: stronger text/surface contrast and bolder map lines.
+  bool get highContrast => _highContrast;
+
+  /// Low-vision support: larger text and controls throughout.
+  bool get largeUi => _largeUi;
 
   /// `stress=` query value for `/map-layers/route`.
   String get stressApiName => _stress.name;
@@ -156,6 +172,9 @@ class AppState extends ChangeNotifier {
         (b) => b.name == savedBase,
         orElse: () => MapBase.auto,
       );
+      _preferTrail = prefs.getBool(_kPreferTrail) ?? true;
+      _highContrast = prefs.getBool(_kHighContrast) ?? false;
+      _largeUi = prefs.getBool(_kLargeUi) ?? false;
       _recents = [
         for (final s in prefs.getStringList(_kRecents) ?? <String>[])
           Map<String, dynamic>.from(jsonDecode(s) as Map),
@@ -177,6 +196,9 @@ class AppState extends ChangeNotifier {
       await prefs.setString(_kPuck, _puckStyle.name);
       await prefs.setString(_kTheme, _themeMode.name);
       await prefs.setString(_kMapBase, _mapBase.name);
+      await prefs.setBool(_kPreferTrail, _preferTrail);
+      await prefs.setBool(_kHighContrast, _highContrast);
+      await prefs.setBool(_kLargeUi, _largeUi);
     } catch (_) {}
   }
 
@@ -285,6 +307,27 @@ class AppState extends ChangeNotifier {
   void setMapBase(MapBase value) {
     if (value == _mapBase) return;
     _mapBase = value;
+    notifyListeners();
+    _save();
+  }
+
+  void setPreferTrail(bool value) {
+    if (value == _preferTrail) return;
+    _preferTrail = value;
+    notifyListeners();
+    _save();
+  }
+
+  void setHighContrast(bool value) {
+    if (value == _highContrast) return;
+    _highContrast = value;
+    notifyListeners();
+    _save();
+  }
+
+  void setLargeUi(bool value) {
+    if (value == _largeUi) return;
+    _largeUi = value;
     notifyListeners();
     _save();
   }

@@ -905,18 +905,111 @@ def test_lane_speed_penalty_erodes_the_paint_discount():
     assert 0.4 * ml._lane_speed_factor(35) >= 1.0
 
 
-def test_lane_factor_takes_the_worse_of_speed_and_stress():
-    """Speed lookups are fragile (a 30 mph junction piece under Church St's
-    lane); the PCC stress of the street under the paint backstops them."""
-    assert ml._lane_factor(30, 'H') == 10.0    # slow lookup, scary street
-    assert ml._lane_factor(45, 'L') == 4.0     # fast road, calm rating
-    assert ml._lane_factor(None, 'MH') == 3.75
-    assert ml._lane_factor(30, 'L') == 1.0     # genuinely calm: full discount
-    assert ml._lane_factor(None, None) == 1.0
-    # A lane on an H street nets 0.4 x 10 = 4.0: worse than MH-lane paint,
-    # a fair bit better than the raw H street (12x) — paint barely helps on
-    # the streets that kill.
-    assert ml.MODE_FACTORS['bike']['M'] < 0.4 * ml._lane_factor(30, 'H') < ml.MODE_FACTORS['bike']['MH']
+def test_lane_stress_multiplier_scales_with_the_riders_tolerance():
+    """The stress penalty on painted lanes is priced per-rider at query time:
+    a fixed build-time penalty calibrated for `balanced` read as CHEAP next
+    to `quiet`'s 8x/20x/40x street factors, so quiet riders — the most
+    Church-St-averse — were the only ones still routed onto Church's lane."""
+    balanced = ml.BIKE_STRESS_FACTORS['balanced']
+    quiet = ml.BIKE_STRESS_FACTORS['quiet']
+    direct = ml.BIKE_STRESS_FACTORS['direct']
+    # Balanced calibration unchanged from v0.12: H-street lane x10 the paint
+    # price (0.4 x 10 = 4.0 net — on the streets that kill, paint barely
+    # helps).
+    assert ml._lane_stress_multiplier(balanced, 'H') == 10.0
+    assert ml.MODE_FACTORS['bike']['M'] < 0.4 * ml._lane_stress_multiplier(
+        balanced, 'H') < ml.MODE_FACTORS['bike']['MH']
+    # Quiet: an H-street lane must price WORSE than any calm street — net
+    # 40/3 ≈ 13x, vs 2.0 for an ML street. This is the Church St regression.
+    quiet_h_lane_net = quiet['bike-lane'] * ml._lane_stress_multiplier(quiet, 'H')
+    assert quiet_h_lane_net > quiet['M']
+    assert quiet_h_lane_net > quiet['ML']
+    # Direct riders shrug: the same lane nets about a calm street.
+    assert direct['bike-lane'] * ml._lane_stress_multiplier(direct, 'H') <= 1.5
+    # Calm streets keep the full discount; unknown/missing stress is neutral.
+    assert ml._lane_stress_multiplier(balanced, 'L') == 1.0
+    assert ml._lane_stress_multiplier(balanced, None) == 1.0
+    # Walking a bike-laned street is just walking a street.
+    assert ml._lane_stress_multiplier(ml.MODE_FACTORS['walk'], 'H') == 1.0
+    # Street-fallback factors ({}) must not blow up.
+    assert ml._lane_stress_multiplier({}, 'H') == 1.0
+
+
+class TestQuietRiderAvoidsArterialPaint(RouteGraphTestCase):
+    """A painted lane on an H street must not attract exactly the riders who
+    asked for quiet (the McHan -> Legacy Park report: quiet rode S Church St's
+    lane while balanced took the calm streets)."""
+
+    A = (34.8500, -82.4000)
+    B = (34.8530, -82.4030)   # dogleg via the calm streets (~1.7x)
+    C = (34.8560, -82.4000)
+
+    def _rows(self):
+        return [
+            # Straight shot: bike lane painted on an H-rated arterial.
+            # 7-tuple row carries (danger, lit, lane_stress).
+            (_line(self.A, self.C), 'bike-lane', 'ARTERIAL LN', True, 1.0, True, 'H'),
+            (_line(self.A, self.B), 'ML', 'CALM ST', True, 1.0, True, None),
+            (_line(self.B, self.C), 'ML', 'CALM ST', True, 1.0, True, None),
+        ]
+
+    def _names(self, mode):
+        graph = self._graph(self._rows())
+        feature = self._route(graph, self.A, self.C, mode=mode)
+        return {s['name'] for s in feature['properties']['steps'] if s['name']}
+
+    def test_quiet_takes_the_calm_streets(self):
+        names = self._names('bike:quiet')
+        self.assertIn('Calm St', names)
+        self.assertNotIn('Arterial Ln', names)
+
+    def test_direct_still_takes_the_lane(self):
+        self.assertIn('Arterial Ln', self._names('bike:direct'))
+
+
+class TestTrailPreferenceToggle(RouteGraphTestCase):
+    """`?trail=0`: the SRT prices like a plain calm street, so the shorter
+    street route wins; with the default bias the trail detour wins."""
+
+    A = (34.8500, -82.4000)
+    B = (34.8530, -82.4030)   # trail dogleg (~1.7x the street)
+    C = (34.8560, -82.4000)
+
+    def _rows(self):
+        return [
+            (_line(self.A, self.C), 'L', 'PLAIN ST', True, 1.0, True, None),
+            (_line(self.A, self.B), 'srt', 'SRT', True, 1.0, True, None),
+            (_line(self.B, self.C), 'srt', 'SRT', True, 1.0, True, None),
+        ]
+
+    def _names(self, trail):
+        token = ml._TRAIL_PREF.set(trail)
+        try:
+            graph = self._graph(self._rows())
+            feature = self._route(graph, self.A, self.C, mode='bike')
+            return {s['name'] for s in feature['properties']['steps'] if s['name']}
+        finally:
+            ml._TRAIL_PREF.reset(token)
+
+    def test_default_bias_rides_the_trail(self):
+        self.assertIn('Srt', self._names(True))
+
+    def test_trail_off_takes_the_street(self):
+        names = self._names(False)
+        self.assertIn('Plain St', names)
+        self.assertNotIn('Srt', names)
+
+
+def test_gis_rename_says_the_streets_real_name():
+    """Fred Garrett St was renamed from Howe St; the county GIS still says
+    Howe. Steps, search labels and road-info say the real name."""
+    assert ml._gis_rename('HOWE ST') == 'Fred Garrett St'
+    assert ml._gis_rename('Howe St') == 'Fred Garrett St'
+    assert ml._gis_rename('HOWENING RD') == 'HOWENING RD'
+    assert ml._gis_rename(None) is None
+    assert ml._rename_label('4 Howe St') == '4 Fred Garrett St'
+    assert ml._rename_label('HOWE STREET') == 'Fred Garrett St'
+    assert ml._rename_label('Howell Rd') == 'Howell Rd'
 
 
 def test_is_night_honors_the_override_and_the_clock():

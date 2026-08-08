@@ -17,7 +17,83 @@ anything.
 - **walk-audit config** moved off env vars onto Meerschaum config (`plugins:walk-audit:{smtp,notify}`). Prod values live in the container volume at `/meerschaum/config/plugins.json` (chmod 600); the `/meerschaum/.env` hack has been **deleted**.
 - `WalkAudit.reports` is empty (the deploy-check row was removed).
 
-### 2026-08-08 latest (fifteenth session, omega) — app v1.13.0+47, map-layers v0.13.0
+### 2026-08-08 latest (sixteenth session, omega) — app v1.14.0+48, map-layers v0.14.0 (DEPLOYED)
+
+Bennett's list: darker navy dark theme playing nicer with the greens; drop
+the "Auto" base-map pill (the 4-pill row wrapped "Satellite" mid-word);
+tools-screen dark-mode contrast (sublink icons were brandDark-on-navy, the
+blurb was black54-on-navy); accessibility (high contrast, large UI,
+sidewalks too thin — especially on satellite); Google Play R8 warning;
+McHan → Legacy Park rides S Church St on `quiet`; Fred Garrett St (GIS
+still says Howe St); "The Paperclip" label; formal SRT name; a
+prefer-the-trail toggle. `pytest` 68/68, `flutter test` 74/74, analyze
+clean, `route_sweep` 300 trips → 3% flagged (baseline was 5%).
+
+**Backend (map-layers v0.14.0), deployed + curl-verified:**
+
+1. **The quiet-Church defect**: the bike-lane stress penalty was baked at
+   graph build, calibrated for `balanced` (H-lane ×10 → net 4.0). Under
+   `quiet` (streets M 8 / MH 20 / H 40) that fixed 3.5 net made Church St's
+   lane the CHEAPEST corridor — the tolerance most averse to Church was the
+   only one still routed onto it. Now the edge carries `lane_stress` in
+   extras (`(danger, lit, lane_stress)`) and `_astar` prices the lane at
+   `max(speed-baked, factors[stress] × LANE_STRESS_RELIEF (⅓))` per rider.
+   Balanced calibration is unchanged by construction (12 × ⅓ / 0.4 = 10).
+   Verified on the live graph: McHan → Legacy Park quiet AND balanced now
+   read McHan → Fred Garrett St → University St → Furman College Way → SRT
+   (Bennett's "quiet" line); direct takes the 0.2 mi shorter Church St lane
+   hop, which is what "direct, traffic and all" means, and warnings still
+   disclose it.
+2. **`?trail=0`** (`_TRAIL_PREF` contextvar, plan-cache key, response echo):
+   SRT factor floors at 1.0 — the trail is neutral, not forbidden.
+3. **`STREET_RENAMES`** (`_gis_rename`/`_rename_label`): HOWE ST → Fred
+   Garrett St at graph ingest (steps + voice), search labels, and search
+   queries are aliased new-name→GIS-name so "fred garrett" finds Howe rows.
+4. **`LANDMARKS` + `landmarks` layer** (point, `/map-layers/landmarks.geojson`,
+   searchable): first entry The Paperclip (34.8487, -82.3834 — the SRT
+   switchback climb between the second Lakehurst St crossing and Traxler St).
+5. **SRT formal name**: graph/step/layer-label name is now "Prisma Health
+   Swamp Rabbit Trail" (line names — Green/Blue/Orange/Gold — stay per-
+   segment props on the srt layer; the graph keeps ONE name so steps merge).
+6. Springer CUSTOM_PATHS note corrected: the lot east of the tunnel is the
+   **South Ridge** Apartments (was written "Southernside").
+
+**App (v1.14.0+48):**
+
+7. **Darker navy** `_navy*` set (surface 0xFF0B1424 down to 0xFF060C18) and
+   the dark scheme's `primary` is now `_leafOnNavy` (0xFFA9CB7F) so the
+   brand green reads on navy.
+8. **Base picker is Light/Dark/Satellite** — `MapBase.auto` survives as the
+   internal fresh-install default (follows the theme); the picker shows auto
+   resolved to the theme's base and any tap makes it explicit.
+9. **Tools screen**: sublink icons `brandOnSurface(context)`, blurb
+   `onSurfaceVariant`.
+10. **Accessibility (Settings → Accessibility)**: "High contrast" (stronger
+    scheme in both themes + thematic map lines ×1.7 width, min 0.85 opacity,
+    re-added live via `_restyleLineLayers`) and "Large text & controls"
+    (MaterialApp builder wraps a `TextScaler` ≥1.3, clamped 2.0, on top of
+    the device scale). Sidewalks are 3.0 px @ 0.65 for everyone (were
+    1.8 @ 0.5); satellite base boosts ALL thematic lines ×1.35 (imagery is
+    busy — hairlines vanished into rooftops).
+11. **"Prefer the Swamp Rabbit Trail"** switch (Settings → Riding, default
+    on, persisted `prefer_trail`) → `trail=0` on `/route` when off.
+12. **R8 for the Play warning**: `isMinifyEnabled`/`isShrinkResources` true
+    + `proguard-rules.pro` keeping maplibre/geolocator/local-notifications
+    (JNI/reflection) and `-dontwarn` Play Core. APK 83.4 MB / AAB 56.4 MB —
+    barely smaller (the weight is native .so libraries R8 can't touch); the
+    point is Play's optimization checklist, not size.
+
+Device test (v1.14.0+48): dark theme noticeably deeper navy; layers-sheet
+base pills fit on one line; Tools sublinks + footer legible in dark; toggle
+High contrast → map lines visibly bolden without reopening; Large UI scales
+text app-wide; sidewalks readable over satellite; Settings shows Prefer-
+the-trail + Accessibility; route McHan → Legacy Park on quiet = Fred
+Garrett → Furman College Way → trail (voice says "Fred Garrett Street" and
+"Prisma Health Swamp Rabbit Trail"); search "Fred Garrett" and "Paperclip"
+both hit; R8 build passes smoke (search, route, nav, layers, report,
+BCycle deep link) — minification is the risky bit, test everything once.
+
+### 2026-08-08 earlier (fifteenth session, omega) — app v1.13.0+47, map-layers v0.13.0
 
 Bennett: "routing broken 4 McHan St → Legacy Park, specifically the Springer
 tunnel — the real line is Springer → Briar → University Ridge through

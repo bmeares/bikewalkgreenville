@@ -69,6 +69,32 @@ class SettingsScreen extends StatelessWidget {
             value: state.useBcycle,
             onChanged: state.setUseBcycle,
           ),
+          SwitchListTile(
+            secondary: const Icon(Icons.cruelty_free),
+            title: const Text('Prefer the Swamp Rabbit Trail'),
+            subtitle: const Text(
+                'Lean routes onto the Prisma Health Swamp Rabbit Trail '
+                'whenever it is close to competitive'),
+            value: state.preferTrail,
+            onChanged: state.setPreferTrail,
+          ),
+          const Divider(),
+          _header(context, 'Accessibility'),
+          SwitchListTile(
+            secondary: const Icon(Icons.contrast),
+            title: const Text('High contrast'),
+            subtitle: const Text(
+                'Stronger colors and bolder map lines for low vision'),
+            value: state.highContrast,
+            onChanged: state.setHighContrast,
+          ),
+          SwitchListTile(
+            secondary: const Icon(Icons.format_size),
+            title: const Text('Large text & controls'),
+            subtitle: const Text('Scales the whole app up about a third'),
+            value: state.largeUi,
+            onChanged: state.setLargeUi,
+          ),
           const Divider(),
           _header(context, 'Appearance'),
           RadioGroup<ThemeMode>(

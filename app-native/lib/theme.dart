@@ -258,6 +258,17 @@ const layerDefs = <LayerDef>[
     modes: {TravelMode.cyclist, TravelMode.pedestrian},
     icon: Icons.fork_right,
   ),
+  // Named spots riders navigate by ("The Paperclip" switchbacks) that no
+  // basemap labels. Curated in map-layers.py's LANDMARKS.
+  LayerDef(
+    id: 'landmarks',
+    label: 'Trail landmarks',
+    path: '/map-layers/landmarks.geojson',
+    color: '#5D4037',
+    isPoint: true,
+    modes: {TravelMode.cyclist, TravelMode.pedestrian},
+    icon: Icons.flag,
+  ),
   // One sidewalks layer: the server merges the county lines with the city
   // lines that aren't the same sidewalk digitized twice (heavy overlap in
   // city limits made two separate toggles meaningless).
@@ -268,8 +279,11 @@ const layerDefs = <LayerDef>[
     label: 'Sidewalks',
     path: '/map-layers/sidewalks.geojson',
     color: '#7BAFDE',
-    width: 1.8,
-    opacity: 0.5,
+    // Wide enough to read at a glance (low-vision feedback: 1.8 px hairlines
+    // vanished, especially over satellite imagery) while the lighter blue +
+    // sub-route opacity keep it context rather than competition.
+    width: 3.0,
+    opacity: 0.65,
     modes: {TravelMode.pedestrian},
     icon: Icons.directions_walk,
   ),
@@ -423,8 +437,15 @@ const layerDefs = <LayerDef>[
 Color hexColor(String hex) =>
     Color(int.parse('ff${hex.replaceFirst('#', '')}', radix: 16));
 
-ThemeData buildTheme() => ThemeData(
-      colorScheme: ColorScheme.fromSeed(seedColor: brandGreen),
+ThemeData buildTheme({bool highContrast = false}) => ThemeData(
+      colorScheme: ColorScheme.fromSeed(seedColor: brandGreen).copyWith(
+        // High contrast: ink-black text and true-white cards instead of the
+        // seeded scheme's soft greys.
+        onSurface: highContrast ? Colors.black : null,
+        onSurfaceVariant: highContrast ? const Color(0xFF1F2937) : null,
+        surface: highContrast ? Colors.white : null,
+        outline: highContrast ? const Color(0xFF4B5563) : null,
+      ),
       useMaterial3: true,
       // Floating, so toasts ride above the system navigation bar instead of
       // hiding behind 3-button nav.
@@ -435,28 +456,41 @@ ThemeData buildTheme() => ThemeData(
 
 // Navy dark palette: M3's seeded dark surfaces come out near-black; these
 // deep blues match the fiord basemap so map and chrome read as one surface.
-const _navy = Color(0xFF16233C);
-const _navyLowest = Color(0xFF0F1930);
-const _navyLow = Color(0xFF1B2A46);
-const _navyMid = Color(0xFF21324F);
-const _navyHigh = Color(0xFF283A59);
-const _navyHighest = Color(0xFF2F4265);
+// Deepened in v1.14 (Bennett: "darker, and play nicer with the greens") —
+// the previous set read washed-out next to the brand greens.
+const _navy = Color(0xFF0B1424);
+const _navyLowest = Color(0xFF060C18);
+const _navyLow = Color(0xFF0F1A2E);
+const _navyMid = Color(0xFF142238);
+const _navyHigh = Color(0xFF1A2B45);
+const _navyHighest = Color(0xFF213450);
 
-ThemeData buildDarkTheme() {
+/// The leaf green that carries the brand on dark navy: bright enough to hold
+/// its own as the dark theme's primary (brandGreen itself muddies on navy).
+const _leafOnNavy = Color(0xFFA9CB7F);
+
+ThemeData buildDarkTheme({bool highContrast = false}) {
   final scheme = ColorScheme.fromSeed(
     seedColor: brandGreen,
     brightness: Brightness.dark,
   ).copyWith(
-    surface: _navy,
-    surfaceContainerLowest: _navyLowest,
-    surfaceContainerLow: _navyLow,
-    surfaceContainer: _navyMid,
-    surfaceContainerHigh: _navyHigh,
-    surfaceContainerHighest: _navyHighest,
+    primary: highContrast ? const Color(0xFFC4E594) : _leafOnNavy,
+    onPrimary: const Color(0xFF1B2A0A),
+    surface: highContrast ? const Color(0xFF04080F) : _navy,
+    surfaceContainerLowest: highContrast ? Colors.black : _navyLowest,
+    surfaceContainerLow: highContrast ? const Color(0xFF0A101C) : _navyLow,
+    surfaceContainer: highContrast ? const Color(0xFF0E1524) : _navyMid,
+    surfaceContainerHigh: highContrast ? const Color(0xFF131C2E) : _navyHigh,
+    surfaceContainerHighest:
+        highContrast ? const Color(0xFF192338) : _navyHighest,
+    onSurface: highContrast ? Colors.white : const Color(0xFFE3E8F0),
+    onSurfaceVariant:
+        highContrast ? const Color(0xFFDDE3EC) : const Color(0xFFB6C0CF),
+    outline: highContrast ? const Color(0xFF9AA6B8) : null,
   );
   return ThemeData(
     colorScheme: scheme,
-    scaffoldBackgroundColor: _navy,
+    scaffoldBackgroundColor: scheme.surface,
     useMaterial3: true,
     snackBarTheme: const SnackBarThemeData(
       behavior: SnackBarBehavior.floating,
