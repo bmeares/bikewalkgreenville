@@ -844,6 +844,94 @@ class RerouteGovernor {
   }
 }
 
+/// GIS street names abbreviate cardinal prefixes ("E Washington St") and the
+/// TTS engine reads "E" as the letter. Two-letter combos arrive titleized
+/// ("Ne") from the server's `.title()`, so matching is case-normalized.
+const _spokenDirections = <String, String>{
+  'N': 'North',
+  'S': 'South',
+  'E': 'East',
+  'W': 'West',
+  'NE': 'Northeast',
+  'NW': 'Northwest',
+  'SE': 'Southeast',
+  'SW': 'Southwest',
+};
+
+/// Street-type suffixes the engine won't reliably expand on its own.
+const _spokenSuffixes = <String, String>{
+  'St': 'Street',
+  'Rd': 'Road',
+  'Ave': 'Avenue',
+  'Av': 'Avenue',
+  'Blvd': 'Boulevard',
+  'Dr': 'Drive',
+  'Ln': 'Lane',
+  'Ct': 'Court',
+  'Cir': 'Circle',
+  'Pl': 'Place',
+  'Hwy': 'Highway',
+  'Pkwy': 'Parkway',
+  'Ter': 'Terrace',
+  'Trl': 'Trail',
+  'Xing': 'Crossing',
+  'Ext': 'Extension',
+  'Mt': 'Mount',
+};
+
+/// Lowercase units in spoken distances ("400 ft" must not be "400 eff tee").
+const _spokenUnits = <String, String>{'ft': 'feet', 'mi': 'miles'};
+
+/// What the voice actually says for [text]: cardinal prefixes, street-type
+/// suffixes and distance units expanded ("Turn left onto E Washington St" →
+/// "Turn left onto East Washington Street"). Display text stays abbreviated —
+/// this is for the TTS engine only.
+///
+/// "St" is ambiguous: before another capitalized word it means Saint
+/// ("St Francis Dr") — unless that word is itself a suffix ("E North St Ext").
+String spokenText(String text) {
+  final words = text.split(' ');
+  String coreOf(String w) =>
+      RegExp(r'[A-Za-z]+').firstMatch(w)?.group(0) ?? '';
+  String titled(String c) => c.length > 1
+      ? c[0].toUpperCase() + c.substring(1).toLowerCase()
+      : c;
+  bool capitalized(String c) =>
+      c.isNotEmpty && c[0] == c[0].toUpperCase() && c[0] != c[0].toLowerCase();
+
+  final out = <String>[];
+  for (var i = 0; i < words.length; i++) {
+    final w = words[i];
+    final m = RegExp(r'^([^A-Za-z]*)([A-Za-z]+)([^A-Za-z]*)$').firstMatch(w);
+    if (m == null) {
+      out.add(w);
+      continue;
+    }
+    final pre = m.group(1)!, core = m.group(2)!, post = m.group(3)!;
+    final nextCore = i + 1 < words.length ? coreOf(words[i + 1]) : '';
+    final nextIsName = post.isEmpty &&
+        capitalized(nextCore) &&
+        !_spokenSuffixes.containsKey(titled(nextCore)) &&
+        !_spokenDirections.containsKey(nextCore.toUpperCase());
+    var replaced = core;
+    if (capitalized(core) && _spokenDirections.containsKey(core.toUpperCase())) {
+      replaced = _spokenDirections[core.toUpperCase()]!;
+    } else if (_spokenSuffixes.containsKey(titled(core))) {
+      if (titled(core) == 'St' && nextIsName) {
+        replaced = 'Saint';
+      } else if (titled(core) == 'Dr' && nextIsName) {
+        replaced = core; // "Dr Martin Luther King" — the engine says Doctor.
+      } else {
+        replaced = _spokenSuffixes[titled(core)]!;
+      }
+    } else if (_spokenUnits.containsKey(core)) {
+      replaced = _spokenUnits[core]!;
+    }
+    out.add('$pre$replaced$post');
+  }
+  return out.join(' ');
+}
+
 /// "400 ft" / "0.6 mi" — imperial, because Greenville.
 String formatDistance(double meters) {
   final feet = meters * 3.28084;

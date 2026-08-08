@@ -17,7 +17,65 @@ anything.
 - **walk-audit config** moved off env vars onto Meerschaum config (`plugins:walk-audit:{smtp,notify}`). Prod values live in the container volume at `/meerschaum/config/plugins.json` (chmod 600); the `/meerschaum/.env` hack has been **deleted**.
 - `WalkAudit.reports` is empty (the deploy-check row was removed).
 
-### 2026-08-07 latest (twelfth session, omega) — app v1.10.1+44 (BUILT + SIGNED)
+### 2026-08-07 latest (thirteenth session, omega) — app v1.11.0+45, map-layers v0.10.0
+
+Bennett's ride feedback round 2: jarring reroute audio, missing shortcuts
+(Springer tunnel class), stronger SRT pull, speed limits vs the stress layer,
+and "E Washington St" spoken as the letter E. `flutter analyze` clean,
+`flutter test` 74/74, `python3 tests/test_route_graph.py` 46/46.
+
+**Backend (map-layers v0.10.0):**
+
+1. **OSM paths in the routing graph** (`_osm_path_rows`): Overpass ways —
+   cycleway/path/pedestrian, footway minus `footway=sidewalk|crossing`, and
+   street tunnels (`highway=residential|service|…` + `tunnel=yes`; the
+   Springer St tunnel is `highway=residential` in OSM, NOT a path) — within
+   SEARCH_BOUNDS. ~4.9k ways. True paths route as category `path` (0.4, car-
+   free), street tunnels as `L`. Disk-cached at `<output>/osm-paths.json`
+   (7-day TTL; stale cache beats no data when Overpass 504s; graph builds
+   fine with none). OSM ways named "Swamp Rabbit*" are skipped — the trail is
+   already its own cheaper category. Graph: 37.7k → **44.4k nodes**, build
+   ~16 s → ~20 s. CUSTOM_PATHS stays for anything OSM doesn't know.
+2. **Speed limits corroborate PCC stress** (`_stress_floor`): each stress
+   segment picks up the posted SPEED of the nearest `county.TRA_STREETCL`
+   centerline (nearest to the segment MIDPOINT so side streets don't inherit
+   the arterial they dead-end into), then the stress level is floored:
+   ≥45 → H, ≥40 → MH, ≥35 → M. Escalation only. ~3.3k of 28.4k segments
+   escalate (Pete Hollis Blvd's 40 mph blocks → MH; any 45 mph road rated L
+   was a data gap). Escalated levels also drive the no-bike-lane warnings.
+3. **SRT bias deepened again**: srt factor quiet 0.2 → **0.12**, balanced
+   0.28 → **0.18**, direct 0.4 → **0.3**; walk 0.55 → **0.45**, roll 0.5 →
+   **0.45**. A balanced bike now detours up to ~5.5× the direct distance to
+   ride the trail. Verified: 101 N Main → Swamp Rabbit Cafe rides the SRT.
+4. **PROPOSED bike lanes no longer route as real** — the bike-lanes graph
+   source now filters `STATUS != 'PROPOSED'` (133 rows of paint that doesn't
+   exist yet were priced at 0.4 like real lanes). The *visual* bike-lanes
+   layer still draws them — decide separately if that should change.
+
+**App (v1.11.0+45):**
+
+5. **Reroute audio gentler**: the ToneGenerator beep is GONE (MainActivity's
+   `bwg/tone` channel deleted — even TONE_PROP_ACK read as an alarm on the
+   road); the announce phrase is now "Finding a new route." instead of
+   "Rerouting." Backoff/quiet-notice governor unchanged.
+6. **TTS pronunciation** (`spokenText()` in nav.dart, unit-tested): cardinal
+   prefixes (E/N/S/W/NE/NW/SE/SW → East/…), street suffixes (St/Rd/Ave/Blvd/
+   Dr/Ln/Ct/Hwy/Pkwy/… → Street/…), units (ft/mi → feet/miles). "St" before a
+   capitalized name means Saint ("St Francis Dr") unless that word is itself
+   a suffix ("E North St Ext" → Street Extension). Display text stays
+   abbreviated — only `_speak` calls in `_announce` are expanded.
+
+Device test checklist (v1.11.0+45):
+- Voice says "East Washington Street", "Pete Hollis Boulevard", "In 400
+  feet…" — never the letter E or "S T".
+- Go off-route: NO beep; a calm "Finding a new route." once; then the usual
+  quiet backoff.
+- Springer St → University Ridge: still rides the tunnel path.
+- Bike routes lean visibly harder onto the SRT; Pete Hollis/45 mph roads
+  avoided unless direct is chosen (and warned when ridden).
+- Publix-class shortcuts (paths/tunnels the county GIS lacks) now route.
+
+### 2026-08-07 earlier (twelfth session, omega) — app v1.10.1+44 (BUILT + SIGNED)
 
 **GPS navigation never worked on Android — root cause found, one line of XML.**
 `flutter analyze` clean, `flutter test` 69/69, signed APK + AAB, versionCode 44.

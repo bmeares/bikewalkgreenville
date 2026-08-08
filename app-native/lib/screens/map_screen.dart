@@ -107,9 +107,6 @@ class _MapScreenState extends State<MapScreen> {
   final Set<String> _puckImages = {};
   String _puckImage = 'puck-arrow';
 
-  /// Double-beep on reroute, Google Maps style (MainActivity's ToneGenerator).
-  static const _tone = MethodChannel('bwg/tone');
-
   AppState get app => context.read<AppState>();
 
   @override
@@ -1346,10 +1343,10 @@ class _MapScreenState extends State<MapScreen> {
     if (nextIndex != _spokenStep && d < 230) {
       _spokenStep = nextIndex;
       _spokenImminent = false;
-      _speak('In ${formatDistance(d)}, ${step.instruction}');
+      _speak(spokenText('In ${formatDistance(d)}, ${step.instruction}'));
     } else if (nextIndex == _spokenStep && !_spokenImminent && d < 45) {
       _spokenImminent = true;
-      _speak(step.instruction);
+      _speak(spokenText(step.instruction));
     }
   }
 
@@ -1364,11 +1361,9 @@ class _MapScreenState extends State<MapScreen> {
     if (decision == RerouteDecision.none) return;
     _rerouting = true;
     if (decision == RerouteDecision.announce) {
-      // The Google-style cue: a tone first, words second.
-      try {
-        await _tone.invokeMethod('reroute');
-      } catch (_) {}
-      await _speak('Rerouting.');
+      // No tone: even the soft ToneGenerator ack read as an alarm on the
+      // road. A calm sentence carries the same information.
+      await _speak('Finding a new route.');
       if (mounted) toast(context, 'Off route — recalculating…');
     } else if (decision == RerouteDecision.quietNotice) {
       // Third recalculation in one spell: the rider clearly knows a way the

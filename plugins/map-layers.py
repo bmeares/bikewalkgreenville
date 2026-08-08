@@ -35,7 +35,7 @@ from meerschaum.actions import make_action
 from meerschaum.plugins import api_plugin
 from meerschaum.utils.warnings import info, warn
 
-__version__ = '0.9.1'
+__version__ = '0.10.0'
 
 bwg = mrsm.Plugin('bwg')
 
@@ -704,10 +704,12 @@ MODE_FACTORS = {
     'bike': {
         # The SRT is deliberately the cheapest surface for every human-powered
         # mode: BWG wants trips steered onto the trail network wherever it is
-        # remotely competitive. 'path' is a curated CUSTOM_PATHS connector —
-        # car-free like the trail, priced like a bike lane (they cross parking
-        # lots and tunnels, not landscaped greenway).
-        'srt': 0.28,
+        # remotely competitive (v0.10.0 deepened the discount again — a bike
+        # now detours up to ~5x the direct distance to ride the trail).
+        # 'path' covers curated CUSTOM_PATHS + OSM paths/tunnels — car-free
+        # like the trail, priced like a bike lane (they cross parking lots
+        # and tunnels, not landscaped greenway).
+        'srt': 0.18,
         'path': 0.4,
         'bike-lane': 0.4,
         'L': 1.0,
@@ -717,7 +719,7 @@ MODE_FACTORS = {
         'H': 12.0,
     },
     'walk': {
-        'srt': 0.55,
+        'srt': 0.45,
         'path': 0.9,
         'bike-lane': 1.0,
         'L': 1.0,
@@ -730,7 +732,7 @@ MODE_FACTORS = {
         # 'path' stays neutral for wheelchairs: a curated shortcut's surface
         # and curb cuts are unverified, so don't steer rolls into it — just
         # stop pretending it doesn't exist.
-        'srt': 0.5,
+        'srt': 0.45,
         'path': 1.0,
         'bike-lane': 1.0,
         'L': 1.0,
@@ -766,25 +768,28 @@ BIKE_FACILITY_CATEGORIES = ('srt', 'bike-lane', 'path')
 #: How much traffic the rider is willing to put up with. A tolerance only
 #: RE-WEIGHTS; it never removes an edge, so a route always exists and the
 #: stretches above the rider's tolerance stay disclosed through `warnings[]`.
-#: `balanced` keeps the historical traffic weights; since v0.6.0 its `srt`
-#: discount is deeper (0.4 -> 0.28) to bias trips onto the trail network.
+#: `balanced` keeps the historical traffic weights; the `srt` discount has
+#: deepened twice (0.4 -> 0.28 in v0.6.0, -> 0.18 in v0.10.0) to bias trips
+#: hard onto the trail network.
 STRESS_LEVELS = ('quiet', 'balanced', 'direct')
 DEFAULT_STRESS = 'balanced'
 #: The `srt` discounts sit well below the bike-lane ones on purpose (see
 #: MODE_FACTORS): the trail network is the backbone BWG wants trips on.
 BIKE_STRESS_FACTORS = {
     'quiet': {
-        'srt': 0.2, 'path': 0.35, 'bike-lane': 0.35,
+        'srt': 0.12, 'path': 0.35, 'bike-lane': 0.35,
         'L': 1.0, 'ML': 2.0, 'M': 8.0, 'MH': 20.0, 'H': 40.0,
     },
     'balanced': {
-        'srt': 0.28, 'path': 0.4, 'bike-lane': 0.4,
+        'srt': 0.18, 'path': 0.4, 'bike-lane': 0.4,
         'L': 1.0, 'ML': 1.3, 'M': 2.5, 'MH': 6.0, 'H': 12.0,
     },
     # "Shortest ride": the facility discount shrinks too, or a direct route
-    # would still detour half a mile to pick up a bike lane.
+    # would still detour half a mile to pick up a bike lane. The srt discount
+    # stays meaningful even here — direct riders still get steered onto the
+    # trail when it is anywhere near competitive.
     'direct': {
-        'srt': 0.4, 'path': 0.6, 'bike-lane': 0.6,
+        'srt': 0.3, 'path': 0.6, 'bike-lane': 0.6,
         'L': 1.0, 'ML': 1.1, 'M': 1.4, 'MH': 2.0, 'H': 3.0,
     },
 }
@@ -891,6 +896,133 @@ SIDEWALK_SOURCES = (
     ('city', 'Sidewalks', 3361),
 )
 
+#: Posted speed limits corroborate the PCC stress ratings: a 45 mph road rated
+#: L is a data gap, not a pleasant ride. Each stress segment picks up the
+#: SPEED of the nearest county centerline (nearest to the segment's MIDPOINT,
+#: so a quiet side street doesn't inherit the arterial it dead-ends into) and
+#: its stress level is floored by speed band. Escalation only — the posted
+#: limit can make a street read worse, never better. Measured blast radius:
+#: ~3.3k of 28.4k segments escalate (Pete Hollis Blvd's 40 mph blocks -> MH).
+SPEED_SOURCE = ('county', 'TRA_STREETCL', 6570)
+SPEED_NEAR_FT = 80.0
+STRESS_ORDER = ('L', 'ML', 'M', 'MH', 'H')
+SPEED_STRESS_FLOOR = ((45, 'H'), (40, 'MH'), (35, 'M'))
+
+#: OSM paths — cycleways, foot/bike paths, plazas, and street tunnels (the
+#: Springer St tunnel is `highway=residential` + `tunnel=yes`) — fill the
+#: shortcut gaps no county GIS layer maps, without hand-curating every one
+#: into CUSTOM_PATHS. Fetched from Overpass at graph build, cached on disk
+#: (stale cache beats no data when Overpass 504s, which it does). OSM
+#: sidewalk/crossing fragments are excluded: they duplicate the street grid.
+OSM_PATHS_URL = 'https://overpass-api.de/api/interpreter'
+OSM_PATHS_TTL_SECONDS = 7 * 24 * 60 * 60
+OSM_PATHS_TIMEOUT_S = 120
+#: highway= values that are their own car-free surface (category 'path').
+OSM_PATH_HIGHWAYS = ('cycleway', 'path', 'pedestrian', 'footway')
+
+
+def _stress_floor(category: str | None, speed_mph: float | None) -> str | None:
+    """Escalate a stress level to the floor its posted speed demands."""
+    if speed_mph is None or category not in STRESS_ORDER:
+        return category
+    for mph, floor in SPEED_STRESS_FLOOR:
+        if speed_mph >= mph:
+            if STRESS_ORDER.index(floor) > STRESS_ORDER.index(category):
+                return floor
+            return category
+    return category
+
+
+def _osm_paths_cache_file():
+    return _output_dir() / 'osm-paths.json'
+
+
+def _parse_overpass_paths(data: dict) -> list[dict[str, Any]]:
+    """Overpass `out geom` ways -> [{'name', 'coords', 'street'}]. The SRT is
+    skipped by name — it is already its own (cheaper) category, and a slightly
+    offset OSM copy would just shadow it."""
+    entries = []
+    for el in (data.get('elements') or []):
+        coords = [
+            [p['lon'], p['lat']]
+            for p in (el.get('geometry') or [])
+            if 'lon' in p and 'lat' in p
+        ]
+        if len(coords) < 2:
+            continue
+        tags = el.get('tags') or {}
+        name = tags.get('name')
+        if name and 'swamp rabbit' in name.lower():
+            continue
+        entries.append({
+            'name': name,
+            'coords': coords,
+            # A street tunnel (Springer St) is still a street; only true
+            # paths get the car-free 'path' pricing.
+            'street': tags.get('highway') not in OSM_PATH_HIGHWAYS,
+        })
+    return entries
+
+
+def _fetch_osm_paths() -> list[dict[str, Any]]:
+    import requests
+    minlon, minlat, maxlon, maxlat = SEARCH_BOUNDS
+    bbox = f'{minlat},{minlon},{maxlat},{maxlon}'
+    query = f'''[out:json][timeout:90];
+(
+  way["highway"~"^(cycleway|path|pedestrian)$"]({bbox});
+  way["highway"="footway"]["footway"!~"^(sidewalk|crossing)$"]({bbox});
+  way["highway"~"^(residential|service|living_street|unclassified|track)$"]["tunnel"="yes"]({bbox});
+);
+out geom;'''
+    resp = requests.post(
+        OSM_PATHS_URL,
+        data={'data': query},
+        headers={'User-Agent': f'bwg-map-layers/{__version__} (data@bikewalkgreenville.org)'},
+        timeout=OSM_PATHS_TIMEOUT_S,
+    )
+    resp.raise_for_status()
+    return _parse_overpass_paths(resp.json())
+
+
+def _osm_path_rows(debug: bool = False) -> list[tuple[list, str, str | None, bool]]:
+    """(coords, category, name, has_sidewalk) rows from OSM, disk-cached.
+    Any failure degrades to the stale cache, then to nothing — the graph
+    builds either way."""
+    import json
+    cache = _osm_paths_cache_file()
+    entries = None
+    try:
+        if cache.exists() and (time.time() - cache.stat().st_mtime) < OSM_PATHS_TTL_SECONDS:
+            entries = json.loads(cache.read_text())
+    except Exception:
+        entries = None
+    if entries is None:
+        try:
+            entries = _fetch_osm_paths()
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text(json.dumps(entries))
+            info(f"Fetched {len(entries)} OSM path ways from Overpass.")
+        except Exception as e:
+            warn(f"Overpass unavailable ({e}); using the cached OSM paths if any.")
+            try:
+                entries = json.loads(cache.read_text())
+            except Exception:
+                entries = []
+    return [
+        (
+            p['coords'],
+            # Street tunnels ride like a quiet street; everything else is a
+            # car-free path. has_sidewalk=True: both are their own surface
+            # (or too short to warn about), not a shoulder-less arterial.
+            ('L' if p.get('street') else 'path'),
+            p.get('name'),
+            True,
+        )
+        for p in entries
+        if len(p.get('coords') or []) >= 2
+    ]
+
 # Transit tuning: how far someone will walk to/from a stop, how close a stop
 # must sit to its route shape to count as "on" it, minimum useful ride, an
 # average in-service bus speed, and a flat wait estimate (no stop_times yet).
@@ -967,16 +1099,19 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str, bool]]
     import json
 
     sources = [
-        # (layer, category, SQL expression for the street name, check sidewalks?)
+        # (layer, category, SQL name expression, check sidewalks?, WHERE)
         # category = stress_level per row for bike-stress:
-        ('bike-stress', None, '"street_name"', True),
-        ('bike-lanes', 'bike-lane', '"STREET_NAM"', True),
+        ('bike-stress', None, '"street_name"', True, None),
+        # PROPOSED lanes are paint that does not exist yet — pricing them as
+        # real bike lanes routed riders onto bare arterials (133 rows).
+        ('bike-lanes', 'bike-lane', '"STREET_NAM"', True,
+         'COALESCE(src."STATUS", \'\') != \'PROPOSED\''),
         # The trail IS the walking surface; asking whether it has a sidewalk
         # is a category error.
-        ('srt', 'srt', "'Swamp Rabbit Trail'", False),
+        ('srt', 'srt', "'Swamp Rabbit Trail'", False, None),
     ]
     rows = []
-    for layer_id, category, name_expr, check_sidewalks in sources:
+    for layer_id, category, name_expr, check_sidewalks, where in sources:
         layer = LAYERS[layer_id]
         pipe = _layer_pipe(layer)
         conn = pipe.instance_connector
@@ -994,6 +1129,26 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str, bool]]
             if check_sidewalks
             else 'TRUE AS "has_sidewalk"'
         )
+        # Posted speed of the nearest centerline to the segment's midpoint
+        # (stress rows only). Midpoint-nearest, not ST_DWithin against the
+        # whole segment: every side street touches an arterial at the
+        # intersection, and MAX-within-80ft would escalate them all.
+        sp_schema, sp_table, sp_srid = SPEED_SOURCE
+        # ST_PointOnSurface: a point ON the line for any geometry type
+        # (MultiLineString included, where interpolation would throw).
+        mid = f'ST_Transform(ST_PointOnSurface(src."geometry"), {sp_srid})'
+        speed_col = (
+            f'''(
+                SELECT NULLIF(cl."SPEED", 0)
+                FROM "{sp_schema}"."{sp_table}" AS cl
+                WHERE cl."SPEED" IS NOT NULL
+                  AND ST_DWithin(cl."geometry", {mid}, {SPEED_NEAR_FT})
+                ORDER BY cl."geometry" <-> {mid}
+                LIMIT 1
+            ) AS "speed_mph"'''
+            if layer_id == 'bike-stress'
+            else 'NULL AS "speed_mph"'
+        )
         query = f'''
         SELECT
             ST_AsGeoJSON(
@@ -1007,8 +1162,10 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str, bool]]
             ) AS "gj",
             {cat_col},
             {name_expr} AS "name",
-            {sidewalk_col}
+            {sidewalk_col},
+            {speed_col}
         FROM "{schema}"."{target}" AS src
+        {f'WHERE {where}' if where else ''}
         '''
         df = conn.read(query, debug=debug)
         for rec in df.to_dict(orient='records'):
@@ -1024,9 +1181,14 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str, bool]]
             name = rec.get('name')
             name = None if not name or str(name).strip() in ('', 'N/A', 'None') else str(name).strip()
             has_sidewalk = bool(rec.get('has_sidewalk'))
+            speed = rec.get('speed_mph')
+            speed = None if speed is None or speed != speed else float(speed)
+            category = _stress_floor(rec.get('category'), speed)
             for part in parts:
                 if len(part) >= 2:
-                    rows.append((part, rec.get('category'), name, has_sidewalk))
+                    rows.append((part, category, name, has_sidewalk))
+    # OSM cycleways, paths and tunnels: the shortcuts no county layer maps.
+    rows.extend(_osm_path_rows(debug=debug))
     # Curated off-grid connectors (tunnels, cut-throughs): straight from the
     # CUSTOM_PATHS constant, no database involved. Category 'path' is its own
     # surface, so no sidewalk check applies.

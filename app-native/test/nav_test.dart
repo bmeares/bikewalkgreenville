@@ -658,4 +658,58 @@ void main() {
       expect(RerouteGovernor.cooldownSeconds(8), 120);
     });
   });
+
+  group('spokenText (what the voice says)', () {
+    test('cardinal prefixes expand', () {
+      expect(spokenText('Turn left onto E Washington St'),
+          'Turn left onto East Washington Street');
+      expect(spokenText('Continue on N Main St'),
+          'Continue on North Main Street');
+      expect(spokenText('Turn right onto SW Court St'),
+          'Turn right onto Southwest Court Street');
+      // Titleized two-letter combos ("Ne" from the server's .title()).
+      expect(spokenText('Head east on Ne Main St'),
+          'Head east on Northeast Main Street');
+    });
+
+    test('street-type suffixes expand', () {
+      expect(spokenText('Turn left onto Pete Hollis Blvd'),
+          'Turn left onto Pete Hollis Boulevard');
+      expect(spokenText('Bear right onto W Faris Rd'),
+          'Bear right onto West Faris Road');
+      expect(spokenText('Continue onto Cedar Lane Rd'),
+          'Continue onto Cedar Lane Road');
+      expect(spokenText('Turn right onto Laurens Hwy'),
+          'Turn right onto Laurens Highway');
+    });
+
+    test('St means Saint before a name, Street otherwise', () {
+      expect(spokenText('Turn left onto St Francis Dr'),
+          'Turn left onto Saint Francis Drive');
+      // Followed by a lowercase word: still Street.
+      expect(spokenText('Bear left onto Springer St tunnel path'),
+          'Bear left onto Springer Street tunnel path');
+      // Followed by another suffix abbreviation: still Street.
+      expect(spokenText('Continue on E North St Ext'),
+          'Continue on East North Street Extension');
+      // Trailing punctuation ends the name.
+      expect(spokenText('Turn left onto E Washington St, then turn right'),
+          'Turn left onto East Washington Street, then turn right');
+    });
+
+    test('distance units expand', () {
+      expect(spokenText('In 400 ft, turn left onto E Stone Ave'),
+          'In 400 feet, turn left onto East Stone Avenue');
+      expect(spokenText('In 0.6 mi, make a U-turn onto Dunbar St'),
+          'In 0.6 miles, make a U-turn onto Dunbar Street');
+    });
+
+    test('ordinary words are left alone', () {
+      expect(spokenText('Arrive at your destination'),
+          'Arrive at your destination');
+      expect(spokenText('Head northeast on Swamp Rabbit Trail'),
+          'Head northeast on Swamp Rabbit Trail');
+      expect(spokenText('You have arrived.'), 'You have arrived.');
+    });
+  });
 }

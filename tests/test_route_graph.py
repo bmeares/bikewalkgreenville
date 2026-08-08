@@ -232,8 +232,8 @@ class TestSrtBias(RouteGraphTestCase):
 
     Geometry: a straight low-stress street A -> C, and an SRT dogleg
     A -> B -> C about 2.65x as long. With the pre-v0.6.0 srt factor (0.4) the
-    street wins (0.4 x 2.65 > 1.0); with the biased factor (0.28) the trail
-    wins. This test is the pin on that bias.
+    street wins (0.4 x 2.65 > 1.0); with the biased factor (0.18 since
+    v0.10.0) the trail wins. This test is the pin on that bias.
     """
 
     A = (34.8500, -82.4000)
@@ -254,7 +254,7 @@ class TestSrtBias(RouteGraphTestCase):
         self.assertIn('Swamp Rabbit Trail', names)
 
     def test_walking_still_takes_the_direct_street(self):
-        """The walking bias is milder (0.55): a 2.65x detour is too far to
+        """The walking bias is milder (0.45): a 2.65x detour is too far to
         walk for the trail, so the direct street should still win."""
         graph = self._graph(self._rows())
         feature = self._route(graph, self.A, self.C, mode='walk')
@@ -738,6 +738,81 @@ class TestCustomPaths(RouteGraphTestCase):
             self.assertIn('path', factors, f"stress '{level}' missing 'path'")
         for mode in ('walk', 'roll'):
             self.assertIn('path', ml.MODE_FACTORS[mode])
+
+
+class TestSpeedStressFloor(unittest.TestCase):
+    """Posted speed limits corroborate the PCC stress ratings: high-speed
+    roads (Pete Hollis Blvd's 40 mph blocks, any 45+ road) are floored to a
+    stress level that matches the traffic, escalation only."""
+
+    def test_speed_floors_escalate(self):
+        self.assertEqual(ml._stress_floor('L', 45), 'H')
+        self.assertEqual(ml._stress_floor('M', 45), 'H')
+        self.assertEqual(ml._stress_floor('L', 40), 'MH')
+        self.assertEqual(ml._stress_floor('M', 40), 'MH')
+        self.assertEqual(ml._stress_floor('L', 35), 'M')
+
+    def test_speed_never_downgrades(self):
+        self.assertEqual(ml._stress_floor('H', 35), 'H')
+        self.assertEqual(ml._stress_floor('MH', 40), 'MH')
+        self.assertEqual(ml._stress_floor('H', 45), 'H')
+
+    def test_slow_or_unknown_speed_leaves_the_rating_alone(self):
+        self.assertEqual(ml._stress_floor('L', 25), 'L')
+        self.assertEqual(ml._stress_floor('M', None), 'M')
+
+    def test_non_stress_categories_pass_through(self):
+        for cat in ('srt', 'bike-lane', 'path', None):
+            self.assertEqual(ml._stress_floor(cat, 55), cat)
+
+    def test_a_fast_road_now_earns_the_bike_lane_warning(self):
+        """The point of the corroboration: a 45 mph road that PCC rated L
+        must both price like an arterial and be disclosed as one."""
+        self.assertIn(ml._stress_floor('L', 45), ml.STRESSFUL_CATEGORIES)
+
+
+class TestOsmPaths(RouteGraphTestCase):
+    """OSM ways (cycleways, foot paths, street tunnels) fill the shortcut
+    gaps no county GIS layer maps."""
+
+    def _overpass(self):
+        def way(wid, tags, *latlons):
+            return {
+                'type': 'way', 'id': wid, 'tags': tags,
+                'geometry': [{'lat': lat, 'lon': lon} for lat, lon in latlons],
+            }
+        return {'elements': [
+            way(1, {'highway': 'footway', 'name': 'Publix path'},
+                (34.85, -82.40), (34.851, -82.40)),
+            way(2, {'highway': 'residential', 'tunnel': 'yes',
+                    'name': 'Springer Street'},
+                (34.8380, -82.4008), (34.8381, -82.4004)),
+            way(3, {'highway': 'cycleway', 'name': 'Swamp Rabbit Trail'},
+                (34.86, -82.42), (34.861, -82.42)),  # skipped: already 'srt'
+            way(4, {'highway': 'path'}, (34.87, -82.41)),  # too short
+        ]}
+
+    def test_parse_categorizes_paths_and_street_tunnels(self):
+        entries = ml._parse_overpass_paths(self._overpass())
+        by_name = {e['name']: e for e in entries}
+        self.assertIn('Publix path', by_name)
+        self.assertFalse(by_name['Publix path']['street'])
+        self.assertIn('Springer Street', by_name)
+        self.assertTrue(by_name['Springer Street']['street'])
+        self.assertNotIn('Swamp Rabbit Trail', by_name,
+                         "the SRT is its own category; the OSM copy must be skipped")
+        self.assertEqual(len(entries), 2, "the 1-point way must be dropped")
+
+    def test_a_footway_routes_as_a_car_free_path(self):
+        entries = ml._parse_overpass_paths(self._overpass())
+        rows = [
+            (e['coords'], ('L' if e['street'] else 'path'), e['name'], True)
+            for e in entries
+        ]
+        publix = next(r for r in rows if r[2] == 'Publix path')
+        self.assertEqual(publix[1], 'path')
+        springer = next(r for r in rows if r[2] == 'Springer Street')
+        self.assertEqual(springer[1], 'L')
 
 
 if __name__ == '__main__':
