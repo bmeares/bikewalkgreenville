@@ -35,7 +35,7 @@ from meerschaum.actions import make_action
 from meerschaum.plugins import api_plugin
 from meerschaum.utils.warnings import info, warn
 
-__version__ = '0.14.1'
+__version__ = '0.15.0'
 
 bwg = mrsm.Plugin('bwg')
 
@@ -349,6 +349,61 @@ def _rename_label(label: str | None) -> str | None:
     for gis, real in STREET_RENAMES.items():
         out = re.sub(rf'\b{re.escape(gis)}\b', real, out, flags=re.IGNORECASE)
     return out
+
+
+#: Suffix words dropped when matching street names across datasets
+#: ("Springer Street" (OSM) == "SPRINGER ST" (county) == "Springer St").
+_STREET_SUFFIXES = {
+    'ST', 'STREET', 'RD', 'ROAD', 'AVE', 'AVENUE', 'DR', 'DRIVE', 'LN',
+    'LANE', 'CT', 'COURT', 'WAY', 'BLVD', 'BOULEVARD', 'PL', 'PLACE',
+    'CIR', 'CIRCLE', 'PKWY', 'PARKWAY', 'HWY', 'HIGHWAY', 'EXT',
+}
+
+
+def _street_base(name: str | None) -> str | None:
+    """Casefolded street name with trailing type suffixes dropped, for
+    matching the same street across datasets that spell it differently."""
+    import re
+    if not name:
+        return None
+    words = re.sub(r'[^A-Za-z0-9 ]', ' ', str(name)).upper().split()
+    while words and words[-1] in _STREET_SUFFIXES:
+        words.pop()
+    return ' '.join(words) or None
+
+
+#: Surface rows that are really the ROOF of a tunnel: PCC and the county
+#: centerline digitized Springer St straight across S Church St, but on the
+#: ground Springer passes UNDER Church — the OSM tunnel way (namespaced
+#: nodes, portal connectors) is the real edge, and these surface rows minted
+#: a node where riders could "turn left onto Church St" out of the tunnel.
+#: A row part whose (suffix-stripped) name matches and that PASSES THROUGH
+#: the bbox is dropped at ingest — segment-overlap, not vertex-in-box: the
+#: PCC stub is a 2-vertex straight line whose endpoints both sit just
+#: outside any between-the-portals box. Bboxes sit strictly BETWEEN the
+#: portals so rows that legitimately end at a portal survive.
+TUNNEL_ROOF_ROWS: list[tuple[str, tuple[float, float, float, float]]] = [
+    # (name base, (min lon, min lat, max lon, max lat))
+    ('SPRINGER', (-82.40086, 34.8378, -82.40048, 34.8384)),
+]
+
+
+def _tunnel_roof(name: str | None, part: list) -> bool:
+    """Is this row part a tunnel-roof artifact (see TUNNEL_ROOF_ROWS)?"""
+    base = _street_base(name)
+    if not base:
+        return False
+    for name_base, (minlon, minlat, maxlon, maxlat) in TUNNEL_ROOF_ROWS:
+        if base != name_base:
+            continue
+        for (x1, y1), (x2, y2) in zip(part, part[1:]):
+            # Segment-bbox overlap (conservative rectangle test).
+            if (
+                max(min(x1, x2), minlon) <= min(max(x1, x2), maxlon)
+                and max(min(y1, y2), minlat) <= min(max(y1, y2), maxlat)
+            ):
+                return True
+    return False
 
 
 def _build_bike_businesses(debug: bool = False) -> str | None:
@@ -1307,11 +1362,18 @@ def _osm_path_rows_from_pipe(debug: bool = False) -> list | None:
         name = None if name is None or name != name or not str(name).strip() else str(name)
         highway = rec.get('highway')
         highway = None if highway is None or highway != highway else str(highway)
+        street = bool(rec.get('street'))
+        # Street rows from the OSM paths pipe are exactly the tunnel'd
+        # streets (the Overpass query fetches nothing else street-shaped).
+        # The tunnel flag (index 7) keeps their nodes out of the surface
+        # grid — see _build_route_graph.
         rows.append((
             coords,
-            _osm_category(highway, bool(rec.get('street'))),
+            _osm_category(highway, street),
             name,
             True,
+            1.0, True, None,
+            street,
         ))
     return rows or None
 
@@ -1351,6 +1413,9 @@ def _osm_path_rows(debug: bool = False) -> list[tuple[list, str, str | None, boo
             _osm_category(p.get('highway'), bool(p.get('street'))),
             p.get('name'),
             True,
+            1.0, True, None,
+            # Street rows here are exactly the tunnel'd streets.
+            bool(p.get('street')),
         )
         for p in entries
         if len(p.get('coords') or []) >= 2
@@ -1617,7 +1682,7 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str, bool]]
                 else lights * LIT_SPACING_M >= len_m
             )
             for part in parts:
-                if len(part) >= 2:
+                if len(part) >= 2 and not _tunnel_roof(name, part):
                     rows.append(
                         (part, category, name, has_sidewalk, danger, lit,
                          lane_stress)
@@ -1701,7 +1766,7 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str, bool]]
             else float(lights) * LIT_SPACING_M >= len_m
         )
         for part in parts:
-            if len(part) >= 2:
+            if len(part) >= 2 and not _tunnel_roof(name, part):
                 rows.append((part, category, name, bool(rec.get('has_sidewalk')), danger, lit))
     # OSM cycleways, paths and tunnels: the shortcuts no county layer maps.
     rows.extend(_osm_path_rows(debug=debug))
@@ -1749,9 +1814,23 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
     adj: dict = {}
     street_nodes: set = set()
     path_nodes: set = set()
+    # Street name (suffix-stripped) -> chunk-endpoint nodes, for wiring
+    # tunnel portals back to their own street below.
+    name_nodes: dict = {}
+    # (portal node, street name) for every tunnel row's two ends.
+    tunnel_portals: list = []
 
-    def _node(lon: float, lat: float):
+    def _node(lon: float, lat: float, tunnel: bool = False):
         cell = _grid_node(lat, lon)
+        # The graph is 2D and the 12 m grid snap FUSES grade-separated
+        # geometry: the Springer St tunnel's alignment passes within a cell
+        # of the S Church St edges crossing ABOVE it, which minted a node
+        # where riders could "turn left onto Church St" out of the tunnel.
+        # Tunnel ways therefore key into their own namespace — they can
+        # never share a node with surface geometry — and rejoin the network
+        # only through explicit portal connectors to their own street.
+        if tunnel:
+            cell = ('T', *cell)
         if cell not in nodes:
             nodes[cell] = (lat, lon)
             adj[cell] = []
@@ -1760,15 +1839,19 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
     bike_factors = MODE_FACTORS['bike']
     for row in _route_source_rows(debug=debug):
         # Rows may be legacy 4-tuples (tests, custom paths) or carry the
-        # (danger, lit, lane_stress) safety context as elements 5-7.
+        # (danger, lit, lane_stress, tunnel) context as elements 5-8.
         coords, category, name, has_sidewalk = row[:4]
         extras = (
             (float(row[4]) if len(row) > 4 else 1.0),
             (bool(row[5]) if len(row) > 5 else True),
             (row[6] if len(row) > 6 else None),
         )
+        tunnel = bool(row[7]) if len(row) > 7 else False
         factor = bike_factors.get(category, MODE_DEFAULT_FACTOR['bike'])
         is_path = category in ('srt', 'bike-lane', 'path', 'footway')
+        if tunnel and len(coords) >= 2:
+            tunnel_portals.append((_node(*coords[0], tunnel=True), name))
+            tunnel_portals.append((_node(*coords[-1], tunnel=True), name))
         for chunk in _subdivide(coords):
             length_m = sum(
                 _equirect_m(a[1], a[0], b[1], b[0])
@@ -1776,9 +1859,13 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
             )
             if length_m <= 0:
                 continue
-            u = _node(chunk[0][0], chunk[0][1])
-            v = _node(chunk[-1][0], chunk[-1][1])
+            u = _node(chunk[0][0], chunk[0][1], tunnel=tunnel)
+            v = _node(chunk[-1][0], chunk[-1][1], tunnel=tunnel)
             (path_nodes if is_path else street_nodes).update((u, v))
+            if not tunnel:
+                base = _street_base(name)
+                if base:
+                    name_nodes.setdefault(base, set()).update((u, v))
             if u == v:
                 continue  # self-loop after snapping
             weight = length_m * factor * extras[0]
@@ -1813,6 +1900,21 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
         length = max(d, 1.0)
         adj[u].append((v, length, length, 'connector', coords, False, None, None, (1.0, True, None)))
         adj[v].append((u, length, length, 'connector', coords, True, None, None, (1.0, True, None)))
+
+    # Tunnel portals rejoin the surface network HERE and only here: each
+    # portal connects to the nearest chunk endpoint of a street with the
+    # SAME (suffix-stripped) name — Springer Street's tunnel may meet
+    # SPRINGER ST and the Springer St custom path, never the S Church St
+    # edges crossing above its bore.
+    for portal, portal_name in tunnel_portals:
+        base = _street_base(portal_name)
+        candidates = name_nodes.get(base) if base else None
+        if not candidates:
+            continue
+        plat, plon = nodes[portal]
+        best = min(candidates, key=lambda n: _equirect_m(plat, plon, *nodes[n]))
+        if _equirect_m(plat, plon, *nodes[best]) <= ROUTE_CONNECT_M:
+            _add_connector(portal, best)
 
     def _spatial_hash(cells, cell_m):
         cell_lat = cell_m / M_PER_DEG_LAT
@@ -1857,6 +1959,9 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
         for u, lst in adj.items()
         for e in lst
         if not e[5] and e[3] not in ('srt', 'bike-lane', 'connector')
+        # Never target a tunnel chunk: a surface path near the bore would
+        # otherwise get a connector diving underground.
+        and u[0] != 'T'
     ]
     orphan_nodes = path_nodes - street_nodes
     if street_chunks and orphan_nodes:

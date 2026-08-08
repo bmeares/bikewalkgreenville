@@ -667,7 +667,63 @@ class _MapScreenState extends State<MapScreen> {
       await _applyPick(latLng);
       return;
     }
+    // Tapping the drawn route asks about the route: which street is this
+    // stretch, and whose road is it.
+    final route = _navRoute;
+    if (route != null && !route.isEmpty) {
+      final p = NavProgress.of(route, latLng);
+      if (p != null && p.offRouteM < 30) {
+        _showRouteSegmentInfo(route, p);
+        return;
+      }
+    }
     await _showPlaceActions(latLng);
+  }
+
+  /// What the tapped stretch of the route is: the street's name, how far the
+  /// route rides it, its step instruction, and the road-ownership lookup.
+  void _showRouteSegmentInfo(NavRoute route, NavProgress p) {
+    final step = route.steps.isEmpty
+        ? null
+        : route.steps[p.stepIndex.clamp(0, route.steps.length - 1)];
+    final name = step?.name ?? 'Unnamed path';
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: Icon(Icons.route, color: brandOnSurface(ctx)),
+              title: Text(name,
+                  style: const TextStyle(fontWeight: FontWeight.w600)),
+              subtitle: step == null
+                  ? null
+                  : Text(
+                      '${formatDistance(step.distanceM)} of this route'
+                      '${step.warn != null ? ' · has gaps (dashed red)' : ''}'),
+            ),
+            if (step != null && step.instruction.isNotEmpty)
+              ListTile(
+                dense: true,
+                leading: const Icon(Icons.turn_right, size: 20),
+                title: Text(step.instruction,
+                    style: const TextStyle(fontSize: 13.5)),
+              ),
+            ListTile(
+              leading: const Icon(Icons.badge_outlined),
+              title: const Text('Who owns this road?'),
+              subtitle: const Text('Owner and contact for this stretch'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _showRoadInfo(p.snapped);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _onMapLongClick(math.Point<double> point, LatLng latLng) =>
@@ -1040,7 +1096,11 @@ class _MapScreenState extends State<MapScreen> {
         stress: state.stressApiName,
         plan: plan,
         alt: alt,
-        trail: _tripTrail ?? state.preferTrail,
+        // The trail preference only shapes QUIET routes: quiet riding is
+        // where "take the trail even when it's further" is a real choice;
+        // balanced/direct keep the server's stock weighting.
+        trail: state.stress != BikeStress.quiet ||
+            (_tripTrail ?? state.preferTrail),
       );
       // A newer plan superseded this one while it was in flight.
       if (seq != _planSeq) return;
@@ -2277,11 +2337,10 @@ class _MapScreenState extends State<MapScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
+                          // Distance and ETA only — the climb lives in the
+                          // hazards sheet with the elevation graph.
                           '${formatDistance(route.distanceM)} · '
-                          '${formatDuration(route.durationMin)}'
-                          // Climb is only worth the pixels once it is enough
-                          // to feel in your legs.
-                          '${route.climbFt >= 50 ? ' · ↑ ${route.climbFt} ft' : ''}',
+                          '${formatDuration(route.durationMin)}',
                           style: const TextStyle(
                               color: Colors.white,
                               fontWeight: FontWeight.w600,
@@ -2326,13 +2385,13 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   /// One-tap trip preferences, right on the preview — the answer to "how do
-  /// I make it quieter / skip the trail?" without hunting through sheets.
-  /// Every chip replans immediately; sized for a gloved thumb on a bike.
-  /// Stress writes the durable preference (same control as Settings and the
-  /// planner); the trail chip is THIS trip only (`_tripTrail`).
+  /// I make it quieter?" without hunting through sheets. Every chip replans
+  /// immediately; sized for a gloved thumb on a bike. Stress writes the
+  /// durable preference (same control as Settings and the planner). The
+  /// trail preference is NOT a chip here — it only shapes Quiet routes, and
+  /// its toggle lives in the planner ("More") and Settings.
   Widget _tripPrefsRow() {
     final state = context.watch<AppState>();
-    final trailOn = _tripTrail ?? state.preferTrail;
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: SizedBox(
@@ -2362,20 +2421,6 @@ class _MapScreenState extends State<MapScreen> {
                     },
                   ),
                 ),
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: FilterChip(
-                avatar: const Icon(Icons.cruelty_free, size: 18),
-                label: const Text('Trail'),
-                tooltip: 'Prefer the Prisma Health Swamp Rabbit Trail '
-                    'for this trip',
-                selected: trailOn,
-                onSelected: (v) {
-                  setState(() => _tripTrail = v);
-                  _planTrip(silent: true);
-                },
-              ),
-            ),
             ActionChip(
               avatar: const Icon(Icons.tune, size: 18),
               label: const Text('More'),

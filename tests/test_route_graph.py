@@ -1000,6 +1000,73 @@ class TestTrailPreferenceToggle(RouteGraphTestCase):
         self.assertNotIn('Srt', names)
 
 
+class TestTunnelNeverFusesWithTheStreetAbove(RouteGraphTestCase):
+    """The graph is 2D and the 12 m grid snap fused the Springer St tunnel
+    with the S Church St edges crossing above it — riders were told to turn
+    left onto Church St from inside the tunnel. Tunnel rows (8th tuple
+    element) now live in their own node namespace and rejoin the network
+    only through portals bridged to their own street's name."""
+
+    W = (34.8500, -82.4020)    # Springer, west surface end
+    WP = (34.8500, -82.4010)   # west portal
+    EP = (34.8500, -82.3990)   # east portal
+    E = (34.8500, -82.3980)    # Springer, east surface end
+    CN = (34.8510, -82.4000)   # Church, north end
+    MID = (34.8500, -82.4000)  # where Church crosses OVER the tunnel
+    CS = (34.8490, -82.4000)   # Church, south end
+
+    def _rows(self):
+        return [
+            (_line(self.W, self.WP), 'L', 'SPRINGER ST', True),
+            # The tunnel: 8-tuple, tunnel=True, passing exactly under MID.
+            (_line(self.WP, self.MID, self.EP), 'L', 'Springer Street',
+             True, 1.0, True, None, True),
+            (_line(self.EP, self.E), 'L', 'SPRINGER ST', True),
+            (_line(self.CN, self.MID, self.CS), 'L', 'CHURCH ST', True),
+            # A real surface connection so Church stays in the component.
+            (_line(self.CS, self.W), 'L', 'PEARL AVE', True),
+        ]
+
+    def test_no_node_joins_the_tunnel_and_the_street_above(self):
+        graph = self._graph(self._rows())
+        for lst in graph['adj'].values():
+            names = {e[6] for e in lst}
+            self.assertFalse(
+                'Springer Street' in names and 'CHURCH ST' in names,
+                f'tunnel fused with the street above: {names}',
+            )
+
+    def test_the_tunnel_still_routes_end_to_end(self):
+        graph = self._graph(self._rows())
+        feature = self._route(graph, self.W, self.E)
+        names = {s['name'] for s in feature['properties']['steps'] if s['name']}
+        self.assertIn('Springer Street', names)
+        # Direct through the bore, not around via Pearl/Church.
+        crow = ml._equirect_m(*self.W, *self.E)
+        self.assertLess(feature['properties']['distance_m'], crow * 1.3)
+
+    def test_church_is_reached_around_not_through_the_bore(self):
+        graph = self._graph(self._rows())
+        feature = self._route(graph, self.EP, self.CN)
+        # The only way onto Church is the real Pearl Ave junction: the trip
+        # must be far longer than the (impossible) hop up through the roof
+        # of the tunnel.
+        crow = ml._equirect_m(*self.EP, *self.CN)
+        self.assertGreater(feature['properties']['distance_m'], crow * 2.0)
+
+
+def test_tunnel_roof_rows_are_dropped_at_ingest():
+    """PCC/county digitized Springer St straight across Church St; those
+    surface rows are the roof of the tunnel and must not reach the graph."""
+    roof = [[-82.40080, 34.83805], [-82.40060, 34.83805]]
+    ends_at_portal = [[-82.40120, 34.83803], [-82.40088, 34.83804]]
+    assert ml._tunnel_roof('SPRINGER ST', roof)
+    assert ml._tunnel_roof('Springer Street', roof)
+    assert not ml._tunnel_roof('SPRINGER ST', ends_at_portal)
+    assert not ml._tunnel_roof('S CHURCH ST', roof)
+    assert not ml._tunnel_roof(None, roof)
+
+
 def test_gis_rename_says_the_streets_real_name():
     """Fred Garrett St was renamed from Howe St; the county GIS still says
     Howe. Steps, search labels and road-info say the real name."""

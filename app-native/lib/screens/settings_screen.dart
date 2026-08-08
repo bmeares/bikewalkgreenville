@@ -71,10 +71,10 @@ class SettingsScreen extends StatelessWidget {
           ),
           SwitchListTile(
             secondary: const Icon(Icons.cruelty_free),
-            title: const Text('Prefer the Swamp Rabbit Trail'),
+            title: const Text('Prefer trail routes'),
             subtitle: const Text(
-                'Lean routes onto the Prisma Health Swamp Rabbit Trail '
-                'whenever it is close to competitive'),
+                'Quiet routes choose the Prisma Health Swamp Rabbit Trail, '
+                'even when a street way is shorter'),
             value: state.preferTrail,
             onChanged: state.setPreferTrail,
           ),

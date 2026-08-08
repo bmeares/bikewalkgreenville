@@ -7,9 +7,10 @@ const brandDark = Color(0xFF33470D);
 /// Free, keyless vector basemap (OpenFreeMap, OpenMapTiles schema).
 const basemapStyleUrl = 'https://tiles.openfreemap.org/styles/liberty';
 
-/// OpenFreeMap's navy-blue dark style ("fiord") — the plain `dark` style
-/// read as a near-black void on a bike at night.
-const basemapStyleDarkUrl = 'https://tiles.openfreemap.org/styles/fiord';
+/// OpenFreeMap's dark style. Navy ("fiord") was tried in v1.13–1.15 and
+/// abandoned: the thematic greens (bike lanes especially) sank into the
+/// blue. Black gives the colored line work maximum contrast.
+const basemapStyleDarkUrl = 'https://tiles.openfreemap.org/styles/dark';
 
 /// Esri World Imagery as an inline MapLibre style: keyless raster satellite.
 /// No glyphs/sprites needed — every symbol layer the app adds uses its own
@@ -279,6 +280,8 @@ const layerDefs = <LayerDef>[
     isLabel: true,
     modes: {TravelMode.cyclist, TravelMode.pedestrian},
     icon: Icons.flag,
+    // Neighborhood-scale text: at city zoom the label floats on nothing.
+    minZoom: 13.5,
   ),
   // One sidewalks layer: the server merges the county lines with the city
   // lines that aren't the same sidewalk digitized twice (heavy overlap in
@@ -465,44 +468,33 @@ ThemeData buildTheme({bool highContrast = false}) => ThemeData(
       ),
     );
 
-// Navy dark palette: M3's seeded dark surfaces come out near-black; these
-// deep blues match the fiord basemap so map and chrome read as one surface.
-// Reworked twice on Bennett's feedback: first "darker", then "too low
-// contrast" — the fix is SPREAD, not darkness. The background stays deep,
-// but each container tier steps up ~7 points of luminance so cards, sheets
-// and fields visibly separate, and the foreground inks are near-white.
-const _navy = Color(0xFF0C1626);          // background / base surface
-const _navyLowest = Color(0xFF050B16);    // recessed wells
-const _navyLow = Color(0xFF16243C);       // cards
-const _navyMid = Color(0xFF1E2F4D);       // sheets, fields
-const _navyHigh = Color(0xFF283C60);      // menus, chips
-const _navyHighest = Color(0xFF334A74);   // highest chrome
-
-/// The leaf green that carries the brand on dark navy: bright enough to hold
-/// its own as the dark theme's primary (brandGreen itself muddies on navy).
-const _leafOnNavy = Color(0xFFB2D488);
+// Dark theme: the M3 seeded near-black surfaces, as before the navy
+// experiment (v1.13–1.15) — navy swallowed the thematic greens. High
+// contrast pushes to true black with white inks.
+/// The leaf green that carries the brand on dark surfaces (brandDark
+/// disappears on them). Also brandOnSurface's dark value.
+const _leafOnDark = Color(0xFFB2D488);
 
 ThemeData buildDarkTheme({bool highContrast = false}) {
-  final scheme = ColorScheme.fromSeed(
+  var scheme = ColorScheme.fromSeed(
     seedColor: brandGreen,
     brightness: Brightness.dark,
-  ).copyWith(
-    primary: highContrast ? const Color(0xFFCDEC9D) : _leafOnNavy,
-    onPrimary: const Color(0xFF16230A),
-    surface: highContrast ? const Color(0xFF04080F) : _navy,
-    surfaceContainerLowest: highContrast ? Colors.black : _navyLowest,
-    surfaceContainerLow: highContrast ? const Color(0xFF101A2C) : _navyLow,
-    surfaceContainer: highContrast ? const Color(0xFF18253E) : _navyMid,
-    surfaceContainerHigh: highContrast ? const Color(0xFF223252) : _navyHigh,
-    surfaceContainerHighest:
-        highContrast ? const Color(0xFF2C4066) : _navyHighest,
-    // Near-white inks: the previous soft greys sank into the navy.
-    onSurface: highContrast ? Colors.white : const Color(0xFFF1F4FA),
-    onSurfaceVariant:
-        highContrast ? const Color(0xFFE2E8F1) : const Color(0xFFC5CFDF),
-    outline:
-        highContrast ? const Color(0xFFA9B5C8) : const Color(0xFF8FA0B8),
   );
+  if (highContrast) {
+    scheme = scheme.copyWith(
+      primary: const Color(0xFFCDEC9D),
+      onPrimary: const Color(0xFF16230A),
+      surface: Colors.black,
+      surfaceContainerLowest: Colors.black,
+      surfaceContainerLow: const Color(0xFF121212),
+      surfaceContainer: const Color(0xFF1A1A1A),
+      surfaceContainerHigh: const Color(0xFF242424),
+      surfaceContainerHighest: const Color(0xFF2E2E2E),
+      onSurface: Colors.white,
+      onSurfaceVariant: const Color(0xFFE4E4E4),
+      outline: const Color(0xFFA8A8A8),
+    );
+  }
   return ThemeData(
     colorScheme: scheme,
     scaffoldBackgroundColor: scheme.surface,
@@ -530,7 +522,7 @@ Color warnAccent(BuildContext c) => Theme.of(c).brightness == Brightness.dark
 /// The brand green that reads on the current surface: full-dark line work
 /// (brandDark) disappears on a dark card, so dark mode gets a lighter leaf.
 Color brandOnSurface(BuildContext c) =>
-    Theme.of(c).brightness == Brightness.dark ? _leafOnNavy : brandDark;
+    Theme.of(c).brightness == Brightness.dark ? _leafOnDark : brandDark;
 
 void toast(BuildContext context, String msg) {
   ScaffoldMessenger.of(context)

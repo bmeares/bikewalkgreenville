@@ -17,7 +17,69 @@ anything.
 - **walk-audit config** moved off env vars onto Meerschaum config (`plugins:walk-audit:{smtp,notify}`). Prod values live in the container volume at `/meerschaum/config/plugins.json` (chmod 600); the `/meerschaum/.env` hack has been **deleted**.
 - `WalkAudit.reports` is empty (the deploy-check row was removed).
 
-### 2026-08-08 latest (seventeenth session, omega) — app v1.15.0+49, map-layers v0.14.1 (DEPLOYED)
+### 2026-08-08 latest (eighteenth session, omega) — app v1.16.0+50, map-layers v0.15.0 (DEPLOYED)
+
+Bennett round 3: navy abandoned ("too hard to see the bike lanes" — back to
+black); Springer St does NOT meet Church St at grade (it tunnels under, yet
+direct routes turned left onto Church from Springer); Paperclip label only
+at close zoom; Trail chip out of quick settings (trail preference only
+shapes Quiet); climb text off the route card; tapping the route line should
+say which street that stretch is. `pytest` 72/72, `flutter test` 74/74,
+analyze clean, sweep re-run post-change.
+
+**Backend (map-layers v0.15.0) — the tunnel/Church fusion, TWO mechanisms:**
+
+1. **Tunnel node namespace.** The graph is 2D and the 12 m grid snap fused
+   the OSM Springer tunnel way's geometry with the S Church St bike-lane
+   edges crossing ABOVE it (verified live: one node carried both). Tunnel
+   rows (OSM street rows, tuple element 8 `tunnel=True`) now key their
+   nodes into a `('T', …)` namespace — they can never share a cell with
+   surface geometry — and rejoin the network ONLY through portal
+   connectors to the nearest chunk endpoint of a street with the SAME
+   suffix-stripped name (`_street_base`: "Springer Street" == "SPRINGER
+   ST" == "Springer St"). Junction connectors also never target tunnel
+   chunks (`u[0] != 'T'`).
+2. **TUNNEL_ROOF_ROWS.** PCC's Springer stress stub is a 2-vertex straight
+   line crossing Church on the surface — the roof of the tunnel digitized
+   as a street. Vertex-in-bbox tests MISS it (both endpoints sit outside
+   any between-the-portals box); `_tunnel_roof` does segment-bbox overlap
+   and drops matching parts at ingest (both stress and gap-fill loops).
+   The offending node had been minted by the junction pass SPLITTING that
+   chunk where Church's lane end projected onto it.
+   Verified: zero nodes in the portal window carry both a SPRINGER and a
+   CHURCH edge; McHan → Briar still rides the tunnel; direct McHan →
+   Legacy Park reaches Church via Wakefield St (a real intersection).
+
+**App (v1.16.0+50):**
+
+3. **Dark theme back to black**: basemap `dark` (fiord navy swallowed the
+   bike-lane greens), Material dark = stock seeded near-black scheme; high
+   contrast = true black + white inks. All `_navy*` consts deleted;
+   `brandOnSurface` dark keeps the light leaf (`_leafOnDark`).
+4. **Paperclip label minZoom 13.5** (landmarks LayerDef).
+5. **Trail preference only shapes QUIET routes**: `_planTrip` sends
+   `trail=0` only when stress==quiet and the pref/override says off;
+   balanced/direct always ride the server's stock weighting. Trail chip
+   REMOVED from the preview quick row (chips are now Quiet/Balanced/Direct
+   + More); the planner's trail switch only shows when Quiet is selected
+   and is reworded "Prefer trail routes — choose routes that ride the
+   Prisma Health Swamp Rabbit Trail, even when a street way is shorter"
+   (Settings toggle reworded to match).
+6. **Route card is distance + ETA only** (climb lives in the hazards sheet
+   with the elevation graph).
+7. **Tap the route line → segment info**: `_onMapClick` snaps the tap with
+   `NavProgress.of` (<30 m) and opens a sheet naming the street for that
+   stretch (step name), how far the route rides it, its instruction, and a
+   "Who owns this road?" row into the existing road-info sheet.
+
+Device test (v1.16.0+50): dark mode = black map + black chrome, bike lanes
+pop; Paperclip label appears only zoomed in past ~13.5; route drawn → quick
+row has NO trail chip; planner shows the trail switch only with Quiet
+selected; card shows "3.2 mi · 25 min" with no ↑ ft; tap mid-route → sheet
+names the street; direct-stress route near the tunnel NEVER turns onto
+Church St from Springer.
+
+### 2026-08-08 earlier (seventeenth session, omega) — app v1.15.0+49, map-layers v0.14.1 (DEPLOYED)
 
 Bennett's follow-ups on v1.14: navy still too low-contrast; base picker must
 not offer a dark map on light chrome (or vice versa); Paperclip marker too
