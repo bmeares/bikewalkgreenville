@@ -815,5 +815,33 @@ class TestOsmPaths(RouteGraphTestCase):
         self.assertEqual(springer[1], 'L')
 
 
+class TestNominatimLabel(unittest.TestCase):
+    """Nominatim puts the house number in its own comma part; the label must
+    not present a bare "4" with the street exiled to the subtitle."""
+
+    def test_house_number_glued_to_street(self):
+        label, sub = ml._nominatim_label(
+            '4, McHan Street, Downtown, Greenville, '
+            'Greenville County, South Carolina, 29605, United States'
+        )
+        self.assertEqual(label, '4 McHan Street')
+        self.assertEqual(sub, 'Downtown, Greenville')
+
+    def test_place_names_pass_through(self):
+        label, sub = ml._nominatim_label(
+            'Swamp Rabbit Cafe, 205, Cedar Lane Road, Greenville, ...'
+        )
+        self.assertEqual(label, 'Swamp Rabbit Cafe')
+        self.assertEqual(sub, '205, Cedar Lane Road')
+
+    def test_letter_suffixed_number_still_glues(self):
+        label, _sub = ml._nominatim_label('221B, Baker Street, Greenville')
+        self.assertEqual(label, '221B Baker Street')
+
+    def test_degenerate_inputs(self):
+        self.assertEqual(ml._nominatim_label(''), ('', ''))
+        self.assertEqual(ml._nominatim_label('4'), ('4', ''))
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

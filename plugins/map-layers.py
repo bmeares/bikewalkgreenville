@@ -35,7 +35,7 @@ from meerschaum.actions import make_action
 from meerschaum.plugins import api_plugin
 from meerschaum.utils.warnings import info, warn
 
-__version__ = '0.11.0'
+__version__ = '0.11.1'
 
 bwg = mrsm.Plugin('bwg')
 
@@ -644,6 +644,22 @@ def _search_local(q: str, limit: int) -> list[dict[str, Any]]:
     return results
 
 
+def _nominatim_label(display_name: str) -> tuple[str, str]:
+    """(label, sublabel) from a Nominatim `display_name`.
+
+    Nominatim gives the house number its own comma part ("4, McHan Street,
+    Downtown, Greenville, ..."), so a naive parts[0] label shows a bare "4"
+    with the street exiled to the subtitle. A leading all-numeric part is
+    glued back onto the street it numbers."""
+    import re
+    parts = [p.strip() for p in (display_name or '').split(',') if p.strip()]
+    if not parts:
+        return display_name or '', ''
+    if len(parts) > 1 and re.fullmatch(r'[\d/-]+\w?', parts[0]):
+        return f'{parts[0]} {parts[1]}', ', '.join(parts[2:4])
+    return parts[0], ', '.join(parts[1:3])
+
+
 def _search_nominatim(q: str) -> list[dict[str, Any]]:
     """Geocoder fallback for addresses outside the city datasets. Server-side
     so the User-Agent/caching requirements of the Nominatim usage policy live
@@ -673,11 +689,10 @@ def _search_nominatim(q: str) -> list[dict[str, Any]]:
     resp.raise_for_status()
     results = []
     for item in resp.json():
-        name = item.get('display_name') or ''
-        parts = [p.strip() for p in name.split(',')]
+        label, sublabel = _nominatim_label(item.get('display_name') or '')
         results.append({
-            'label': parts[0] if parts else name,
-            'sublabel': ', '.join(parts[1:3]),
+            'label': label,
+            'sublabel': sublabel,
             'lat': float(item['lat']),
             'lon': float(item['lon']),
             'kind': 'osm',
