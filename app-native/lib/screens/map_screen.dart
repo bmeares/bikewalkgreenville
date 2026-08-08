@@ -1711,10 +1711,16 @@ class _MapScreenState extends State<MapScreen> {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    // Dark app = dark map. Theme.of resolves ThemeMode.system for us.
-    final styleUrl = Theme.of(context).brightness == Brightness.dark
-        ? basemapStyleDarkUrl
-        : basemapStyleUrl;
+    // The rider picks the base (layers sheet); `auto` follows the app theme
+    // (Theme.of resolves ThemeMode.system for us).
+    final styleUrl = switch (state.mapBase) {
+      MapBase.light => basemapStyleUrl,
+      MapBase.dark => basemapStyleDarkUrl,
+      MapBase.satellite => satelliteStyleJson,
+      MapBase.auto => Theme.of(context).brightness == Brightness.dark
+          ? basemapStyleDarkUrl
+          : basemapStyleUrl,
+    };
     if (_activeStyle != null && _activeStyle != styleUrl) {
       // The style reload wipes our sources/layers/images; forget them so
       // _onStyleLoaded (which refires after the reload) re-adds everything.
@@ -2725,6 +2731,35 @@ class _MapScreenState extends State<MapScreen> {
                     'Map layers — '
                     '${TravelMode.values.where(state.modes.contains).map(state.labelFor).join(' + ')}',
                     style: Theme.of(ctx).textTheme.titleMedium),
+              ),
+              // Base map: light/dark here doubles as the quick theme-ish
+              // toggle riders asked for; Settings → Appearance still drives
+              // the app chrome (and `Auto` follows it).
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                child: SegmentedButton<MapBase>(
+                  segments: const [
+                    ButtonSegment(
+                        value: MapBase.auto,
+                        label: Text('Auto'),
+                        icon: Icon(Icons.brightness_auto)),
+                    ButtonSegment(
+                        value: MapBase.light,
+                        label: Text('Light'),
+                        icon: Icon(Icons.light_mode)),
+                    ButtonSegment(
+                        value: MapBase.dark,
+                        label: Text('Dark'),
+                        icon: Icon(Icons.dark_mode)),
+                    ButtonSegment(
+                        value: MapBase.satellite,
+                        label: Text('Satellite'),
+                        icon: Icon(Icons.satellite_alt)),
+                  ],
+                  selected: {state.mapBase},
+                  showSelectedIcon: false,
+                  onSelectionChanged: (s) => state.setMapBase(s.first),
+                ),
               ),
               for (final def in state.relevantLayers)
                 SwitchListTile(

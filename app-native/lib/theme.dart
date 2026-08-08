@@ -7,8 +7,24 @@ const brandDark = Color(0xFF33470D);
 /// Free, keyless vector basemap (OpenFreeMap, OpenMapTiles schema).
 const basemapStyleUrl = 'https://tiles.openfreemap.org/styles/liberty';
 
-/// OpenFreeMap's dark companion style, used when the app renders dark.
-const basemapStyleDarkUrl = 'https://tiles.openfreemap.org/styles/dark';
+/// OpenFreeMap's navy-blue dark style ("fiord") — the plain `dark` style
+/// read as a near-black void on a bike at night.
+const basemapStyleDarkUrl = 'https://tiles.openfreemap.org/styles/fiord';
+
+/// Esri World Imagery as an inline MapLibre style: keyless raster satellite.
+/// No glyphs/sprites needed — every symbol layer the app adds uses its own
+/// rendered bitmap icons, never text.
+const satelliteStyleJson = '{'
+    '"version":8,"name":"Satellite",'
+    '"sources":{"esri":{"type":"raster",'
+    '"tiles":["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],'
+    '"tileSize":256,"maxzoom":19,'
+    '"attribution":"Esri, Maxar, Earthstar Geographics, GIS User Community"}},'
+    '"layers":[{"id":"esri","type":"raster","source":"esri"}]}';
+
+/// What the map itself is drawn on. `auto` follows the app theme; satellite
+/// is imagery whatever the theme says.
+enum MapBase { auto, light, dark, satellite }
 
 /// Greenville downtown.
 const homeLat = 34.8526;
@@ -417,16 +433,36 @@ ThemeData buildTheme() => ThemeData(
       ),
     );
 
-ThemeData buildDarkTheme() => ThemeData(
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: brandGreen,
-        brightness: Brightness.dark,
-      ),
-      useMaterial3: true,
-      snackBarTheme: const SnackBarThemeData(
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
+// Navy dark palette: M3's seeded dark surfaces come out near-black; these
+// deep blues match the fiord basemap so map and chrome read as one surface.
+const _navy = Color(0xFF16233C);
+const _navyLowest = Color(0xFF0F1930);
+const _navyLow = Color(0xFF1B2A46);
+const _navyMid = Color(0xFF21324F);
+const _navyHigh = Color(0xFF283A59);
+const _navyHighest = Color(0xFF2F4265);
+
+ThemeData buildDarkTheme() {
+  final scheme = ColorScheme.fromSeed(
+    seedColor: brandGreen,
+    brightness: Brightness.dark,
+  ).copyWith(
+    surface: _navy,
+    surfaceContainerLowest: _navyLowest,
+    surfaceContainerLow: _navyLow,
+    surfaceContainer: _navyMid,
+    surfaceContainerHigh: _navyHigh,
+    surfaceContainerHighest: _navyHighest,
+  );
+  return ThemeData(
+    colorScheme: scheme,
+    scaffoldBackgroundColor: _navy,
+    useMaterial3: true,
+    snackBarTheme: const SnackBarThemeData(
+      behavior: SnackBarBehavior.floating,
+    ),
+  );
+}
 
 /// Warning banner palette that reads on both themes: cream card with brown
 /// text in light mode, deep amber-brown card with light amber text in dark.

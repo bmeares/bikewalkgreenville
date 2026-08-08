@@ -17,7 +17,64 @@ anything.
 - **walk-audit config** moved off env vars onto Meerschaum config (`plugins:walk-audit:{smtp,notify}`). Prod values live in the container volume at `/meerschaum/config/plugins.json` (chmod 600); the `/meerschaum/.env` hack has been **deleted**.
 - `WalkAudit.reports` is empty (the deploy-check row was removed).
 
-### 2026-08-07 latest (fourteenth session, omega) — app v1.12.0+46, map-layers v0.12.0
+### 2026-08-08 latest (fifteenth session, omega) — app v1.13.0+47, map-layers v0.13.0
+
+Bennett: "routing broken 4 McHan St → Legacy Park, specifically the Springer
+tunnel — the real line is Springer → Briar → University Ridge through
+Southernside" + "how do I find other broken routing?" + navy dark theme,
+light/dark toggle, satellite base. `pytest` 63/63, `flutter test` 74/74.
+
+**The Springer tunnel bug was FOUR stacked defects (map-layers v0.13.0):**
+
+1. **PCC has no Springer St east of the tunnel** (an 8 m stub) and neither
+   does the county centerline or OSM — the street exists on the ground but
+   in no dataset, so the tunnel dead-ended in the graph. Two fixes:
+   (a) **county gap-fill** — TRA_STREETCL segments whose MIDPOINT has no
+   PCC coverage join the graph as 'L' floored by posted speed (~3.2k
+   segments, interstates/US highways excluded; graph 44k → 48.5k nodes);
+   (b) the CUSTOM_PATHS entry is now the REAL alignment: east portal →
+   straight along the Springer roadbed → Briar St's south end. The old
+   hand-drawn lot line (which crossed Church St mid-air and became a fake
+   ramp via a junction connector) is deleted.
+2. **Church St's bike lane out-priced everything**: 0.4x flat. Now
+   `_lane_factor` = worse of posted-speed (≥45 ×4, ≥40 ×3, ≥35 ×2.5) and
+   the PCC stress of the street under the paint (M ×2, MH ×3.75, **H ×10**
+   → net 4.0: on the streets that kill, paint barely helps). The stress
+   lookup is NAME-MATCHED first (a short lane piece at a junction sits
+   nearest the cross-street's rating — Church's lane matched Springer's L).
+3. **OSM footways were trail-cheap (0.4)**: new category `footway` (bike
+   0.9, walk 0.8, roll 1.0) so apartment breezeways never beat the real
+   street beside them; cycleway/path/pedestrian stay `path` 0.4.
+4. Verified: McHan → Briar reads **McHan → Howe → Francis → Springer →
+   Springer Street (tunnel) → Springer St → Briar St**. Legacy Park &
+   Cleveland Park trips ride Howe (= Fred Garrett St) → Furman College Way
+   → SRT → Green Line — Church-free; the 5.4 km "uturn onto SRT" step is
+   the REAL Green Line hairpin at Woodland Wy, not a bug.
+
+**"How can I tell?" — `python3 scripts/route_sweep.py [N] [modes...]`**:
+samples seeded node-pair trips over the live graph and flags >1 U-turn per
+8 km, >40% unnamed distance, >300 m on connectors, >2.6x crow-fly, and
+fallbacks/errors. Current baseline: 240 trips → 5% flagged, all explainable
+(SRT-bias detours + long-trip trail hairpins); walk 100% clean. Run before
+and after any weights change (seeded → comparable), exit 1 above 10%.
+
+**App (v1.13.0+47):**
+
+5. **Navy dark theme**: dark basemap is now OpenFreeMap **fiord** (navy)
+   instead of `dark` (near-black), and the Material dark scheme's surfaces
+   are deep navy (`_navy*` consts in theme.dart) to match.
+6. **Base map picker** in the layers sheet: Auto / Light / Dark / Satellite
+   (SegmentedButton, persisted `map_base`). Satellite = inline Esri World
+   Imagery raster style (`satelliteStyleJson` — keyless; no glyphs needed
+   since all app symbols are bitmap icons). `Auto` follows Settings →
+   Appearance as before. Style swaps reuse the existing re-add machinery.
+
+Device test (v1.13.0+47): dark mode = navy map + navy chrome (not black);
+layers sheet base picker: satellite shows imagery with route/pins intact
+after the swap, toggling base mid-route keeps the line; McHan → Briar St
+walks the tunnel; night route still prefers lit streets.
+
+### 2026-08-07 earlier (fourteenth session, omega) — app v1.12.0+46, map-layers v0.12.0
 
 Bennett: "we almost never recommend Church St even though it has a bike
 lane" + avoid the notoriously dangerous roads (White Horse, S Academy, Pete

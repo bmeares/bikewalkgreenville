@@ -729,18 +729,20 @@ class TestCustomPaths(RouteGraphTestCase):
 
     def test_custom_paths_reach_route_source_rows(self):
         """The real _route_source_rows appends CUSTOM_PATHS (this suite mocks
-        it everywhere else, so pin the wiring itself)."""
-        self.assertTrue(ml.CUSTOM_PATHS, "the curated list must not be empty")
+        it everywhere else, so pin the wiring itself). The list may be empty
+        — v0.13.0 removed the hand-drawn Springer entry once OSM supplied the
+        real tunnel — but any entry present must be well-formed."""
         for p in ml.CUSTOM_PATHS:
             self.assertGreaterEqual(len(p['coords']), 2)
             self.assertTrue(p.get('name'))
-        # Category 'path' is wired into every table that gates routing.
-        self.assertIn('path', ml.OWN_SURFACE_CATEGORIES)
-        self.assertIn('path', ml.BIKE_FACILITY_CATEGORIES)
-        for level, factors in ml.BIKE_STRESS_FACTORS.items():
-            self.assertIn('path', factors, f"stress '{level}' missing 'path'")
-        for mode in ('walk', 'roll'):
-            self.assertIn('path', ml.MODE_FACTORS[mode])
+        # Categories 'path'/'footway' are wired into every routing table.
+        for cat in ('path', 'footway'):
+            self.assertIn(cat, ml.OWN_SURFACE_CATEGORIES)
+            self.assertIn(cat, ml.BIKE_FACILITY_CATEGORIES)
+            for level, factors in ml.BIKE_STRESS_FACTORS.items():
+                self.assertIn(cat, factors, f"stress '{level}' missing '{cat}'")
+            for mode in ('walk', 'roll'):
+                self.assertIn(cat, ml.MODE_FACTORS[mode])
 
 
 class TestSpeedStressFloor(unittest.TestCase):
@@ -806,16 +808,26 @@ class TestOsmPaths(RouteGraphTestCase):
                          "the SRT is its own category; the OSM copy must be skipped")
         self.assertEqual(len(entries), 2, "the 1-point way must be dropped")
 
-    def test_a_footway_routes_as_a_car_free_path(self):
-        entries = ml._parse_overpass_paths(self._overpass())
-        rows = [
-            (e['coords'], ('L' if e['street'] else 'path'), e['name'], True)
-            for e in entries
-        ]
-        publix = next(r for r in rows if r[2] == 'Publix path')
-        self.assertEqual(publix[1], 'path')
-        springer = next(r for r in rows if r[2] == 'Springer Street')
-        self.assertEqual(springer[1], 'L')
+    def test_osm_categories(self):
+        """Street tunnels ride as 'L', cycleways/paths as 'path', bare
+        footways as 'footway' (car-free but NOT trail-grade — 0.9 for bikes
+        so apartment breezeways never beat the real street beside them)."""
+        self.assertEqual(ml._osm_category('residential', True), 'L')
+        self.assertEqual(ml._osm_category('cycleway', False), 'path')
+        self.assertEqual(ml._osm_category('pedestrian', False), 'path')
+        self.assertEqual(ml._osm_category('path', False), 'path')
+        self.assertEqual(ml._osm_category('footway', False), 'footway')
+        for level in ml.STRESS_LEVELS:
+            self.assertGreaterEqual(
+                ml.BIKE_STRESS_FACTORS[level]['footway'], 0.8,
+                "a footway must never be trail-cheap for a bike",
+            )
+
+    def test_a_bike_lane_on_a_fast_road_never_beats_a_calm_street(self):
+        """The Church St lesson: 0.4 x the 35 mph lane penalty must be >= the
+        L-street factor, or painted arterial paint out-prices quiet streets."""
+        for mph, factor in ml.LANE_SPEED_PENALTY:
+            self.assertGreaterEqual(0.4 * factor, 1.0, f"{mph} mph lane too cheap")
 
 
 class TestNominatimLabel(unittest.TestCase):
@@ -885,11 +897,26 @@ def test_danger_factor_scales_and_caps():
 def test_lane_speed_penalty_erodes_the_paint_discount():
     assert ml._lane_speed_factor(None) == 1.0
     assert ml._lane_speed_factor(30) == 1.0
-    assert ml._lane_speed_factor(35) == 1.5
-    assert ml._lane_speed_factor(40) == 2.25
-    assert ml._lane_speed_factor(45) == 3.0
-    # A painted lane on a 45 mph road must not price better than a calm street.
-    assert 0.4 * ml._lane_speed_factor(45) >= 1.0
+    assert ml._lane_speed_factor(35) == 2.5
+    assert ml._lane_speed_factor(40) == 3.0
+    assert ml._lane_speed_factor(45) == 4.0
+    # A painted lane on a fast road must never price better than a calm
+    # street (the Church St lesson).
+    assert 0.4 * ml._lane_speed_factor(35) >= 1.0
+
+
+def test_lane_factor_takes_the_worse_of_speed_and_stress():
+    """Speed lookups are fragile (a 30 mph junction piece under Church St's
+    lane); the PCC stress of the street under the paint backstops them."""
+    assert ml._lane_factor(30, 'H') == 10.0    # slow lookup, scary street
+    assert ml._lane_factor(45, 'L') == 4.0     # fast road, calm rating
+    assert ml._lane_factor(None, 'MH') == 3.75
+    assert ml._lane_factor(30, 'L') == 1.0     # genuinely calm: full discount
+    assert ml._lane_factor(None, None) == 1.0
+    # A lane on an H street nets 0.4 x 10 = 4.0: worse than MH-lane paint,
+    # a fair bit better than the raw H street (12x) — paint barely helps on
+    # the streets that kill.
+    assert ml.MODE_FACTORS['bike']['M'] < 0.4 * ml._lane_factor(30, 'H') < ml.MODE_FACTORS['bike']['MH']
 
 
 def test_is_night_honors_the_override_and_the_clock():

@@ -35,7 +35,7 @@ from meerschaum.actions import make_action
 from meerschaum.plugins import api_plugin
 from meerschaum.utils.warnings import info, warn
 
-__version__ = '0.12.0'
+__version__ = '0.13.0'
 
 bwg = mrsm.Plugin('bwg')
 
@@ -232,20 +232,23 @@ BIKE_BUSINESSES: list[dict[str, Any]] = [
 #: WGS84, drawn end to end. Endpoints within ~ROUTE_CONNECT_M (120 m) of the
 #: street grid get junction connectors at graph build, so an entry does not
 #: need to touch a mapped street exactly. Add an entry and redeploy.
+#: v0.13.0: the old hand-drawn "Springer St tunnel path" entry (which cut
+#: through the apartment lot and crossed Church St mid-air — a junction
+#: connector turned that crossing into a fake ramp that bypassed the actual
+#: tunnel) is replaced by the real alignment. OSM supplies the tunnel itself
+#: (way 338586347, highway=residential); what NO dataset maps is Springer
+#: St's continuation east of the tunnel through Southernside to Briar St —
+#: the county centerline, PCC and OSM all stop at the east portal, so the
+#: tunnel dead-ended and routes escaped over Church St. Entries here are
+#: for connectors that exist on the ground but in no dataset.
 CUSTOM_PATHS: list[dict[str, Any]] = [
     {
-        # Springer St passes UNDER Church St (OSM way 338586347), and the
-        # South Ridge Apartments lot connects it up to University Ridge --
-        # the neighborhood's shortcut between Haynie-Sirrine and County
-        # Square that riders take whether or not the router knows it.
-        'name': 'Springer St tunnel path',
-        'note': 'Tunnel under Church St, then the South Ridge Apartments '
-                'lot up to University Ridge',
+        'name': 'Springer St',
+        'note': 'Unmapped continuation of Springer St through the '
+                'Southernside Apartments to Briar St',
         'coords': [
-            [-82.4008463, 34.8380391],  # Springer St at the west portal
-            [-82.4004550, 34.8380570],  # east portal (under Church St)
-            [-82.4007000, 34.8390000],  # through the South Ridge lot
-            [-82.4009103, 34.8399346],  # University Ridge
+            [-82.4003886, 34.8380472],  # east tunnel portal (under Church St)
+            [-82.3985862, 34.8380477],  # Briar St's south end
         ],
     },
 ]
@@ -745,6 +748,11 @@ MODE_FACTORS = {
         # and tunnels, not landscaped greenway).
         'srt': 0.18,
         'path': 0.4,
+        # A bare OSM footway (apartment paths, plazas): car-free, so barely
+        # cheaper than a calm street — but it must never beat the real
+        # street beside it by much, or routes wiggle through complexes
+        # (the Southernside lesson: Briar St, not the breezeways).
+        'footway': 0.9,
         'bike-lane': 0.4,
         'L': 1.0,
         'ML': 1.3,
@@ -755,6 +763,7 @@ MODE_FACTORS = {
     'walk': {
         'srt': 0.45,
         'path': 0.9,
+        'footway': 0.8,
         'bike-lane': 1.0,
         'L': 1.0,
         'ML': 1.0,
@@ -768,6 +777,7 @@ MODE_FACTORS = {
         # stop pretending it doesn't exist.
         'srt': 0.45,
         'path': 1.0,
+        'footway': 1.0,
         'bike-lane': 1.0,
         'L': 1.0,
         'ML': 1.0,
@@ -793,11 +803,12 @@ MODE_NETWORK_NOUN = {
 #: severe enough that a much longer sidewalked detour wins.
 NO_SIDEWALK_FACTOR = {'walk': 1.6, 'roll': 8.0}
 #: Categories that ARE the walking/rolling surface, sidewalk data or not.
-OWN_SURFACE_CATEGORIES = ('srt', 'path')
+OWN_SURFACE_CATEGORIES = ('srt', 'path', 'footway')
 #: Bike-stress levels that need a bike facility to feel safe.
 STRESSFUL_CATEGORIES = ('M', 'MH', 'H')
-#: Categories that ARE a bike facility.
-BIKE_FACILITY_CATEGORIES = ('srt', 'bike-lane', 'path')
+#: Categories that ARE a bike facility (car-free surfaces included: riding
+#: one never warns "no bike lane").
+BIKE_FACILITY_CATEGORIES = ('srt', 'bike-lane', 'path', 'footway')
 
 #: How much traffic the rider is willing to put up with. A tolerance only
 #: RE-WEIGHTS; it never removes an edge, so a route always exists and the
@@ -811,11 +822,11 @@ DEFAULT_STRESS = 'balanced'
 #: MODE_FACTORS): the trail network is the backbone BWG wants trips on.
 BIKE_STRESS_FACTORS = {
     'quiet': {
-        'srt': 0.12, 'path': 0.35, 'bike-lane': 0.35,
+        'srt': 0.12, 'path': 0.35, 'footway': 0.8, 'bike-lane': 0.35,
         'L': 1.0, 'ML': 2.0, 'M': 8.0, 'MH': 20.0, 'H': 40.0,
     },
     'balanced': {
-        'srt': 0.18, 'path': 0.4, 'bike-lane': 0.4,
+        'srt': 0.18, 'path': 0.4, 'footway': 0.9, 'bike-lane': 0.4,
         'L': 1.0, 'ML': 1.3, 'M': 2.5, 'MH': 6.0, 'H': 12.0,
     },
     # "Shortest ride": the facility discount shrinks too, or a direct route
@@ -823,7 +834,7 @@ BIKE_STRESS_FACTORS = {
     # stays meaningful even here — direct riders still get steered onto the
     # trail when it is anywhere near competitive.
     'direct': {
-        'srt': 0.3, 'path': 0.6, 'bike-lane': 0.6,
+        'srt': 0.3, 'path': 0.6, 'footway': 0.95, 'bike-lane': 0.6,
         'L': 1.0, 'ML': 1.1, 'M': 1.4, 'MH': 2.0, 'H': 3.0,
     },
 }
@@ -963,9 +974,31 @@ DANGER_CAP = 3.0
 
 #: A painted lane on a fast road is not the facility a protected lane is:
 #: bike-lane edges additionally multiply by the posted speed of the street
-#: they are painted on. (Sharrows are excluded from the graph entirely —
-#: paint saying "share" is not infrastructure.)
-LANE_SPEED_PENALTY = ((45, 3.0), (40, 2.25), (35, 1.5))
+#: they are painted on. Calibrated so a lane on a 35 mph arterial prices
+#: like a CALM street (0.4 x 2.5 = 1.0), never better — the Church St
+#: lesson: a quiet parallel residential street must win over painted
+#: arterial paint. (Sharrows are excluded from the graph entirely — paint
+#: saying "share" is not infrastructure.)
+LANE_SPEED_PENALTY = ((45, 4.0), (40, 3.0), (35, 2.5))
+#: ...and by the PCC stress of the street under the paint (nearest stress
+#: segment to the lane's midpoint). Speed alone proved fragile — short
+#: 30 mph centerline pieces near junctions let Church St's lane price at
+#: the full 0.4 discount. The two proxies measure the same fear, so the
+#: edge takes the WORSE of them, not the product. Calibration (x the 0.4
+#: lane base): lane on an M street nets 0.8, on MH nets 1.5, on H nets 4.0
+#: — on the streets that kill, paint barely helps (Bennett: "we almost
+#: never recommend Church St"), so even a short hop on an H-street lane
+#: loses to a residential-plus-tunnel line.
+LANE_STRESS_PENALTY = {'M': 2.0, 'MH': 3.75, 'H': 10.0}
+
+
+def _lane_factor(speed_mph: float | None, lane_stress: str | None) -> float:
+    """Penalty multiplier for a painted bike lane, from the posted speed and
+    the stress rating of the street it is painted on (worse of the two)."""
+    return max(
+        _lane_speed_factor(speed_mph),
+        LANE_STRESS_PENALTY.get(lane_stress or '', 1.0),
+    )
 
 #: Duke Energy streetlight poles (Ped.lighting, ~40k points). A street with
 #: fewer than one pole per LIT_SPACING_M of length counts as unlit, and after
@@ -1081,6 +1114,15 @@ def _osm_paths_cache_file():
     return _output_dir() / 'osm-paths.json'
 
 
+def _osm_category(highway: str | None, street: bool) -> str:
+    """Graph category for an OSM way: street tunnels ride like a quiet
+    street; cycleways/paths/plazas are trail-grade ('path'); a bare footway
+    is car-free but NOT a bike facility-grade shortcut ('footway')."""
+    if street:
+        return 'L'
+    return 'footway' if highway == 'footway' else 'path'
+
+
 def _parse_overpass_paths(data: dict) -> list[dict[str, Any]]:
     """Overpass `out geom` ways -> [{'name', 'coords', 'street'}]. The SRT is
     skipped by name — it is already its own (cheaper) category, and a slightly
@@ -1142,7 +1184,7 @@ def _osm_path_rows_from_pipe(debug: bool = False) -> list | None:
         schema = OSM_PATHS_PIPE.parameters.get('schema') or 'public'
         target = OSM_PATHS_PIPE.target
         df = OSM_PATHS_PIPE.instance_connector.read(
-            f'SELECT ST_AsGeoJSON("geometry") AS "gj", "name", "street" '
+            f'SELECT ST_AsGeoJSON("geometry") AS "gj", "name", "highway", "street" '
             f'FROM "{schema}"."{target}"',
             debug=debug,
         )
@@ -1161,7 +1203,14 @@ def _osm_path_rows_from_pipe(debug: bool = False) -> list | None:
             continue
         name = rec.get('name')
         name = None if name is None or name != name or not str(name).strip() else str(name)
-        rows.append((coords, ('L' if rec.get('street') else 'path'), name, True))
+        highway = rec.get('highway')
+        highway = None if highway is None or highway != highway else str(highway)
+        rows.append((
+            coords,
+            _osm_category(highway, bool(rec.get('street'))),
+            name,
+            True,
+        ))
     return rows or None
 
 
@@ -1195,10 +1244,9 @@ def _osm_path_rows(debug: bool = False) -> list[tuple[list, str, str | None, boo
     return [
         (
             p['coords'],
-            # Street tunnels ride like a quiet street; everything else is a
-            # car-free path. has_sidewalk=True: both are their own surface
-            # (or too short to warn about), not a shoulder-less arterial.
-            ('L' if p.get('street') else 'path'),
+            # has_sidewalk=True: these are their own surface (or too short
+            # to warn about), not a shoulder-less arterial.
+            _osm_category(p.get('highway'), bool(p.get('street'))),
             p.get('name'),
             True,
         )
@@ -1371,6 +1419,32 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str, bool]]
             if is_street
             else 'NULL AS "lights"'
         )
+        # The stress rating of the street a bike lane is painted on. Prefer
+        # the nearest stress segment with the SAME street name — a short
+        # lane piece at a junction sits closer to the cross-street's rating
+        # (Church St's lane matched Springer's L at the tunnel portal) —
+        # then fall back to plain nearest.
+        lane_stress_col = (
+            f'''COALESCE(
+                (
+                    SELECT s."stress_level"
+                    FROM "pcc"."stress_levels" AS s
+                    WHERE s."street_name" = src."STREET_NAM"
+                      AND ST_DWithin(s."geometry", {mid}, 200)
+                    ORDER BY s."geometry" <-> {mid}
+                    LIMIT 1
+                ),
+                (
+                    SELECT s."stress_level"
+                    FROM "pcc"."stress_levels" AS s
+                    WHERE ST_DWithin(s."geometry", {mid}, {SPEED_NEAR_FT})
+                    ORDER BY s."geometry" <-> {mid}
+                    LIMIT 1
+                )
+            ) AS "lane_stress"'''
+            if layer_id == 'bike-lanes'
+            else 'NULL AS "lane_stress"'
+        )
         len_col = 'ST_Length(ST_Transform(src."geometry", 4326)::geography) AS "len_m"'
         query = f'''
         SELECT
@@ -1389,6 +1463,7 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str, bool]]
             {speed_col},
             {crash_col},
             {light_col},
+            {lane_stress_col},
             {len_col}
         FROM "{schema}"."{target}" AS src
         {f'WHERE {where}' if where else ''}
@@ -1422,7 +1497,7 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str, bool]]
                 else 1.0
             )
             if category == 'bike-lane':
-                danger *= _lane_speed_factor(speed)
+                danger *= _lane_factor(speed, rec.get('lane_stress'))
             lights = _num(rec, 'lights')
             # Lit = at least one pole per LIT_SPACING_M of length (a short
             # block needs one light; a long one needs a series).
@@ -1433,6 +1508,87 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str, bool]]
             for part in parts:
                 if len(part) >= 2:
                     rows.append((part, category, name, has_sidewalk, danger, lit))
+    # County centerlines PCC never rated (~3.2k of 35k): without them the
+    # graph has holes exactly where quiet residential streets live — the
+    # Springer St bug: PCC carries only an 8 m stub east of the Church St
+    # tunnel, so the tunnel dead-ended and routes escaped over Church St.
+    # Base rating 'L' (PCC rates most residentials L), floored by posted
+    # speed like every other street. Interstates/US highways excluded: PCC
+    # skipping those was a decision, not a gap.
+    sp_schema, sp_table, sp_srid = SPEED_SOURCE
+    street_4326 = 'ST_Transform(src."geometry", 4326)'
+    crash_deg = CRASH_NEAR_FT / FT_PER_M / M_PER_DEG_LAT
+    light_deg = LIGHT_NEAR_FT / FT_PER_M / M_PER_DEG_LAT
+    cr_schema, cr_table = CRASH_SOURCE
+    li_schema, li_table = LIGHT_SOURCE
+    gap_query = f'''
+    SELECT
+        ST_AsGeoJSON(
+            ST_Force2D(
+                ST_Transform(
+                    ST_SimplifyPreserveTopology(src."geometry", {5 * FT_PER_M}),
+                    4326
+                )
+            ),
+            5
+        ) AS "gj",
+        src."LABEL" AS "name",
+        NULLIF(src."SPEED", 0) AS "speed_mph",
+        {_sidewalk_exists_sql("src", sp_srid)} AS "has_sidewalk",
+        (
+            SELECT COALESCE(SUM(CASE
+                WHEN c."persons_killed" > 0 THEN {CRASH_W_FATAL}
+                WHEN c."persons_injured" > 0 THEN {CRASH_W_INJURY}
+                ELSE {CRASH_W_OTHER}
+            END), 0)
+            FROM "{cr_schema}"."{cr_table}" AS c
+            WHERE c."geometry" IS NOT NULL
+              AND ST_DWithin(c."geometry", {street_4326}, {crash_deg})
+        ) AS "crash_score",
+        (
+            SELECT COUNT(*)
+            FROM "{li_schema}"."{li_table}" AS sl
+            WHERE ST_DWithin(sl."geometry", {street_4326}, {light_deg})
+        ) AS "lights",
+        ST_Length(ST_Transform(src."geometry", 4326)::geography) AS "len_m"
+    FROM "{sp_schema}"."{sp_table}" AS src
+    WHERE COALESCE(src."FEAT_CODE", 0) NOT IN (1370, 1371)
+      AND NOT EXISTS (
+        SELECT 1 FROM "pcc"."stress_levels" AS s
+        -- Midpoint test, not whole-line: a street whose ENDPOINT touches a
+        -- rated junction is still unrated along its length (Springer St
+        -- east of the tunnel was excluded by its own 8 m PCC stub).
+        WHERE ST_DWithin(s."geometry", ST_PointOnSurface(src."geometry"), 80)
+      )
+    '''
+    conn = _layer_pipe(LAYERS['bike-stress']).instance_connector
+    gap_df = conn.read(gap_query, debug=debug)
+    for rec in gap_df.to_dict(orient='records'):
+        gj = rec.get('gj')
+        if not gj:
+            continue
+        geom = json.loads(gj)
+        parts = (
+            geom['coordinates']
+            if geom['type'] == 'MultiLineString'
+            else [geom['coordinates']]
+        )
+        name = rec.get('name')
+        name = None if not name or str(name).strip() in ('', 'N/A', 'None') else str(name).strip()
+        speed = rec.get('speed_mph')
+        speed = None if speed is None or speed != speed else float(speed)
+        category = _stress_floor('L', speed)
+        len_m = rec.get('len_m') or 0.0
+        crash_score = rec.get('crash_score') or 0.0
+        danger = _danger_factor(crash_score / len_m * 100.0) if len_m > 0 else 1.0
+        lights = rec.get('lights')
+        lit = (
+            True if lights is None or len_m <= 0
+            else float(lights) * LIT_SPACING_M >= len_m
+        )
+        for part in parts:
+            if len(part) >= 2:
+                rows.append((part, category, name, bool(rec.get('has_sidewalk')), danger, lit))
     # OSM cycleways, paths and tunnels: the shortcuts no county layer maps.
     rows.extend(_osm_path_rows(debug=debug))
     # Curated off-grid connectors (tunnels, cut-throughs): straight from the
@@ -1497,7 +1653,7 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
             (bool(row[5]) if len(row) > 5 else True),
         )
         factor = bike_factors.get(category, MODE_DEFAULT_FACTOR['bike'])
-        is_path = category in ('srt', 'bike-lane', 'path')
+        is_path = category in ('srt', 'bike-lane', 'path', 'footway')
         for chunk in _subdivide(coords):
             length_m = sum(
                 _equirect_m(a[1], a[0], b[1], b[0])

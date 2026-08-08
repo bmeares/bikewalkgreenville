@@ -43,6 +43,7 @@ class AppState extends ChangeNotifier {
   static const _kRecents = 'recent_searches';
   static const _kPuck = 'puck_style';
   static const _kTheme = 'theme_mode';
+  static const _kMapBase = 'map_base';
   static const _maxRecents = 8;
 
   Set<TravelMode> _modes = {TravelMode.cyclist};
@@ -52,6 +53,7 @@ class AppState extends ChangeNotifier {
   BikeStress _stress = BikeStress.balanced;
   PuckStyle _puckStyle = PuckStyle.arrow;
   ThemeMode _themeMode = ThemeMode.system;
+  MapBase _mapBase = MapBase.auto;
 
   Set<TravelMode> get modes => _modes;
   bool get roll => _roll;
@@ -65,8 +67,11 @@ class AppState extends ChangeNotifier {
   PuckStyle get puckStyle => _puckStyle;
 
   /// Light / dark / follow-the-device. Drives both the Material theme and
-  /// which basemap style the map renders.
+  /// (via [MapBase.auto]) which basemap style the map renders.
   ThemeMode get themeMode => _themeMode;
+
+  /// The map's own base: follow the theme, force light/dark, or satellite.
+  MapBase get mapBase => _mapBase;
 
   /// `stress=` query value for `/map-layers/route`.
   String get stressApiName => _stress.name;
@@ -146,6 +151,11 @@ class AppState extends ChangeNotifier {
         (t) => t.name == savedTheme,
         orElse: () => ThemeMode.system,
       );
+      final savedBase = prefs.getString(_kMapBase);
+      _mapBase = MapBase.values.firstWhere(
+        (b) => b.name == savedBase,
+        orElse: () => MapBase.auto,
+      );
       _recents = [
         for (final s in prefs.getStringList(_kRecents) ?? <String>[])
           Map<String, dynamic>.from(jsonDecode(s) as Map),
@@ -166,6 +176,7 @@ class AppState extends ChangeNotifier {
       await prefs.setString(_kStress, _stress.name);
       await prefs.setString(_kPuck, _puckStyle.name);
       await prefs.setString(_kTheme, _themeMode.name);
+      await prefs.setString(_kMapBase, _mapBase.name);
     } catch (_) {}
   }
 
@@ -267,6 +278,13 @@ class AppState extends ChangeNotifier {
   void setThemeMode(ThemeMode value) {
     if (value == _themeMode) return;
     _themeMode = value;
+    notifyListeners();
+    _save();
+  }
+
+  void setMapBase(MapBase value) {
+    if (value == _mapBase) return;
+    _mapBase = value;
     notifyListeners();
     _save();
   }
