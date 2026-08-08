@@ -35,7 +35,7 @@ from meerschaum.actions import make_action
 from meerschaum.plugins import api_plugin
 from meerschaum.utils.warnings import info, warn
 
-__version__ = '0.11.2'
+__version__ = '0.12.0'
 
 bwg = mrsm.Plugin('bwg')
 
@@ -147,6 +147,25 @@ LAYERS: dict[str, dict[str, Any]] = {
         'props': {'name': 'name', 'address': 'address', 'url': 'url', 'note': 'note'},
         'color': '#00897B',
         'icon': 'storefront',
+    },
+    # Ten years of vulnerable-road-user crashes (Ped.crashes_vulnerable,
+    # SCDPS 2014-2024). Served raw; the app renders a heatmap weighted by
+    # severity so one death outweighs a cluster of fender-benders.
+    'vulnerable-crashes': {
+        'label': 'Crash History (Bike/Ped)',
+        'kind': 'heatmap',
+        'pipe': ('sql:bwg', 'crashes', 'vulnerable'),
+        'props': {'killed': 'persons_killed', 'injured': 'persons_injured'},
+        'color': '#D32F2F',
+    },
+    # Duke Energy streetlight poles (Ped.lighting, ~40k points). The router
+    # also uses these: unlit streets cost extra after dark.
+    'street-lights': {
+        'label': 'Street Lights',
+        'kind': 'circle',
+        'pipe': ('sql:bwg', 'lighting', 'greenville'),
+        'props': {},
+        'color': '#FFD54F',
     },
     'bike-stress': {
         'label': 'Bike Stress',
@@ -923,6 +942,86 @@ SPEED_NEAR_FT = 80.0
 STRESS_ORDER = ('L', 'ML', 'M', 'MH', 'H')
 SPEED_STRESS_FLOOR = ((45, 'H'), (40, 'MH'), (35, 'M'))
 
+#: Vulnerable-road-user crash history (Ped.crashes_vulnerable, SCDPS
+#: 2014-2024) prices real danger into every street and bike-lane edge.
+#: Fatality-heavy weights on purpose: downtown logs many low-severity
+#: incidents because that is where the people are, while the roads that kill
+#: (White Horse Rd, S Academy St, Pete Hollis Blvd) log fewer but deadlier
+#: crashes. Score = per-crash weight summed within CRASH_NEAR_FT of the
+#: segment, normalized per 100 m; the edge weight multiplier is
+#: 1 + min(score, DANGER_CAP) * DANGER_RATE (so ~x3.25 at the cap).
+#: Applies to street AND bike-lane categories — paint does not stop a driver
+#: (Church St has a bike lane; nobody recommends riding Church St) — never to
+#: the car-free srt/path surfaces.
+CRASH_SOURCE = ('Ped', 'crashes_vulnerable')
+CRASH_NEAR_FT = 100.0
+CRASH_W_FATAL = 10.0
+CRASH_W_INJURY = 1.0
+CRASH_W_OTHER = 0.25
+DANGER_RATE = 0.75
+DANGER_CAP = 3.0
+
+#: A painted lane on a fast road is not the facility a protected lane is:
+#: bike-lane edges additionally multiply by the posted speed of the street
+#: they are painted on. (Sharrows are excluded from the graph entirely —
+#: paint saying "share" is not infrastructure.)
+LANE_SPEED_PENALTY = ((45, 3.0), (40, 2.25), (35, 1.5))
+
+#: Duke Energy streetlight poles (Ped.lighting, ~40k points). A street with
+#: fewer than one pole per LIT_SPACING_M of length counts as unlit, and after
+#: dark unlit street/bike-lane edges pay NIGHT_UNLIT_FACTOR. The trail and
+#: paths are untouched — no lighting data covers them either way.
+LIGHT_SOURCE = ('Ped', 'lighting')
+LIGHT_NEAR_FT = 100.0
+LIT_SPACING_M = 100.0
+NIGHT_UNLIT_FACTOR = {'bike': 1.35, 'walk': 1.6, 'roll': 1.6, 'street': 1.0}
+
+#: Approximate Greenville sunrise/sunset by month, LOCAL (America/New_York,
+#: DST already reflected), decimal hours. Civil-purpose accuracy (~+/-30 min);
+#: the point is "penalize unlit streets after dark", not astronomy.
+NIGHT_HOURS = {
+    1: (7.6, 17.7), 2: (7.4, 18.1), 3: (7.7, 19.6), 4: (7.0, 20.0),
+    5: (6.5, 20.4), 6: (6.3, 20.7), 7: (6.4, 20.7), 8: (6.8, 20.3),
+    9: (7.1, 19.6), 10: (7.4, 18.9), 11: (7.0, 17.4), 12: (7.4, 17.2),
+}
+
+#: Per-request night override (`?night=0/1`); None means "ask the clock".
+import contextvars as _contextvars
+_NIGHT_OVERRIDE: _contextvars.ContextVar = _contextvars.ContextVar(
+    'bwg_night', default=None,
+)
+
+
+def _is_night(now=None) -> bool:
+    """Is it dark in Greenville right now (or per the request override)?"""
+    override = _NIGHT_OVERRIDE.get()
+    if override is not None:
+        return bool(override)
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    now = now or datetime.now(ZoneInfo('America/New_York'))
+    sunrise, sunset = NIGHT_HOURS[now.month]
+    hour = now.hour + now.minute / 60.0
+    return hour < sunrise or hour >= sunset
+
+
+def _danger_factor(score_per_100m: float | None) -> float:
+    """Crash-history multiplier for an edge's weight."""
+    if not score_per_100m or score_per_100m <= 0:
+        return 1.0
+    return 1.0 + min(score_per_100m, DANGER_CAP) * DANGER_RATE
+
+
+def _lane_speed_factor(speed_mph: float | None) -> float:
+    """How much a painted bike lane's discount erodes with the posted speed
+    of the road it is painted on."""
+    if speed_mph is None:
+        return 1.0
+    for mph, factor in LANE_SPEED_PENALTY:
+        if speed_mph >= mph:
+            return factor
+    return 1.0
+
 #: OSM paths — cycleways, foot/bike paths, plazas, and street tunnels (the
 #: Springer St tunnel is `highway=residential` + `tunnel=yes`) — fill the
 #: shortcut gaps no county GIS layer maps, without hand-curating every one
@@ -1187,9 +1286,13 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str, bool]]
         # category = stress_level per row for bike-stress:
         ('bike-stress', None, '"street_name"', True, None),
         # PROPOSED lanes are paint that does not exist yet — pricing them as
-        # real bike lanes routed riders onto bare arterials (133 rows).
+        # real bike lanes routed riders onto bare arterials (133 rows). And a
+        # SHARROW is paint saying "share the road", not infrastructure (322
+        # rows priced like real lanes made scary streets read cheap); the
+        # street itself is already in the stress data.
         ('bike-lanes', 'bike-lane', '"STREET_NAM"', True,
-         'COALESCE(src."STATUS", \'\') != \'PROPOSED\''),
+         'COALESCE(src."STATUS", \'\') != \'PROPOSED\' '
+         'AND COALESCE(src."BIKE_TYPE", \'\') != \'SHARROW\''),
         # The trail IS the walking surface; asking whether it has a sidewalk
         # is a category error.
         ('srt', 'srt', "'Swamp Rabbit Trail'", False, None),
@@ -1221,6 +1324,9 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str, bool]]
         # ST_PointOnSurface: a point ON the line for any geometry type
         # (MultiLineString included, where interpolation would throw).
         mid = f'ST_Transform(ST_PointOnSurface(src."geometry"), {sp_srid})'
+        # Streets and painted lanes carry the safety context columns; the
+        # trail is its own car-free surface and skips all of them.
+        is_street = layer_id in ('bike-stress', 'bike-lanes')
         speed_col = (
             f'''(
                 SELECT NULLIF(cl."SPEED", 0)
@@ -1230,9 +1336,42 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str, bool]]
                 ORDER BY cl."geometry" <-> {mid}
                 LIMIT 1
             ) AS "speed_mph"'''
-            if layer_id == 'bike-stress'
+            if is_street
             else 'NULL AS "speed_mph"'
         )
+        cr_schema, cr_table = CRASH_SOURCE
+        li_schema, li_table = LIGHT_SOURCE
+        # Both point sources are 4326: transform the STREET side (never the
+        # indexed point column — same lesson as the sidewalk join) and use a
+        # degree radius. Slightly anisotropic at this latitude; fine for
+        # scoring.
+        street_4326 = 'ST_Transform(src."geometry", 4326)'
+        crash_deg = CRASH_NEAR_FT / FT_PER_M / M_PER_DEG_LAT
+        light_deg = LIGHT_NEAR_FT / FT_PER_M / M_PER_DEG_LAT
+        crash_col = (
+            f'''(
+                SELECT COALESCE(SUM(CASE
+                    WHEN c."persons_killed" > 0 THEN {CRASH_W_FATAL}
+                    WHEN c."persons_injured" > 0 THEN {CRASH_W_INJURY}
+                    ELSE {CRASH_W_OTHER}
+                END), 0)
+                FROM "{cr_schema}"."{cr_table}" AS c
+                WHERE c."geometry" IS NOT NULL
+                  AND ST_DWithin(c."geometry", {street_4326}, {crash_deg})
+            ) AS "crash_score"'''
+            if is_street
+            else '0 AS "crash_score"'
+        )
+        light_col = (
+            f'''(
+                SELECT COUNT(*)
+                FROM "{li_schema}"."{li_table}" AS sl
+                WHERE ST_DWithin(sl."geometry", {street_4326}, {light_deg})
+            ) AS "lights"'''
+            if is_street
+            else 'NULL AS "lights"'
+        )
+        len_col = 'ST_Length(ST_Transform(src."geometry", 4326)::geography) AS "len_m"'
         query = f'''
         SELECT
             ST_AsGeoJSON(
@@ -1247,11 +1386,19 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str, bool]]
             {cat_col},
             {name_expr} AS "name",
             {sidewalk_col},
-            {speed_col}
+            {speed_col},
+            {crash_col},
+            {light_col},
+            {len_col}
         FROM "{schema}"."{target}" AS src
         {f'WHERE {where}' if where else ''}
         '''
         df = conn.read(query, debug=debug)
+
+        def _num(rec, key):
+            value = rec.get(key)
+            return None if value is None or value != value else float(value)
+
         for rec in df.to_dict(orient='records'):
             gj = rec.get('gj')
             if not gj:
@@ -1265,12 +1412,27 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str, bool]]
             name = rec.get('name')
             name = None if not name or str(name).strip() in ('', 'N/A', 'None') else str(name).strip()
             has_sidewalk = bool(rec.get('has_sidewalk'))
-            speed = rec.get('speed_mph')
-            speed = None if speed is None or speed != speed else float(speed)
+            speed = _num(rec, 'speed_mph')
             category = _stress_floor(rec.get('category'), speed)
+            len_m = _num(rec, 'len_m') or 0.0
+            crash_score = _num(rec, 'crash_score') or 0.0
+            danger = (
+                _danger_factor(crash_score / len_m * 100.0)
+                if is_street and len_m > 0
+                else 1.0
+            )
+            if category == 'bike-lane':
+                danger *= _lane_speed_factor(speed)
+            lights = _num(rec, 'lights')
+            # Lit = at least one pole per LIT_SPACING_M of length (a short
+            # block needs one light; a long one needs a series).
+            lit = (
+                True if not is_street or lights is None or len_m <= 0
+                else lights * LIT_SPACING_M >= len_m
+            )
             for part in parts:
                 if len(part) >= 2:
-                    rows.append((part, category, name, has_sidewalk))
+                    rows.append((part, category, name, has_sidewalk, danger, lit))
     # OSM cycleways, paths and tunnels: the shortcuts no county layer maps.
     rows.extend(_osm_path_rows(debug=debug))
     # Curated off-grid connectors (tunnels, cut-throughs): straight from the
@@ -1326,7 +1488,14 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
         return cell
 
     bike_factors = MODE_FACTORS['bike']
-    for coords, category, name, has_sidewalk in _route_source_rows(debug=debug):
+    for row in _route_source_rows(debug=debug):
+        # Rows may be legacy 4-tuples (tests, custom paths) or carry the
+        # (danger, lit) safety context as elements 5 and 6.
+        coords, category, name, has_sidewalk = row[:4]
+        extras = (
+            (float(row[4]) if len(row) > 4 else 1.0),
+            (bool(row[5]) if len(row) > 5 else True),
+        )
         factor = bike_factors.get(category, MODE_DEFAULT_FACTOR['bike'])
         is_path = category in ('srt', 'bike-lane', 'path')
         for chunk in _subdivide(coords):
@@ -1341,7 +1510,7 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
             (path_nodes if is_path else street_nodes).update((u, v))
             if u == v:
                 continue  # self-loop after snapping
-            weight = length_m * factor
+            weight = length_m * factor * extras[0]
             # Keep the cheapest edge per node pair (bike lane painted on a
             # stressful street should win).
             existing = next(
@@ -1353,10 +1522,10 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
                 adj[u] = [e for e in adj[u] if e[0] != v]
                 adj[v] = [e for e in adj[v] if e[0] != u]
             adj[u].append(
-                (v, weight, length_m, category, chunk, False, name, has_sidewalk)
+                (v, weight, length_m, category, chunk, False, name, has_sidewalk, extras)
             )
             adj[v].append(
-                (u, weight, length_m, category, chunk, True, name, has_sidewalk)
+                (u, weight, length_m, category, chunk, True, name, has_sidewalk, extras)
             )
 
     def _add_connector(u, v):
@@ -1371,8 +1540,8 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
             [nodes[v][1], nodes[v][0]],
         ]
         length = max(d, 1.0)
-        adj[u].append((v, length, length, 'connector', coords, False, None, None))
-        adj[v].append((u, length, length, 'connector', coords, True, None, None))
+        adj[u].append((v, length, length, 'connector', coords, False, None, None, (1.0, True)))
+        adj[v].append((u, length, length, 'connector', coords, True, None, None, (1.0, True)))
 
     def _spatial_hash(cells, cell_m):
         cell_lat = cell_m / M_PER_DEG_LAT
@@ -1467,6 +1636,7 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
             dst = edge[0]
             coords = edge[4]
             category, name, has_sidewalk = edge[3], edge[6], edge[7]
+            extras = edge[8] if len(edge) > 8 else (1.0, True)
             factor = bike_factors.get(category, MODE_DEFAULT_FACTOR['bike'])
             requests.sort()
             # Cut the chunk at every projection, in order along it.
@@ -1493,12 +1663,12 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
                 street_nodes.update((pu, pv))
                 if pu == pv:
                     continue
-                weight = length_m * factor
+                weight = length_m * factor * extras[0]
                 adj[pu].append(
-                    (pv, weight, length_m, category, piece, False, name, has_sidewalk)
+                    (pv, weight, length_m, category, piece, False, name, has_sidewalk, extras)
                 )
                 adj[pv].append(
-                    (pu, weight, length_m, category, piece, True, name, has_sidewalk)
+                    (pu, weight, length_m, category, piece, True, name, has_sidewalk, extras)
                 )
             for _pos, _si, _t, pt, u in requests:
                 _add_connector(u, _node(pt[0], pt[1]))
@@ -1875,6 +2045,7 @@ def _register_virtual(
     v, w, total, category, coords, _rev, name, hs = (
         edge[0], edge[1], edge[2], edge[3], edge[4], edge[5], edge[6], edge[7],
     )
+    extras = edge[8] if len(edge) > 8 else (1.0, True)
     seg_i, pt = v_info['seg_i'], v_info['pt']
     part_a = coords[:seg_i + 1] + [pt]      # u -> virtual, forward
     part_b = [pt] + coords[seg_i + 1:]      # virtual -> v, forward
@@ -1891,13 +2062,13 @@ def _register_virtual(
         if eu is not None and ev is not None:
             extra_elev[vid] = eu + (ev - eu) * min(max(fa, 0.0), 1.0)
     extra_adj.setdefault(vid, []).extend((
-        (u, w * fa, len_a, category, part_a, True, name, hs),
-        (v, w * fb, len_b, category, part_b, False, name, hs),
+        (u, w * fa, len_a, category, part_a, True, name, hs, extras),
+        (v, w * fb, len_b, category, part_b, False, name, hs, extras),
     ))
     extra_adj.setdefault(u, []).append(
-        (vid, w * fa, len_a, category, part_a, False, name, hs))
+        (vid, w * fa, len_a, category, part_a, False, name, hs, extras))
     extra_adj.setdefault(v, []).append(
-        (vid, w * fb, len_b, category, part_b, True, name, hs))
+        (vid, w * fb, len_b, category, part_b, True, name, hs, extras))
 
 
 def _bridge_same_edge(
@@ -1915,6 +2086,7 @@ def _bridge_same_edge(
     w, total, category, coords, name, hs = (
         edge[1], edge[2], edge[3], edge[4], edge[6], edge[7],
     )
+    extras = edge[8] if len(edge) > 8 else (1.0, True)
     pos_a = _chunk_pos_m(coords, va['seg_i'], va['t'])
     pos_b = _chunk_pos_m(coords, vb['seg_i'], vb['t'])
     lo, hi = (snap_a, snap_b) if pos_a <= pos_b else (snap_b, snap_a)
@@ -1924,9 +2096,9 @@ def _bridge_same_edge(
     blen = max(abs(pos_b - pos_a), 0.1)
     bw = w * (blen / total) if total > 0 else blen
     extra_adj.setdefault(lo['node'], []).append(
-        (hi['node'], bw, blen, category, bridge, False, name, hs))
+        (hi['node'], bw, blen, category, bridge, False, name, hs, extras))
     extra_adj.setdefault(hi['node'], []).append(
-        (lo['node'], bw, blen, category, bridge, True, name, hs))
+        (lo['node'], bw, blen, category, bridge, True, name, hs, extras))
 
 
 def _edge_deficiency(edge, mode: str) -> str | None:
@@ -2009,8 +2181,11 @@ def _astar(
     # weights, but the rider is still in a wheelchair and the hill is still
     # there. Traffic tolerance is a preference; a grade is physics.
     climb_factor = CLIMB_FACTOR.get(_mode_family(climb_mode or mode), 0.0)
+    night = _is_night()
+    night_factor = NIGHT_UNLIT_FACTOR.get(base, 1.0) if night else 1.0
     # Connectors weigh 1.0, so the heuristic can never assume better than that.
-    # The climb term only ADDS cost, so the heuristic stays admissible.
+    # The climb, danger and night terms only ADD cost (all multipliers >= 1),
+    # so the heuristic stays admissible.
     min_factor = min(list(factors.values()) + [1.0])
 
     def h(cell):
@@ -2022,6 +2197,14 @@ def _astar(
         if category == 'connector':
             return edge[2]
         weight = edge[2] * factors.get(category, default_factor)
+        # (danger multiplier, lit?) — crash history + streetlight coverage,
+        # baked in at graph build. Danger is 1.0 on car-free surfaces.
+        extras = edge[8] if len(edge) > 8 else None
+        if extras is not None:
+            if extras[0] != 1.0:
+                weight *= extras[0]
+            if night_factor != 1.0 and not extras[1]:
+                weight *= night_factor
         if no_sidewalk_factor != 1.0 and _edge_deficiency(edge, mode) == 'no_sidewalk':
             weight *= no_sidewalk_factor
         return weight
@@ -3285,7 +3468,7 @@ def _compute_plan(
     if plan.endswith('-transit') or plan == 'bcycle':
         alt = 0
     key = (
-        plan, bike_mode, alt,
+        plan, bike_mode, alt, _is_night(),
         round(from_lat, 5), round(from_lon, 5),
         round(to_lat, 5), round(to_lon, 5),
     )
@@ -3826,6 +4009,7 @@ def init_app(app):
         ebike: bool = False,
         stress: str = '',
         alt: int = 0,
+        night: int = -1,
     ):
         """Multi-modal directions.
 
@@ -3842,6 +4026,10 @@ def init_app(app):
         `alt=N` (1–3, with `plan` pinned to a plain bike/walk/roll plan)
         returns that plan's Nth alternate route; `alt_distinct: false` in the
         response means no genuinely different way exists.
+
+        After dark (Greenville local time), unlit street stretches cost
+        extra (Duke streetlight coverage, NIGHT_UNLIT_FACTOR). `night=0/1`
+        overrides the clock; the response reports the flag used.
         """
         # Sync def on purpose: FastAPI runs it in the threadpool, so the
         # multi-second first-call graph build never blocks the event loop.
@@ -3881,6 +4069,11 @@ def init_app(app):
                 {'error': "Start and destination are the same point."},
                 status_code=400,
             )
+        # Request-scoped: _astar and the plan cache read the contextvar, so
+        # no signature threading through the seven plan/transit/bcycle layers.
+        night_token = _NIGHT_OVERRIDE.set(
+            None if night not in (0, 1) else bool(night)
+        )
         try:
             feature = _route_multimodal(
                 from_lat, from_lon, to_lat, to_lon,
@@ -3892,11 +4085,14 @@ def init_app(app):
                 stress=level,
                 alt=max(0, min(alt, ALT_MAX)),
             )
+            feature['properties']['night'] = _is_night()
         except ValueError as e:
             return JSONResponse({'error': str(e)}, status_code=422)
         except Exception as e:
             warn(f"Routing failed: {e}")
             return JSONResponse({'error': 'Routing failed.'}, status_code=500)
+        finally:
+            _NIGHT_OVERRIDE.reset(night_token)
         return JSONResponse(feature)
 
     def _srt_gaps(graph, srt_adj):

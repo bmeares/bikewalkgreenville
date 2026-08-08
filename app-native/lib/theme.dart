@@ -133,6 +133,14 @@ class LayerDef {
 
   /// Polygon layers (parking land use) render as translucent fills.
   final bool isFill;
+
+  /// Dense point layers rendered as density heat (crash history) instead of
+  /// per-feature pins.
+  final bool isHeatmap;
+
+  /// Dense point layers rendered as tiny dots (streetlights) — 40k pins
+  /// would be soup, and they carry nothing worth tapping.
+  final bool isCircle;
   final String color; // hex, ignored when colorByStress
   final bool colorByStress;
 
@@ -169,6 +177,8 @@ class LayerDef {
     required this.modes,
     this.isPoint = false,
     this.isFill = false,
+    this.isHeatmap = false,
+    this.isCircle = false,
     this.colorByStress = false,
     this.matchProp,
     this.matchColors,
@@ -353,6 +363,32 @@ const layerDefs = <LayerDef>[
     modes: {TravelMode.cyclist, TravelMode.pedestrian, TravelMode.transit},
     defaultOn: false,
     icon: Icons.crop_square,
+  ),
+  // Ten years of bike/ped crashes (SCDPS 2014-2024), severity-weighted heat —
+  // deaths burn through a fog of fender-benders. Advocacy context, off by
+  // default. The router prices the same data into every street edge.
+  LayerDef(
+    id: 'vulnerable-crashes',
+    label: 'Crash history (bike/ped)',
+    path: '/map-layers/vulnerable-crashes.geojson',
+    color: '#D32F2F',
+    isHeatmap: true,
+    modes: {TravelMode.cyclist, TravelMode.pedestrian, TravelMode.transit},
+    defaultOn: false,
+    icon: Icons.local_fire_department,
+  ),
+  // Duke Energy streetlight poles — planning a ride home after dark. The
+  // router penalizes unlit streets at night with the same data.
+  LayerDef(
+    id: 'street-lights',
+    label: 'Street lights',
+    path: '/map-layers/street-lights.geojson',
+    color: '#FFD54F',
+    isCircle: true,
+    modes: {TravelMode.cyclist, TravelMode.pedestrian},
+    defaultOn: false,
+    icon: Icons.lightbulb_outline,
+    minZoom: 12,
   ),
   // Community reports are the point of the app — always on, always drawn.
   LayerDef(

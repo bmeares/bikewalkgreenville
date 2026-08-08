@@ -17,7 +17,54 @@ anything.
 - **walk-audit config** moved off env vars onto Meerschaum config (`plugins:walk-audit:{smtp,notify}`). Prod values live in the container volume at `/meerschaum/config/plugins.json` (chmod 600); the `/meerschaum/.env` hack has been **deleted**.
 - `WalkAudit.reports` is empty (the deploy-check row was removed).
 
-### 2026-08-07 latest (thirteenth session, omega) — app v1.11.0+45, map-layers v0.10.0
+### 2026-08-07 latest (fourteenth session, omega) — app v1.12.0+46, map-layers v0.12.0
+
+Bennett: "we almost never recommend Church St even though it has a bike
+lane" + avoid the notoriously dangerous roads (White Horse, S Academy, Pete
+Hollis, Augusta's 4-lane stretch…) using the Vulnerable Road Users data —
+fatality-weighted, since downtown logs many incidents but few deaths — plus
+Duke streetlight data for night routing, and both datasets as default-off
+map layers. `python3 -m pytest tests/` 61/61, `flutter test` 74/74.
+
+**Backend (map-layers v0.12.0):**
+
+1. **Crash-danger multiplier on every street + bike-lane edge.** Score per
+   stress/lane segment = Σ(fatal 10 / injury-crash 1 / other 0.25) within
+   100 ft, per 100 m; edge weight × (1 + min(score, 3) × 0.75) → cap ×3.25.
+   Measured: Pete Hollis 3.0, S Academy 2.9, White Horse 2.9, Wade Hampton
+   1.8, Augusta 1.5 vs downtown Main St 0.5–0.75 (the fatality weighting is
+   what separates them). Edge tuples grew index 8: `(danger, lit)`.
+2. **A painted lane is not protection**: bike-lane edges also multiply by
+   posted speed (≥45 ×3, ≥40 ×2.25, ≥35 ×1.5), and **SHARROW rows (322) are
+   out of the graph entirely** — paint saying "share" is not infrastructure.
+   Verified: the Springer-corridor trip that rode the Church St lane in
+   v0.11 now takes the tunnel path; 4 McHan St → Cleveland Park now reads
+   McHan → Howe → Springer → tunnel → SRT (Bennett's own line).
+3. **Night routing** (Duke streetlights, `Ped.lighting`): a street with <1
+   pole per 100 m counts unlit; after dark (ET month table; `?night=0/1`
+   override, response echoes `night`) unlit street edges pay ×1.6 walk/roll,
+   ×1.35 bike. Request-scoped contextvar — no signature threading; plan
+   cache key includes the flag.
+4. **New layers**: `vulnerable-crashes` (1,650 pts, killed/injured props) and
+   `street-lights` (~40k pts).
+5. **`Ped.crashes_vulnerable` had NO geometry index** — the danger join
+   seq-scanned it 29k times (graph build 24 s → 469 s). `IX_crashes_
+   vulnerable_geometry` created on prod; `indices: geometry` added to
+   projects/pedestrian-deaths.yaml. Build back to ~24 s.
+
+**App (v1.12.0+46):**
+
+6. **Crash history heatmap** (`isHeatmap` LayerDef): severity-weighted
+   (killed 1.0 / injured 0.35 / other 0.15), yellow→deep red, default off.
+7. **Street lights** (`isCircle` LayerDef): tiny amber dots, minZoom 12,
+   default off, `enableInteraction: false` (40k dots must not eat taps).
+
+Device test (v1.12.0+46): layers sheet shows "Crash history (bike/ped)" +
+"Street lights" toggles (off); heatmap glows red along White Horse/Academy;
+bike route near Church St corridor uses the Springer tunnel; night trip
+prefers lit streets (server clock — test after sunset or curl `?night=1`).
+
+### 2026-08-07 earlier (thirteenth session, omega) — app v1.11.0+45, map-layers v0.10.0
 
 Bennett's ride feedback round 2: jarring reroute audio, missing shortcuts
 (Springer tunnel class), stronger SRT pull, speed limits vs the stress layer,

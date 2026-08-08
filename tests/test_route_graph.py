@@ -869,5 +869,117 @@ def test_instruction_speaks_mchan_correctly():
     assert ml._instruction('left', 'MCHAN ST', 90.0) == 'Turn left onto McHan St'
 
 
+# --- crash danger, lane-speed penalty, night lighting (v0.12.0) ----------
+
+
+def test_danger_factor_scales_and_caps():
+    assert ml._danger_factor(0.0) == 1.0
+    assert ml._danger_factor(None) == 1.0
+    # Downtown-ish score: mild penalty.
+    assert 1.3 < ml._danger_factor(0.6) < 1.6
+    # Pete Hollis / White Horse class scores hit the cap.
+    assert ml._danger_factor(3.0) == ml._danger_factor(99.0)
+    assert ml._danger_factor(99.0) == 1.0 + ml.DANGER_CAP * ml.DANGER_RATE
+
+
+def test_lane_speed_penalty_erodes_the_paint_discount():
+    assert ml._lane_speed_factor(None) == 1.0
+    assert ml._lane_speed_factor(30) == 1.0
+    assert ml._lane_speed_factor(35) == 1.5
+    assert ml._lane_speed_factor(40) == 2.25
+    assert ml._lane_speed_factor(45) == 3.0
+    # A painted lane on a 45 mph road must not price better than a calm street.
+    assert 0.4 * ml._lane_speed_factor(45) >= 1.0
+
+
+def test_is_night_honors_the_override_and_the_clock():
+    from datetime import datetime
+    token = ml._NIGHT_OVERRIDE.set(True)
+    try:
+        assert ml._is_night() is True
+    finally:
+        ml._NIGHT_OVERRIDE.reset(token)
+    token = ml._NIGHT_OVERRIDE.set(False)
+    try:
+        assert ml._is_night() is False
+    finally:
+        ml._NIGHT_OVERRIDE.reset(token)
+    assert ml._is_night(datetime(2026, 6, 15, 14, 0)) is False   # summer 2pm
+    assert ml._is_night(datetime(2026, 6, 15, 22, 0)) is True    # 10pm
+    assert ml._is_night(datetime(2026, 12, 15, 17, 30)) is True  # winter 5:30pm
+    assert ml._is_night(datetime(2026, 12, 15, 12, 0)) is False
+
+
+class TestCrashDangerRouting(RouteGraphTestCase):
+    """A crash-scarred street loses to a slightly longer clean one, even when
+    both carry the same stress rating — the White Horse Rd lesson."""
+
+    A = (34.8500, -82.4000)
+    B = (34.8530, -82.4030)   # dogleg via the clean street (~1.7x)
+    C = (34.8560, -82.4000)
+
+    def _rows(self, danger):
+        return [
+            # Deadly straight street: 6-tuple row carries (danger, lit).
+            (_line(self.A, self.C), 'L', 'DEADLY RD', True, danger, True),
+            (_line(self.A, self.B), 'L', 'SAFE ST', True, 1.0, True),
+            (_line(self.B, self.C), 'L', 'SAFE ST', True, 1.0, True),
+        ]
+
+    def _names(self, danger, mode='bike'):
+        graph = self._graph(self._rows(danger))
+        feature = self._route(graph, self.A, self.C, mode=mode)
+        return {s['name'] for s in feature['properties']['steps'] if s['name']}
+
+    def test_no_crash_history_takes_the_short_way(self):
+        self.assertIn('Deadly Rd', self._names(1.0))
+
+    def test_crash_history_takes_the_detour(self):
+        cap = 1.0 + ml.DANGER_CAP * ml.DANGER_RATE
+        self.assertIn('Safe St', self._names(cap))
+        self.assertNotIn('Deadly Rd', self._names(cap))
+
+    def test_legacy_4_tuple_rows_still_build(self):
+        graph = self._graph([
+            (_line(self.A, self.C), 'L', 'PLAIN ST', True),
+        ])
+        feature = self._route(graph, self.A, self.C)
+        names = {s['name'] for s in feature['properties']['steps'] if s['name']}
+        self.assertIn('Plain St', names)
+
+
+class TestNightLighting(RouteGraphTestCase):
+    """After dark, an unlit street loses to a lit parallel; by day the
+    shorter unlit street wins as usual."""
+
+    A = (34.8500, -82.4000)
+    B = (34.8530, -82.4025)   # lit dogleg, ~1.5x the direct distance
+    C = (34.8560, -82.4000)
+
+    def _rows(self):
+        return [
+            (_line(self.A, self.C), 'L', 'DARK ST', True, 1.0, False),
+            (_line(self.A, self.B), 'L', 'LIT AVE', True, 1.0, True),
+            (_line(self.B, self.C), 'L', 'LIT AVE', True, 1.0, True),
+        ]
+
+    def _names(self, night, mode='walk'):
+        token = ml._NIGHT_OVERRIDE.set(night)
+        try:
+            graph = self._graph(self._rows())
+            feature = self._route(graph, self.A, self.C, mode=mode)
+        finally:
+            ml._NIGHT_OVERRIDE.reset(token)
+        return {s['name'] for s in feature['properties']['steps'] if s['name']}
+
+    def test_daytime_takes_the_short_dark_street(self):
+        self.assertIn('Dark St', self._names(False))
+
+    def test_night_walk_takes_the_lit_street(self):
+        names = self._names(True)
+        self.assertIn('Lit Ave', names)
+        self.assertNotIn('Dark St', names)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

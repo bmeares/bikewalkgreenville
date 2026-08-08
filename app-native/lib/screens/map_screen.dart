@@ -385,6 +385,63 @@ class _MapScreenState extends State<MapScreen> {
           minzoom: def.minZoom > 0 ? def.minZoom : null,
           belowLayerId: 'lyr-route-casing',
         );
+      } else if (def.isHeatmap) {
+        // Severity-weighted density: a death outweighs a stack of
+        // no-injury crashes, mirroring the router's danger scoring.
+        await map.addHeatmapLayer(
+          def.id,
+          'lyr-${def.id}',
+          HeatmapLayerProperties(
+            heatmapWeight: [
+              'case',
+              ['>', ['coalesce', ['get', 'killed'], 0], 0],
+              1.0,
+              ['>', ['coalesce', ['get', 'injured'], 0], 0],
+              0.35,
+              0.15,
+            ],
+            heatmapRadius: [
+              'interpolate', ['linear'], ['zoom'],
+              10.0, 10.0,
+              13.0, 18.0,
+              16.0, 32.0,
+            ],
+            heatmapIntensity: [
+              'interpolate', ['linear'], ['zoom'],
+              10.0, 1.0,
+              16.0, 2.5,
+            ],
+            heatmapColor: [
+              'interpolate', ['linear'], ['heatmap-density'],
+              0.0, 'rgba(0,0,0,0)',
+              0.25, 'rgba(255,235,59,0.35)',
+              0.5, 'rgba(255,152,0,0.55)',
+              0.75, 'rgba(244,67,54,0.7)',
+              1.0, 'rgba(183,28,28,0.85)',
+            ],
+            heatmapOpacity: 0.8,
+          ),
+          belowLayerId: 'lyr-highlight-line',
+        );
+      } else if (def.isCircle) {
+        await map.addCircleLayer(
+          def.id,
+          'lyr-${def.id}',
+          CircleLayerProperties(
+            circleColor: def.color,
+            circleRadius: [
+              'interpolate', ['linear'], ['zoom'],
+              12.0, 1.5,
+              16.0, 4.0,
+            ],
+            circleOpacity: 0.7,
+            circleStrokeWidth: 0.0,
+          ),
+          minzoom: def.minZoom > 0 ? def.minZoom : null,
+          belowLayerId: 'lyr-highlight-line',
+          // 40k dots with nothing to say — never swallow feature taps.
+          enableInteraction: false,
+        );
       } else if (def.isFill) {
         // Polygon layers (parking land use) sit under every line so streets
         // and trails stay legible on top of them.
