@@ -17,7 +17,66 @@ anything.
 - **walk-audit config** moved off env vars onto Meerschaum config (`plugins:walk-audit:{smtp,notify}`). Prod values live in the container volume at `/meerschaum/config/plugins.json` (chmod 600); the `/meerschaum/.env` hack has been **deleted**.
 - `WalkAudit.reports` is empty (the deploy-check row was removed).
 
-### 2026-08-08 latest (sixteenth session, omega) — app v1.14.0+48, map-layers v0.14.0 (DEPLOYED)
+### 2026-08-08 latest (seventeenth session, omega) — app v1.15.0+49, map-layers v0.14.1 (DEPLOYED)
+
+Bennett's follow-ups on v1.14: navy still too low-contrast; base picker must
+not offer a dark map on light chrome (or vice versa); Paperclip marker too
+far south + should be a LABEL not a pin; search X sometimes leaves the
+recents list up; and the two trip flows (search→"Bike here" vs the planner
+sheet) confuse people — prefs are hard to find and the planner opens with an
+empty destination. `pytest` 68/68, `flutter test` 74/74, analyze clean.
+
+**Backend (v0.14.1)**: LANDMARKS Paperclip moved onto the trail line at the
+top of the switchbacks — 34.8509, -82.3834 (was 34.8487, ~240 m south of the
+geometry). Nothing else.
+
+**App (v1.15.0+49):**
+
+1. **Dark theme contrast rework** — the fix was SPREAD, not darkness:
+   background stays deep (0xFF0C1626) but container tiers now step up ~7
+   luminance points each (low 0xFF16243C … highest 0xFF334A74) so cards and
+   sheets separate; inks near-white (onSurface 0xFFF1F4FA, variant
+   0xFFC5CFDF, outline 0xFF8FA0B8); primary leaf brightened (0xFFB2D488,
+   `_leafOnNavy`, also `brandOnSurface`'s dark value).
+2. **Base picker is Standard / Satellite.** Standard = follow the theme;
+   forced light/dark bases are GONE (mismatched chrome/basemap read as a
+   glitch). Persisted `map_base` light/dark values migrate to `auto` in
+   `AppState.load()`. Settings → Appearance is now the only light/dark
+   switch.
+3. **Landmarks draw as text labels** (`LayerDef.isLabel`): `renderLabel()`
+   in map_icons.dart paints bold-italic name bitmaps with a halo (ink picked
+   for the base — light text on dark/satellite), one `addImage` per feature,
+   symbol layer `iconImage: ['get','__img']` (property injected client-side).
+   Bitmaps because the satellite style has NO glyphs — a real text layer
+   renders nothing there.
+4. **Search X now also unfocuses** — with focus kept, the recents list
+   re-appeared under the cleared field (the "doesn't clear sometimes"
+   report was focus surviving the trip-planner round-trip).
+5. **Trip flows unified around the route preview**:
+   - `_tripPrefsRow()` on the preview (bike/walk/roll plans): Quiet /
+     Balanced / Direct chips (write the durable stress pref, same as
+     Settings), a **Trail** chip (per-trip only, `_tripTrail`), and a
+     **More** chip into the planner. Every chip replans instantly (silent —
+     the line just redraws). Chips are 38 dp — gloved-thumb-sized.
+   - **The planner always opens with the destination you're looking at**:
+     `_openDirections()` falls back active-trip `_to` → searched `_place` →
+     empty. The "search again inside the planner" friction is gone.
+   - **Planner gains the per-trip trail switch** (returned via
+     `DirectionsResult.trail` → `_tripTrail`; Settings default untouched,
+     override dies with `_clearRoute`). Pick-on-map round-trips keep it.
+6. Directions sheet's my-location icon was `Colors.black45` — invisible on
+   navy; now `onSurfaceVariant`.
+
+Device test (v1.15.0+49): dark mode — cards/sheets visibly layered, text
+crisp; layers sheet shows two base pills only (Standard/Satellite), theme
+toggle flips the standard base; "The Paperclip" renders as italic text ON
+the switchbacks (both bases), still searchable; search something → X →
+recents gone; search a place → tap the search-bar directions arrow → To is
+prefilled; route drawn → chips above the summary: tap Direct (line
+redraws), toggle Trail off (route leaves the SRT), More opens the planner
+prefilled; clear route → next trip follows Settings again.
+
+### 2026-08-08 earlier (sixteenth session, omega) — app v1.14.0+48, map-layers v0.14.0 (DEPLOYED)
 
 Bennett's list: darker navy dark theme playing nicer with the greens; drop
 the "Auto" base-map pill (the 4-pill row wrapped "Satellite" mid-word);

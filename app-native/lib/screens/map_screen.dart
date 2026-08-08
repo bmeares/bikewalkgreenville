@@ -55,6 +55,10 @@ class _MapScreenState extends State<MapScreen> {
   TripEndpoint _from = TripEndpoint.myLocation;
   TripEndpoint? _to;
 
+  /// Trail preference for the CURRENT trip only (the preview chip and the
+  /// planner sheet set it); null = follow Settings. Cleared with the route.
+  bool? _tripTrail;
+
   /// `from` / `to` while the user is picking that end by tapping the map.
   String? _pickField;
 
@@ -350,6 +354,47 @@ class _MapScreenState extends State<MapScreen> {
     if (map == null || _addedLayers.contains(def.id)) return;
     _addedLayers.add(def.id); // claim before the first await (re-entrancy)
     try {
+      if (def.isLabel) {
+        // Text labels as bitmaps: fetched inline (a handful of features),
+        // one image per feature name, ink picked for the base underneath
+        // (satellite imagery reads dark). Re-rendered on every style swap
+        // since the swap clears images anyway.
+        final geojson = await api.layerGeoJson(def.path);
+        if (!mounted) return;
+        final darkBase = context.read<AppState>().mapBase ==
+                MapBase.satellite ||
+            Theme.of(context).brightness == Brightness.dark;
+        final dpr = MediaQuery.of(context).devicePixelRatio;
+        final features =
+            List<Map<String, dynamic>>.from(geojson['features'] ?? []);
+        for (final f in features) {
+          final props = Map<String, dynamic>.from(f['properties'] ?? {});
+          final name = (props['name'] ?? '').toString();
+          if (name.isEmpty) continue;
+          final key = 'lbl-${def.id}-$name';
+          props['__img'] = key;
+          f['properties'] = props;
+          await map.addImage(
+            key,
+            await renderLabel(
+                text: name, devicePixelRatio: dpr, darkBase: darkBase),
+          );
+        }
+        await map.addSource(
+            def.id, GeojsonSourceProperties(data: geojson));
+        await map.addSymbolLayer(
+          def.id,
+          'lyr-${def.id}',
+          const SymbolLayerProperties(
+            iconImage: ['get', '__img'],
+            iconSize: 1.0,
+            iconAllowOverlap: true,
+          ),
+          minzoom: def.minZoom > 0 ? def.minZoom : null,
+          belowLayerId: 'lyr-route-casing',
+        );
+        return;
+      }
       final url = await api.layerUrl(def.path);
       await map.addSource(def.id, GeojsonSourceProperties(data: url));
       if (def.isPoint) {
@@ -995,7 +1040,7 @@ class _MapScreenState extends State<MapScreen> {
         stress: state.stressApiName,
         plan: plan,
         alt: alt,
-        trail: state.preferTrail,
+        trail: _tripTrail ?? state.preferTrail,
       );
       // A newer plan superseded this one while it was in flight.
       if (seq != _planSeq) return;
@@ -1040,19 +1085,37 @@ class _MapScreenState extends State<MapScreen> {
   /// Open the planner, then act on what it returns: route the trip, or drop
   /// into map-pick mode for whichever end the user wants to tap out.
   Future<void> _openDirections({TripEndpoint? to}) async {
+    // The planner opens with the destination the rider is already looking
+    // at — the active trip's, else the searched place. Making someone
+    // re-type the place they just searched was the reported friction.
+    final place = _place;
+    final fromPlace = place == null
+        ? null
+        : TripEndpoint(
+            label: (place['label'] ?? 'Searched place').toString(),
+            latLng: LatLng(
+              (place['lat'] as num).toDouble(),
+              (place['lon'] as num).toDouble(),
+            ),
+          );
+    final state = context.read<AppState>();
     final result = await showModalBottomSheet<DirectionsResult>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
       builder: (_) => DirectionsSheet(
         from: _from,
-        to: to ?? _to ?? const TripEndpoint(label: ''),
+        to: to ?? _to ?? fromPlace ?? const TripEndpoint(label: ''),
+        trail: _tripTrail ?? state.preferTrail,
       ),
     );
     if (result == null || !mounted) return;
     setState(() {
       _from = result.from ?? _from;
       _to = (result.to?.isEmpty ?? true) ? _to : result.to;
+      // Trail preference for THIS trip; the durable default lives in
+      // Settings and is untouched here.
+      if (result.trail != null) _tripTrail = result.trail;
     });
     if (result.isPick) {
       setState(() => _pickField = result.pickField);
@@ -1129,6 +1192,7 @@ class _MapScreenState extends State<MapScreen> {
       _place = null;
       _to = null;
       _from = TripEndpoint.myLocation;
+      _tripTrail = null; // per-trip override dies with the trip
     });
     await _map?.animateCamera(CameraUpdate.tiltTo(0.0));
   }
@@ -1835,6 +1899,11 @@ class _MapScreenState extends State<MapScreen> {
                                 tooltip: 'Clear search',
                                 onPressed: () {
                                   _searchCtl.clear();
+                                  // Unfocus too: with focus kept, the recents
+                                  // list re-appeared under the cleared field
+                                  // (reported when hopping between searches
+                                  // and trip plans). X means "done here".
+                                  _searchFocus.unfocus();
                                   setState(() => _results = []);
                                   _clearPlace();
                                 },
@@ -2192,6 +2261,7 @@ class _MapScreenState extends State<MapScreen> {
         children: [
           if (route.alternatives.isNotEmpty || _canAlt(route))
             _alternativesRow(route),
+          if (!route.isTransit && route.plan != 'bcycle') _tripPrefsRow(),
           Material(
             elevation: 4,
             borderRadius: BorderRadius.circular(16),
@@ -2252,6 +2322,68 @@ class _MapScreenState extends State<MapScreen> {
             ),
           ),
         ],
+    );
+  }
+
+  /// One-tap trip preferences, right on the preview — the answer to "how do
+  /// I make it quieter / skip the trail?" without hunting through sheets.
+  /// Every chip replans immediately; sized for a gloved thumb on a bike.
+  /// Stress writes the durable preference (same control as Settings and the
+  /// planner); the trail chip is THIS trip only (`_tripTrail`).
+  Widget _tripPrefsRow() {
+    final state = context.watch<AppState>();
+    final trailOn = _tripTrail ?? state.preferTrail;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: SizedBox(
+        height: 38,
+        child: ListView(
+          scrollDirection: Axis.horizontal,
+          children: [
+            if (state.showsBikeOptions)
+              for (final level in BikeStress.values)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: ChoiceChip(
+                    label: Text(bikeStressLabels[level]!),
+                    selected: state.stress == level,
+                    showCheckmark: false,
+                    avatar: Icon(
+                      switch (level) {
+                        BikeStress.quiet => Icons.self_improvement,
+                        BikeStress.balanced => Icons.balance,
+                        BikeStress.direct => Icons.straighten,
+                      },
+                      size: 18,
+                    ),
+                    onSelected: (_) {
+                      state.setStress(level);
+                      _planTrip(silent: true);
+                    },
+                  ),
+                ),
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: FilterChip(
+                avatar: const Icon(Icons.cruelty_free, size: 18),
+                label: const Text('Trail'),
+                tooltip: 'Prefer the Prisma Health Swamp Rabbit Trail '
+                    'for this trip',
+                selected: trailOn,
+                onSelected: (v) {
+                  setState(() => _tripTrail = v);
+                  _planTrip(silent: true);
+                },
+              ),
+            ),
+            ActionChip(
+              avatar: const Icon(Icons.tune, size: 18),
+              label: const Text('More'),
+              onPressed: () => _openDirections(),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -2769,36 +2901,27 @@ class _MapScreenState extends State<MapScreen> {
                     '${TravelMode.values.where(state.modes.contains).map(state.labelFor).join(' + ')}',
                     style: Theme.of(ctx).textTheme.titleMedium),
               ),
-              // Base map: light/dark here doubles as the quick theme-ish
-              // toggle riders asked for; Settings → Appearance still drives
-              // the app chrome. `MapBase.auto` (the fresh-install default,
-              // follows the theme) stays internal — a fourth "Auto" pill
-              // squeezed "Satellite" into wrapping mid-word, so the picker
-              // shows auto as whichever base the theme currently resolves to
-              // and any tap simply makes the choice explicit.
+              // Base map: Standard follows the app theme (Settings →
+              // Appearance is the ONLY light/dark switch — a dark basemap
+              // under light chrome read as a glitch, so mismatches are not
+              // offered), Satellite is imagery either way.
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
                 child: SegmentedButton<MapBase>(
                   segments: const [
                     ButtonSegment(
-                        value: MapBase.light,
-                        label: Text('Light'),
-                        icon: Icon(Icons.light_mode)),
-                    ButtonSegment(
-                        value: MapBase.dark,
-                        label: Text('Dark'),
-                        icon: Icon(Icons.dark_mode)),
+                        value: MapBase.auto,
+                        label: Text('Standard'),
+                        icon: Icon(Icons.map_outlined)),
                     ButtonSegment(
                         value: MapBase.satellite,
                         label: Text('Satellite'),
                         icon: Icon(Icons.satellite_alt)),
                   ],
                   selected: {
-                    state.mapBase == MapBase.auto
-                        ? (Theme.of(ctx).brightness == Brightness.dark
-                            ? MapBase.dark
-                            : MapBase.light)
-                        : state.mapBase
+                    state.mapBase == MapBase.satellite
+                        ? MapBase.satellite
+                        : MapBase.auto
                   },
                   showSelectedIcon: false,
                   onSelectionChanged: (s) => state.setMapBase(s.first),

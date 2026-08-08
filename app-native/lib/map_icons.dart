@@ -73,6 +73,56 @@ Future<Uint8List> renderPin({
   return bytes!.buffer.asUint8List();
 }
 
+/// Paints a place-name label ("The Paperclip") as a bitmap: bold text with a
+/// contrasting halo, readable over any base — vector light/dark AND the
+/// satellite raster style, which has no glyph source, so real MapLibre text
+/// layers can't render there. One image per landmark; the layer references
+/// it by feature name.
+Future<Uint8List> renderLabel({
+  required String text,
+  required double devicePixelRatio,
+  bool darkBase = false,
+}) async {
+  final ratio = devicePixelRatio;
+  final ink = darkBase ? Colors.white : const Color(0xFF263238);
+  final halo = darkBase ? const Color(0xCC000000) : const Color(0xE6FFFFFF);
+
+  final painter = TextPainter(textDirection: TextDirection.ltr)
+    ..text = TextSpan(
+      text: text,
+      style: TextStyle(
+        fontSize: 13.0,
+        fontWeight: FontWeight.w700,
+        fontStyle: FontStyle.italic,
+        letterSpacing: 0.3,
+        color: ink,
+        height: 1.0,
+        shadows: [
+          for (final dx in const [-1.5, 0.0, 1.5])
+            for (final dy in const [-1.5, 0.0, 1.5])
+              if (dx != 0 || dy != 0)
+                Shadow(color: halo, offset: Offset(dx, dy), blurRadius: 1.5),
+        ],
+      ),
+    )
+    ..layout();
+
+  const pad = 4.0;
+  final w = painter.width + pad * 2;
+  final h = painter.height + pad * 2;
+  final recorder = ui.PictureRecorder();
+  final canvas = Canvas(recorder);
+  canvas.scale(ratio);
+  painter.paint(canvas, const Offset(pad, pad));
+
+  final image = await recorder
+      .endRecording()
+      .toImage((w * ratio).ceil(), (h * ratio).ceil());
+  final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+  image.dispose();
+  return bytes!.buffer.asUint8List();
+}
+
 /// Size of the navigation puck bitmap, in dp.
 const puckSize = 48.0;
 

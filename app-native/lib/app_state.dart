@@ -172,6 +172,11 @@ class AppState extends ChangeNotifier {
         (b) => b.name == savedBase,
         orElse: () => MapBase.auto,
       );
+      // Forced light/dark bases are retired (a dark map under light chrome
+      // read as a glitch); old persisted picks fold back into follow-theme.
+      if (_mapBase == MapBase.light || _mapBase == MapBase.dark) {
+        _mapBase = MapBase.auto;
+      }
       _preferTrail = prefs.getBool(_kPreferTrail) ?? true;
       _highContrast = prefs.getBool(_kHighContrast) ?? false;
       _largeUi = prefs.getBool(_kLargeUi) ?? false;

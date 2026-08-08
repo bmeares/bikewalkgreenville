@@ -35,7 +35,7 @@ from meerschaum.actions import make_action
 from meerschaum.plugins import api_plugin
 from meerschaum.utils.warnings import info, warn
 
-__version__ = '0.14.0'
+__version__ = '0.14.1'
 
 bwg = mrsm.Plugin('bwg')
 
@@ -292,7 +292,10 @@ SIDEWALK_DEDUPE_FT = 80.0
 LANDMARKS: list[dict[str, Any]] = [
     {
         'name': 'The Paperclip',
-        'lat': 34.8487,
+        # ON the trail line at the top of the switchback stack (the trail's
+        # own vertex nearest due-north of the switchbacks) — the first draft
+        # sat ~240 m south, off the trail.
+        'lat': 34.8509,
         'lon': -82.3834,
         'note': "The trail's switchback climb between Lakehurst St and "
                 'Traxler St — how the Prisma Health Swamp Rabbit Trail '

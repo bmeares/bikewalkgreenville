@@ -22,8 +22,12 @@ const satelliteStyleJson = '{'
     '"attribution":"Esri, Maxar, Earthstar Geographics, GIS User Community"}},'
     '"layers":[{"id":"esri","type":"raster","source":"esri"}]}';
 
-/// What the map itself is drawn on. `auto` follows the app theme; satellite
-/// is imagery whatever the theme says.
+/// What the map itself is drawn on. `auto` ("Standard") follows the app
+/// theme; satellite is imagery whatever the theme says. `light`/`dark` are
+/// retired — a dark basemap under light chrome (and vice versa) read as a
+/// glitch, so the theme is the single source of light/dark truth — but the
+/// enum values stay so an old persisted pref still parses (AppState migrates
+/// them to `auto` on load).
 enum MapBase { auto, light, dark, satellite }
 
 /// Greenville downtown.
@@ -157,6 +161,11 @@ class LayerDef {
   /// Dense point layers rendered as tiny dots (streetlights) — 40k pins
   /// would be soup, and they carry nothing worth tapping.
   final bool isCircle;
+
+  /// Point layers drawn as their NAME in text (pre-rendered bitmap — the
+  /// satellite style has no glyphs, so real text layers can't render there).
+  /// Landmarks label the map the way locals talk about it.
+  final bool isLabel;
   final String color; // hex, ignored when colorByStress
   final bool colorByStress;
 
@@ -195,6 +204,7 @@ class LayerDef {
     this.isFill = false,
     this.isHeatmap = false,
     this.isCircle = false,
+    this.isLabel = false,
     this.colorByStress = false,
     this.matchProp,
     this.matchColors,
@@ -259,13 +269,14 @@ const layerDefs = <LayerDef>[
     icon: Icons.fork_right,
   ),
   // Named spots riders navigate by ("The Paperclip" switchbacks) that no
-  // basemap labels. Curated in map-layers.py's LANDMARKS.
+  // basemap labels. Curated in map-layers.py's LANDMARKS; drawn as text
+  // labels, not pins — they name the map, they aren't destinations.
   LayerDef(
     id: 'landmarks',
     label: 'Trail landmarks',
     path: '/map-layers/landmarks.geojson',
     color: '#5D4037',
-    isPoint: true,
+    isLabel: true,
     modes: {TravelMode.cyclist, TravelMode.pedestrian},
     icon: Icons.flag,
   ),
@@ -456,37 +467,41 @@ ThemeData buildTheme({bool highContrast = false}) => ThemeData(
 
 // Navy dark palette: M3's seeded dark surfaces come out near-black; these
 // deep blues match the fiord basemap so map and chrome read as one surface.
-// Deepened in v1.14 (Bennett: "darker, and play nicer with the greens") —
-// the previous set read washed-out next to the brand greens.
-const _navy = Color(0xFF0B1424);
-const _navyLowest = Color(0xFF060C18);
-const _navyLow = Color(0xFF0F1A2E);
-const _navyMid = Color(0xFF142238);
-const _navyHigh = Color(0xFF1A2B45);
-const _navyHighest = Color(0xFF213450);
+// Reworked twice on Bennett's feedback: first "darker", then "too low
+// contrast" — the fix is SPREAD, not darkness. The background stays deep,
+// but each container tier steps up ~7 points of luminance so cards, sheets
+// and fields visibly separate, and the foreground inks are near-white.
+const _navy = Color(0xFF0C1626);          // background / base surface
+const _navyLowest = Color(0xFF050B16);    // recessed wells
+const _navyLow = Color(0xFF16243C);       // cards
+const _navyMid = Color(0xFF1E2F4D);       // sheets, fields
+const _navyHigh = Color(0xFF283C60);      // menus, chips
+const _navyHighest = Color(0xFF334A74);   // highest chrome
 
 /// The leaf green that carries the brand on dark navy: bright enough to hold
 /// its own as the dark theme's primary (brandGreen itself muddies on navy).
-const _leafOnNavy = Color(0xFFA9CB7F);
+const _leafOnNavy = Color(0xFFB2D488);
 
 ThemeData buildDarkTheme({bool highContrast = false}) {
   final scheme = ColorScheme.fromSeed(
     seedColor: brandGreen,
     brightness: Brightness.dark,
   ).copyWith(
-    primary: highContrast ? const Color(0xFFC4E594) : _leafOnNavy,
-    onPrimary: const Color(0xFF1B2A0A),
+    primary: highContrast ? const Color(0xFFCDEC9D) : _leafOnNavy,
+    onPrimary: const Color(0xFF16230A),
     surface: highContrast ? const Color(0xFF04080F) : _navy,
     surfaceContainerLowest: highContrast ? Colors.black : _navyLowest,
-    surfaceContainerLow: highContrast ? const Color(0xFF0A101C) : _navyLow,
-    surfaceContainer: highContrast ? const Color(0xFF0E1524) : _navyMid,
-    surfaceContainerHigh: highContrast ? const Color(0xFF131C2E) : _navyHigh,
+    surfaceContainerLow: highContrast ? const Color(0xFF101A2C) : _navyLow,
+    surfaceContainer: highContrast ? const Color(0xFF18253E) : _navyMid,
+    surfaceContainerHigh: highContrast ? const Color(0xFF223252) : _navyHigh,
     surfaceContainerHighest:
-        highContrast ? const Color(0xFF192338) : _navyHighest,
-    onSurface: highContrast ? Colors.white : const Color(0xFFE3E8F0),
+        highContrast ? const Color(0xFF2C4066) : _navyHighest,
+    // Near-white inks: the previous soft greys sank into the navy.
+    onSurface: highContrast ? Colors.white : const Color(0xFFF1F4FA),
     onSurfaceVariant:
-        highContrast ? const Color(0xFFDDE3EC) : const Color(0xFFB6C0CF),
-    outline: highContrast ? const Color(0xFF9AA6B8) : null,
+        highContrast ? const Color(0xFFE2E8F1) : const Color(0xFFC5CFDF),
+    outline:
+        highContrast ? const Color(0xFFA9B5C8) : const Color(0xFF8FA0B8),
   );
   return ThemeData(
     colorScheme: scheme,
@@ -515,9 +530,7 @@ Color warnAccent(BuildContext c) => Theme.of(c).brightness == Brightness.dark
 /// The brand green that reads on the current surface: full-dark line work
 /// (brandDark) disappears on a dark card, so dark mode gets a lighter leaf.
 Color brandOnSurface(BuildContext c) =>
-    Theme.of(c).brightness == Brightness.dark
-        ? const Color(0xFFABC77D)
-        : brandDark;
+    Theme.of(c).brightness == Brightness.dark ? _leafOnNavy : brandDark;
 
 void toast(BuildContext context, String msg) {
   ScaffoldMessenger.of(context)
