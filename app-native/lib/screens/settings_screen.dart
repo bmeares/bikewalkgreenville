@@ -71,10 +71,10 @@ class SettingsScreen extends StatelessWidget {
           ),
           SwitchListTile(
             secondary: const Icon(Icons.cruelty_free),
-            title: const Text('Prefer trail routes'),
+            title: const Text('Prefer the Prisma Health Swamp Rabbit Trail'),
             subtitle: const Text(
-                'Quiet routes choose the Prisma Health Swamp Rabbit Trail, '
-                'even when a street way is shorter'),
+                'Routes choose the trail even when a street way is shorter — '
+                'applies to Quiet, Balanced and Direct'),
             value: state.preferTrail,
             onChanged: state.setPreferTrail,
           ),
@@ -117,11 +117,28 @@ class SettingsScreen extends StatelessWidget {
                   value: ThemeMode.dark,
                   secondary: Icon(Icons.dark_mode),
                   title: Text('Dark'),
-                  subtitle: Text('Dark app and dark map'),
                 ),
               ],
             ),
           ),
+          const Divider(),
+          _header(context, 'Experimental advocacy layers'),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+            child: Text(
+              'Data layers for advocacy work. Turning one on adds its toggle '
+              'to the map\'s layers sheet.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+          for (final def in layerDefs.where((d) => d.advocacy))
+            SwitchListTile(
+              dense: true,
+              secondary: Icon(def.icon, color: hexColor(def.color)),
+              title: Text(def.label),
+              value: state.advocacyEnabled(def.id),
+              onChanged: (v) => state.setAdvocacyLayer(def.id, v),
+            ),
           const Divider(),
           _header(context, 'Navigation'),
           RadioGroup<PuckStyle>(

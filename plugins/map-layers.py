@@ -35,7 +35,7 @@ from meerschaum.actions import make_action
 from meerschaum.plugins import api_plugin
 from meerschaum.utils.warnings import info, warn
 
-__version__ = '0.15.0'
+__version__ = '0.16.0'
 
 bwg = mrsm.Plugin('bwg')
 
@@ -251,14 +251,45 @@ BIKE_BUSINESSES: list[dict[str, Any]] = [
 #: the county centerline, PCC and OSM all stop at the east portal, so the
 #: tunnel dead-ended and routes escaped over Church St. Entries here are
 #: for connectors that exist on the ground but in no dataset.
+#: v0.16.0: entries may carry `route_coords` — the coords fed to the routing
+#: graph when they must differ from the drawn line. The Springer entry draws
+#: from the WEST tunnel portal (so the shortcuts layer shows one line meeting
+#: Springer St) and follows the South Ridge lot's actual drive (OSM ways
+#: 339268048/365924783), but only the east-of-Church stretch joins the graph:
+#: the OSM tunnel way already routes the bore, and surface coords under it
+#: would re-fuse with the S Church St edges above (the v0.13 lesson).
 CUSTOM_PATHS: list[dict[str, Any]] = [
     {
         'name': 'Springer St',
         'note': 'Unmapped continuation of Springer St through the '
-                'South Ridge Apartments to Briar St',
+                'South Ridge Apartments parking lot to Briar St',
         'coords': [
-            [-82.4003886, 34.8380472],  # east tunnel portal (under Church St)
-            [-82.3985862, 34.8380477],  # Briar St's south end
+            [-82.40085, 34.83804],      # west tunnel portal (= Springer St)
+            [-82.40045, 34.83806],      # east tunnel portal (under Church St)
+            [-82.4003886, 34.8380472],
+            [-82.400182, 34.838152],    # lot entrance drive
+            [-82.400165, 34.838293],
+            [-82.400145, 34.838344],
+            [-82.40009, 34.838378],
+            [-82.400023, 34.838391],    # north drive, west end
+            [-82.399553, 34.838378],
+            [-82.399382, 34.838373],
+            [-82.398772, 34.838372],
+            [-82.398552, 34.838381],    # lot NE corner
+            [-82.39856, 34.83819],      # Briar St's south end
+        ],
+        'route_coords': [
+            [-82.4003886, 34.8380472],  # just east of the east portal
+            [-82.400182, 34.838152],
+            [-82.400165, 34.838293],
+            [-82.400145, 34.838344],
+            [-82.40009, 34.838378],
+            [-82.400023, 34.838391],
+            [-82.399553, 34.838378],
+            [-82.399382, 34.838373],
+            [-82.398772, 34.838372],
+            [-82.398552, 34.838381],
+            [-82.39856, 34.83819],
         ],
     },
 ]
@@ -272,7 +303,10 @@ def _build_custom_paths(debug: bool = False) -> str | None:
             {
                 'type': 'Feature',
                 'geometry': {'type': 'LineString', 'coordinates': p['coords']},
-                'properties': {k: v for k, v in p.items() if k != 'coords'},
+                'properties': {
+                    k: v for k, v in p.items()
+                    if k not in ('coords', 'route_coords')
+                },
             }
             for p in CUSTOM_PATHS
         ],
@@ -386,6 +420,78 @@ TUNNEL_ROOF_ROWS: list[tuple[str, tuple[float, float, float, float]]] = [
     # (name base, (min lon, min lat, max lon, max lat))
     ('SPRINGER', (-82.40086, 34.8378, -82.40048, 34.8384)),
 ]
+
+
+#: At-grade crossings that exist in the data but not on the ground: the
+#: S Church St embankment over the Springer tunnel severs the side streets
+#: beside it, yet TIGER/county/PCC digitize them straight across (OSM even
+#: shares nodes). Unlike TUNNEL_ROOF_ROWS the street is real on BOTH sides —
+#: only the crossing is fiction — so the row is CLIPPED, not dropped: any
+#: vertex of a matching (suffix-stripped) name inside the bbox is removed,
+#: splitting the part, so its chunk endpoints can never fuse with the
+#: Church St nodes. Boxes reach ~40 m past each carriageway so the surviving
+#: endpoints land well outside the 12 m grid cell of any Church node.
+GRADE_SEPARATED_ROWS: list[tuple[str, tuple[float, float, float, float]]] = [
+    # (name base, (min lon, min lat, max lon, max lat))
+    ('WAKEFIELD', (-82.4009, 34.8383, -82.3999, 34.8391)),
+    ('JUDSON', (-82.4008, 34.8387, -82.3997, 34.8395)),
+]
+
+
+def _clip_grade_separated(name: str | None, part: list) -> list[list]:
+    """Split a row part at GRADE_SEPARATED_ROWS boxes, dropping the vertices
+    inside (see the constant). Returns the surviving sub-parts."""
+    base = _street_base(name)
+    boxes = (
+        [b for nb, b in GRADE_SEPARATED_ROWS if nb == base] if base else []
+    )
+    if not boxes:
+        return [part]
+
+    def _inside(pt) -> bool:
+        return any(
+            minlon <= pt[0] <= maxlon and minlat <= pt[1] <= maxlat
+            for minlon, minlat, maxlon, maxlat in boxes
+        )
+
+    parts, run = [], []
+    for pt in part:
+        if _inside(pt):
+            if len(run) >= 2:
+                parts.append(run)
+            run = []
+        else:
+            run.append(pt)
+    if len(run) >= 2:
+        parts.append(run)
+    return parts
+
+
+def _crosses_grade_separation(
+    alat: float, alon: float, blat: float, blon: float,
+) -> bool:
+    """Does the a->b segment's bbox overlap any tunnel-roof / grade-separated
+    window? A synthetic connector through one is a ramp between grades that
+    do not meet: the S Church St bike lane's chunk end sat 10 m from the
+    Springer tunnel's WEST portal (on the bridge above it) and the junction
+    pass ramped it straight down onto Springer St."""
+    for _name, (minlon, minlat, maxlon, maxlat) in (
+        TUNNEL_ROOF_ROWS + GRADE_SEPARATED_ROWS
+    ):
+        if (
+            max(min(alon, blon), minlon) <= min(max(alon, blon), maxlon)
+            and max(min(alat, blat), minlat) <= min(max(alat, blat), maxlat)
+        ):
+            return True
+    return False
+
+
+#: Car-free streets that function as Prisma Health Swamp Rabbit Trail access
+#: ramps: Furman College Way is closed to cars and connects the University St
+#: / University Ridge roundabouts to the trail. Rows whose suffix-stripped
+#: name matches are priced as 'srt' at graph build — routing bias only; the
+#: map layers still draw them as the streets they are.
+TRAIL_TIER_STREETS = {'FURMAN COLLEGE'}
 
 
 def _tunnel_roof(name: str | None, part: list) -> bool:
@@ -1682,9 +1788,11 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str, bool]]
                 else lights * LIT_SPACING_M >= len_m
             )
             for part in parts:
-                if len(part) >= 2 and not _tunnel_roof(name, part):
+                if len(part) < 2 or _tunnel_roof(name, part):
+                    continue
+                for sub in _clip_grade_separated(name, part):
                     rows.append(
-                        (part, category, name, has_sidewalk, danger, lit,
+                        (sub, category, name, has_sidewalk, danger, lit,
                          lane_stress)
                     )
     # County centerlines PCC never rated (~3.2k of 35k): without them the
@@ -1766,15 +1874,17 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str, bool]]
             else float(lights) * LIT_SPACING_M >= len_m
         )
         for part in parts:
-            if len(part) >= 2 and not _tunnel_roof(name, part):
-                rows.append((part, category, name, bool(rec.get('has_sidewalk')), danger, lit))
+            if len(part) < 2 or _tunnel_roof(name, part):
+                continue
+            for sub in _clip_grade_separated(name, part):
+                rows.append((sub, category, name, bool(rec.get('has_sidewalk')), danger, lit))
     # OSM cycleways, paths and tunnels: the shortcuts no county layer maps.
     rows.extend(_osm_path_rows(debug=debug))
     # Curated off-grid connectors (tunnels, cut-throughs): straight from the
     # CUSTOM_PATHS constant, no database involved. Category 'path' is its own
     # surface, so no sidewalk check applies.
     for p in CUSTOM_PATHS:
-        coords = p.get('coords') or []
+        coords = p.get('route_coords') or p.get('coords') or []
         if len(coords) >= 2:
             rows.append((coords, 'path', p.get('name'), True))
     return rows
@@ -1847,6 +1957,10 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
             (row[6] if len(row) > 6 else None),
         )
         tunnel = bool(row[7]) if len(row) > 7 else False
+        # Car-free trail-access streets ride at trail price (Furman College
+        # Way) — every mode and stress level, since _astar prices by category.
+        if category != 'srt' and _street_base(name) in TRAIL_TIER_STREETS:
+            category = 'srt'
         factor = bike_factors.get(category, MODE_DEFAULT_FACTOR['bike'])
         is_path = category in ('srt', 'bike-lane', 'path', 'footway')
         if tunnel and len(coords) >= 2:
@@ -1891,6 +2005,15 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
         # useless: it weighs 1.0x its length, so the straight line undercuts
         # the road it duplicates and the router cuts the corner.
         if u == v or any(e[0] == v for e in adj[u]):
+            return
+        # Never bridge a grade-separation window (fake ramp). Tunnel portals
+        # are the one legitimate hop near those boxes — the boxes sit
+        # strictly between the portals, but a portal connector's endpoint
+        # can graze an edge, so T-nodes are exempt.
+        if (
+            u[0] != 'T' and v[0] != 'T'
+            and _crosses_grade_separation(*nodes[u], *nodes[v])
+        ):
             return
         d = _equirect_m(*nodes[u], *nodes[v])
         coords = [
@@ -4244,6 +4367,16 @@ def init_app(app):
             capacity = _num(row.get('capacity'))
             occupied = _num(row.get('occupied'))
             percent = _num(row.get('percent_occupied'))
+            # City counters glitch (Church St. Garage reported -535 occupied
+            # -> "1484 of 949 spaces open"): a count outside [0, capacity]
+            # is a broken sensor, not data — drop the occupancy fields and
+            # let the pin say only what's true (name + capacity).
+            if (
+                occupied is not None
+                and (occupied < 0 or (capacity and occupied > capacity))
+            ):
+                occupied = None
+                percent = None
             props = {
                 'name': row.get('name'),
                 'capacity': int(capacity) if capacity is not None else None,

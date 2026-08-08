@@ -17,7 +17,102 @@ anything.
 - **walk-audit config** moved off env vars onto Meerschaum config (`plugins:walk-audit:{smtp,notify}`). Prod values live in the container volume at `/meerschaum/config/plugins.json` (chmod 600); the `/meerschaum/.env` hack has been **deleted**.
 - `WalkAudit.reports` is empty (the deploy-check row was removed).
 
-### 2026-08-08 latest (eighteenth session, omega) — app v1.16.0+50, map-layers v0.15.0 (DEPLOYED)
+### 2026-08-08 latest (nineteenth session, omega) — app v1.17.0+51, map-layers v0.16.0
+
+Bennett round 4: Furman College Way should route like the trail (car-free
+SRT access between the two roundabouts); direct McHan → Legacy Park still
+crossed onto S Church St where Church rides the embankment (steps said
+Wakefield; the crossing doesn't exist — TIGER digitized it); parking lots as
+connection stop-gaps; trail pref must shape Quiet/Balanced/Direct and live
+under the preview's "More"; dark basemap hides too much detail → light is
+the default theme; assorted layer UX (below). `pytest` 76/76, `flutter
+test` 79/79, analyze clean, seeded 300-trip sweep re-run.
+
+**Backend (map-layers v0.16.0):**
+
+1. **`TRAIL_TIER_STREETS`** — rows whose suffix-stripped name matches
+   (`FURMAN COLLEGE`) are re-categorized `'srt'` at graph build; `_astar`
+   prices by category at query time, so the bias holds for every mode and
+   stress, and `?trail=0` neutralizes it with the trail.
+2. **`GRADE_SEPARATED_ROWS`** (Wakefield, Judson) — the Church St embankment
+   severs the side streets next to the Springer tunnel; matching rows get
+   the vertices inside the window CLIPPED OUT (street survives both sides,
+   the crossing is fiction). Unlike TUNNEL_ROOF_ROWS this splits rather
+   than drops.
+3. **`_crosses_grade_separation` guard in `_add_connector`** — with
+   Wakefield gone, the route escaped via a junction connector: the Church
+   bike lane's chunk end sits 10 m from the tunnel's WEST portal (on the
+   bridge) and got ramped down onto Springer. No junction/stitch connector
+   may bridge a tunnel-roof or grade-separated window now; T-namespaced
+   portals stay exempt.
+4. **Springer CUSTOM_PATHS realigned to the real lot drive** (OSM ways
+   339268048/365924783) and the drawn line now starts at the WEST portal so
+   the shortcuts layer connects to Springer St. New per-entry
+   `route_coords`: what joins the graph (east-of-Church only — surface
+   coords under the bore would re-fuse with Church, the v0.13 lesson) vs
+   the `coords` that draw. "Parking lots as stop-gaps" = keep tracing lot
+   drives into CUSTOM_PATHS; graph-wide OSM `parking_aisle` ingest was
+   scoped (10.2k ways in bounds — needs its own perf pass) and skipped.
+5. **parking-garages endpoint clamps counter glitches** — Church St. Garage
+   reported −535 occupied ("1484 of 949 spaces open"); occupancy outside
+   [0, capacity] now drops the occupancy/availability fields.
+6. walk-audit v0.2.0 grew a `missing-shortcut` category ("Suggest a
+   shortcut (tunnel, path, cut-through)") — rider-suggested shortcuts
+   arrive as ordinary moderated reports; graduate the good ones into
+   CUSTOM_PATHS.
+
+Verified on the LOCAL graph build (live sql:bwg data) pre-deploy:
+McHan → Legacy Park now rides Fred Garrett → University St → Furman College
+Way → SRT at **direct, balanced and quiet** (zero Church steps); McHan →
+Briar (south end) still rides the tunnel + the new lot path; trail=0 direct
+takes Pearl/Cleveland/McDaniel with no impossible turns.
+
+**App (v1.17.0+51):**
+
+7. **Trail pref applies to every stress level** (`_planTrip` sends
+   `trail=0` whenever the pref/override is off) and the planner ("More")
+   always shows the switch — reworded "Prefer the Prisma Health Swamp
+   Rabbit Trail" (Settings toggle matches).
+8. **Light theme is the default** (`ThemeMode.light` initial + load
+   fallback): no keyless dark vector style carries more detail than
+   OpenFreeMap `dark` (liberty/bright/positron are light; fiord failed in
+   v1.13–15), so instead of a worse map the app defaults to the detailed
+   one. "Dark app and dark map" subtitle removed.
+9. **LayerDef grew `fixed` / `advocacy` / `dashed` / `filter` /
+   `lightBaseColor`**:
+   - landmarks + custom-paths are `fixed`: always drawn, no sheet toggle
+     ("Trail landmarks" and "Shortcuts & tunnels" toggles are gone);
+     shortcuts draw DOTTED (`lineDasharray [0.5, 2]`).
+   - **Settings → "Experimental advocacy layers"**: bike-stress, parking
+     garages, downtown parking land use (renamed), VRU ×3, street lights.
+     Opting in adds the toggle to the layers sheet AND switches the layer
+     on (`AppState.setAdvocacyLayer`, persisted `advocacy_layers`); the
+     stress legend only shows while bike-stress has a sheet toggle.
+   - **Crash history → "Vulnerable road users", split three ways** over
+     the same GeoJSON: `vulnerable-heat` (heatmap), `vulnerable-crashes`
+     (circles, `filter killed == 0`), `vulnerable-fatalities` (pins,
+     `filter killed > 0`).
+   - **street-lights readable on light base**: `lightBaseColor #A66A00`
+     replaces the amber when the basemap is light.
+10. **Tap a red/orange stretch → the sheet says why**:
+    `NavRoute.segmentNotes(atM)` (unit-tested) matches the tapped
+    distance against hillRanges (grade % + shade word) and warnRanges
+    (no bike lane / no sidewalk, "drawn dashed red"); rows appear in the
+    route-segment sheet.
+
+Device test (v1.17.0+51): fresh install opens LIGHT; Settings → Dark has no
+subtitle; route drawn → More → trail switch present at every stress, off
+reroutes away from the SRT on Direct too; direct McHan → Legacy Park never
+touches Church (rides Furman College Way + trail); shortcuts layer is a
+dotted line that meets Springer St and follows the lot; landmarks show with
+no toggle; Settings → Experimental advocacy layers → enable Street lights
+(brown dots on light map), VRU heat/crashes/fatalities as three toggles;
+parking garages pins draw and Church St. Garage shows no nonsense count;
+Report → "Suggest a shortcut" category submits; tap an orange stretch of a
+route → sheet explains the grade; tap a dashed-red stretch → sheet names
+the missing infrastructure.
+
+### 2026-08-08 earlier (eighteenth session, omega) — app v1.16.0+50, map-layers v0.15.0 (DEPLOYED)
 
 Bennett round 3: navy abandoned ("too hard to see the bike lanes" — back to
 black); Springer St does NOT meet Church St at grade (it tunnels under, yet

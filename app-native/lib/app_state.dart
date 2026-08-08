@@ -47,6 +47,7 @@ class AppState extends ChangeNotifier {
   static const _kPreferTrail = 'prefer_trail';
   static const _kHighContrast = 'high_contrast';
   static const _kLargeUi = 'large_ui';
+  static const _kAdvocacy = 'advocacy_layers';
   static const _maxRecents = 8;
 
   Set<TravelMode> _modes = {TravelMode.cyclist};
@@ -55,11 +56,17 @@ class AppState extends ChangeNotifier {
   bool _useEbike = false;
   BikeStress _stress = BikeStress.balanced;
   PuckStyle _puckStyle = PuckStyle.arrow;
-  ThemeMode _themeMode = ThemeMode.system;
+  // Light by default: the free dark basemap hides too much detail to be
+  // anyone's default. Dark stays a choice in Settings → Appearance.
+  ThemeMode _themeMode = ThemeMode.light;
   MapBase _mapBase = MapBase.auto;
   bool _preferTrail = true;
   bool _highContrast = false;
   bool _largeUi = false;
+
+  /// Experimental advocacy layers the user has opted into (Settings) —
+  /// only these get a toggle in the layers sheet.
+  Set<String> _advocacy = {};
 
   Set<TravelMode> get modes => _modes;
   bool get roll => _roll;
@@ -132,11 +139,33 @@ class AppState extends ChangeNotifier {
   final Map<String, bool> _overrides = {};
 
   bool layerVisible(LayerDef def) =>
-      def.modes.any(_modes.contains) && (_overrides[def.id] ?? def.defaultOn);
+      def.modes.any(_modes.contains) &&
+      (!def.advocacy || _advocacy.contains(def.id)) &&
+      (def.fixed || (_overrides[def.id] ?? def.defaultOn));
 
-  /// Layers offered in the layers sheet for the current selection.
-  Iterable<LayerDef> get relevantLayers =>
-      layerDefs.where((d) => d.modes.any(_modes.contains));
+  /// Layers offered in the layers sheet for the current selection. Fixed
+  /// layers are always drawn (no toggle); advocacy layers only appear once
+  /// opted into via Settings.
+  Iterable<LayerDef> get relevantLayers => layerDefs.where((d) =>
+      !d.fixed &&
+      d.modes.any(_modes.contains) &&
+      (!d.advocacy || _advocacy.contains(d.id)));
+
+  bool advocacyEnabled(String id) => _advocacy.contains(id);
+
+  /// Opting in also switches the layer on, so the effect is immediate; the
+  /// layers sheet gains its toggle either way.
+  void setAdvocacyLayer(String id, bool on) {
+    if (on == _advocacy.contains(id)) return;
+    if (on) {
+      _advocacy = {..._advocacy, id};
+      _overrides[id] = true;
+    } else {
+      _advocacy = {..._advocacy}..remove(id);
+    }
+    notifyListeners();
+    _save();
+  }
 
   Future<void> load() async {
     try {
@@ -165,7 +194,7 @@ class AppState extends ChangeNotifier {
       final savedTheme = prefs.getString(_kTheme);
       _themeMode = ThemeMode.values.firstWhere(
         (t) => t.name == savedTheme,
-        orElse: () => ThemeMode.system,
+        orElse: () => ThemeMode.light,
       );
       final savedBase = prefs.getString(_kMapBase);
       _mapBase = MapBase.values.firstWhere(
@@ -180,6 +209,7 @@ class AppState extends ChangeNotifier {
       _preferTrail = prefs.getBool(_kPreferTrail) ?? true;
       _highContrast = prefs.getBool(_kHighContrast) ?? false;
       _largeUi = prefs.getBool(_kLargeUi) ?? false;
+      _advocacy = (prefs.getStringList(_kAdvocacy) ?? const []).toSet();
       _recents = [
         for (final s in prefs.getStringList(_kRecents) ?? <String>[])
           Map<String, dynamic>.from(jsonDecode(s) as Map),
@@ -204,6 +234,7 @@ class AppState extends ChangeNotifier {
       await prefs.setBool(_kPreferTrail, _preferTrail);
       await prefs.setBool(_kHighContrast, _highContrast);
       await prefs.setBool(_kLargeUi, _largeUi);
+      await prefs.setStringList(_kAdvocacy, _advocacy.toList());
     } catch (_) {}
   }
 

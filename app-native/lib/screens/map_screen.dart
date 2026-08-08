@@ -429,6 +429,7 @@ class _MapScreenState extends State<MapScreen> {
             iconAllowOverlap: def.id == 'reports',
           ),
           minzoom: def.minZoom > 0 ? def.minZoom : null,
+          filter: def.filter,
           belowLayerId: 'lyr-route-casing',
         );
       } else if (def.isHeatmap) {
@@ -470,11 +471,16 @@ class _MapScreenState extends State<MapScreen> {
           belowLayerId: 'lyr-highlight-line',
         );
       } else if (def.isCircle) {
+        // Some dot colors are tuned for a dark base (streetlight amber) and
+        // vanish on the light map — swap to the layer's light-base color.
+        final darkBase = (mounted &&
+                context.read<AppState>().mapBase == MapBase.satellite) ||
+            (mounted && Theme.of(context).brightness == Brightness.dark);
         await map.addCircleLayer(
           def.id,
           'lyr-${def.id}',
           CircleLayerProperties(
-            circleColor: def.color,
+            circleColor: (!darkBase ? def.lightBaseColor : null) ?? def.color,
             circleRadius: [
               'interpolate', ['linear'], ['zoom'],
               12.0, 1.5,
@@ -484,6 +490,7 @@ class _MapScreenState extends State<MapScreen> {
             circleStrokeWidth: 0.0,
           ),
           minzoom: def.minZoom > 0 ? def.minZoom : null,
+          filter: def.filter,
           belowLayerId: 'lyr-highlight-line',
           // 40k dots with nothing to say — never swallow feature taps.
           enableInteraction: false,
@@ -528,6 +535,9 @@ class _MapScreenState extends State<MapScreen> {
             lineOpacity: opacity,
             lineCap: 'round',
             lineJoin: 'round',
+            // Dotted: unofficial connectors (shortcuts) read differently
+            // from mapped streets.
+            lineDasharray: def.dashed ? [0.5, 2.0] : null,
           ),
           belowLayerId: 'lyr-highlight-line',
         );
@@ -681,12 +691,14 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   /// What the tapped stretch of the route is: the street's name, how far the
-  /// route rides it, its step instruction, and the road-ownership lookup.
+  /// route rides it, its step instruction, why it's shaded red/orange (hill
+  /// grade, missing bike lane or sidewalk), and the road-ownership lookup.
   void _showRouteSegmentInfo(NavRoute route, NavProgress p) {
     final step = route.steps.isEmpty
         ? null
         : route.steps[p.stepIndex.clamp(0, route.steps.length - 1)];
     final name = step?.name ?? 'Unnamed path';
+    final notes = route.segmentNotes(p.traveledM);
     showModalBottomSheet(
       context: context,
       showDragHandle: true,
@@ -704,6 +716,13 @@ class _MapScreenState extends State<MapScreen> {
                       '${formatDistance(step.distanceM)} of this route'
                       '${step.warn != null ? ' · has gaps (dashed red)' : ''}'),
             ),
+            for (final note in notes)
+              ListTile(
+                dense: true,
+                leading: Icon(Icons.warning_amber_rounded,
+                    size: 20, color: warnAccent(ctx)),
+                title: Text(note, style: const TextStyle(fontSize: 13.5)),
+              ),
             if (step != null && step.instruction.isNotEmpty)
               ListTile(
                 dense: true,
@@ -1096,11 +1115,10 @@ class _MapScreenState extends State<MapScreen> {
         stress: state.stressApiName,
         plan: plan,
         alt: alt,
-        // The trail preference only shapes QUIET routes: quiet riding is
-        // where "take the trail even when it's further" is a real choice;
-        // balanced/direct keep the server's stock weighting.
-        trail: state.stress != BikeStress.quiet ||
-            (_tripTrail ?? state.preferTrail),
+        // The trail preference shapes EVERY stress level: direct riders who
+        // prefer the trail deserve the tunnel-and-trail line too (Bennett's
+        // McHan → Legacy Park report). Off prices the SRT like a calm street.
+        trail: _tripTrail ?? state.preferTrail,
       );
       // A newer plan superseded this one while it was in flight.
       if (seq != _planSeq) return;
@@ -2388,8 +2406,8 @@ class _MapScreenState extends State<MapScreen> {
   /// I make it quieter?" without hunting through sheets. Every chip replans
   /// immediately; sized for a gloved thumb on a bike. Stress writes the
   /// durable preference (same control as Settings and the planner). The
-  /// trail preference is NOT a chip here — it only shapes Quiet routes, and
-  /// its toggle lives in the planner ("More") and Settings.
+  /// trail preference lives one tap away under "More" (the planner) and
+  /// applies to every stress level.
   Widget _tripPrefsRow() {
     final state = context.watch<AppState>();
     return Padding(
@@ -2988,7 +3006,10 @@ class _MapScreenState extends State<MapScreen> {
                     if (v && def.live) _refreshLive();
                   },
                 ),
-              if (state.modes.contains(TravelMode.cyclist)) _stressLegend(),
+              // The stress legend only makes sense while its layer has a
+              // toggle here (it's an opt-in advocacy layer now).
+              if (state.relevantLayers.any((d) => d.id == 'bike-stress'))
+                _stressLegend(),
             ],
           ),
         ),

@@ -290,20 +290,20 @@ class _DirectionsSheetState extends State<DirectionsSheet> {
                   value: state.useBcycle,
                   onChanged: state.setUseBcycle,
                 ),
-                // Only shapes Quiet routes, so it only shows with Quiet
-                // selected (the stress control is right below).
-                if (state.stress == BikeStress.quiet)
-                  SwitchListTile(
-                    dense: true,
-                    contentPadding: EdgeInsets.zero,
-                    secondary: const Icon(Icons.cruelty_free),
-                    title: const Text('Prefer trail routes'),
-                    subtitle: const Text(
-                        'Choose routes that ride the Prisma Health Swamp '
-                        'Rabbit Trail, even when a street way is shorter'),
-                    value: _trail,
-                    onChanged: (v) => setState(() => _trail = v),
-                  ),
+                // Applies to Quiet, Balanced AND Direct — this is the quick
+                // settings home of the trail preference ("More" opens here).
+                SwitchListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  secondary: const Icon(Icons.cruelty_free),
+                  title:
+                      const Text('Prefer the Prisma Health Swamp Rabbit Trail'),
+                  subtitle: const Text(
+                      'Choose routes that ride the trail, even when a street '
+                      'way is shorter'),
+                  value: _trail,
+                  onChanged: (v) => setState(() => _trail = v),
+                ),
                 if (state.showsBikeOptions) ...[
                   SwitchListTile(
                     dense: true,

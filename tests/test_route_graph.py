@@ -1067,6 +1067,75 @@ def test_tunnel_roof_rows_are_dropped_at_ingest():
     assert not ml._tunnel_roof(None, roof)
 
 
+def test_grade_separated_rows_are_clipped_at_ingest():
+    """Wakefield St is severed by the Church St embankment: the crossing
+    vertex is clipped out, the street survives on both sides."""
+    part = [
+        [-82.40365, 34.83832],           # west end
+        [-82.4004476, 34.8386591],       # the fake Church crossing node
+        [-82.39855, 34.83865],           # east end (at Briar)
+    ]
+    clipped = ml._clip_grade_separated('WAKEFIELD ST', part)
+    assert clipped == []  # both survivors are single points -> dropped
+    longer = [
+        [-82.40365, 34.83832],
+        [-82.40200, 34.83850],
+        [-82.4004476, 34.8386591],
+        [-82.39950, 34.83866],
+        [-82.39855, 34.83865],
+    ]
+    clipped = ml._clip_grade_separated('Wakefield Street', longer)
+    assert len(clipped) == 2
+    assert clipped[0] == longer[:2]
+    assert clipped[1] == longer[3:]
+    # Other streets pass through untouched.
+    assert ml._clip_grade_separated('BRIAR ST', longer) == [longer]
+    assert ml._clip_grade_separated(None, longer) == [longer]
+
+
+class TestTrailTierStreets(RouteGraphTestCase):
+    """Furman College Way is closed to cars and feeds the SRT: its rows are
+    re-categorized 'srt' at graph build, so every stress level biases onto
+    it like the trail itself."""
+
+    def test_furman_college_way_prices_as_trail(self):
+        a, b = (34.8429, -82.4038), (34.8439, -82.4016)
+        graph = self._graph([
+            (_line(a, b), 'L', 'FURMAN COLLEGE WAY', True),
+            (_line(b, (34.8449, -82.4000)), 'L', 'FURMAN ST', True),
+        ])
+        categories = {
+            e[6]: e[3] for lst in graph['adj'].values() for e in lst
+        }
+        assert categories['FURMAN COLLEGE WAY'] == 'srt'
+        assert categories['FURMAN ST'] == 'L'
+
+
+def test_custom_paths_route_coords_feed_the_graph_not_the_layer():
+    """The Springer entry draws from the west tunnel portal but routes only
+    the east-of-Church stretch (surface coords under the bore would re-fuse
+    with Church St — the v0.13 lesson)."""
+    import json
+    springer = ml.CUSTOM_PATHS[0]
+    assert springer['coords'][0] == [-82.40085, 34.83804]
+    assert springer['route_coords'][0][0] > -82.4004  # east of Church
+    layer = json.loads(ml._build_custom_paths())
+    feature = layer['features'][0]
+    assert feature['geometry']['coordinates'] == springer['coords']
+    assert 'route_coords' not in feature['properties']
+
+
+def test_connectors_never_bridge_a_grade_separation_window():
+    """The Church St bike lane's chunk end sits ~10 m from the tunnel's west
+    portal, ON the bridge — a junction connector there is a fake ramp."""
+    # Inside the Springer tunnel-roof box.
+    assert ml._crosses_grade_separation(34.83805, -82.40078, 34.83803, -82.40089)
+    # Inside the Wakefield window.
+    assert ml._crosses_grade_separation(34.83866, -82.40045, 34.83868, -82.40030)
+    # Well away from every box.
+    assert not ml._crosses_grade_separation(34.8500, -82.3900, 34.8501, -82.3901)
+
+
 def test_gis_rename_says_the_streets_real_name():
     """Fred Garrett St was renamed from Howe St; the county GIS still says
     Howe. Steps, search labels and road-info say the real name."""

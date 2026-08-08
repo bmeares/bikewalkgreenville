@@ -590,6 +590,26 @@ class NavRoute {
         'expect $effort. Steep stretches are shaded orange–red on the map.';
   }
 
+  /// Why the stretch [atM] meters from the start is shaded red/orange: the
+  /// hills and infrastructure gaps covering it (± [slackM], so a tap near a
+  /// boundary still gets the answer). Empty means the stretch is plain
+  /// route-colored and needs no explaining.
+  List<String> segmentNotes(double atM, {double slackM = 30}) {
+    const sevWords = {'mod': 'amber', 'steep': 'orange', 'vsteep': 'red'};
+    return [
+      for (final h in hillRanges())
+        if (atM >= h.startM - slackM && atM <= h.endM + slackM)
+          'Climbs at about ${(h.grade * 100).round()}% grade here — shaded '
+          '${sevWords[h.severity]} on the map.',
+      for (final r in warnRanges)
+        if (r.start >= 0 &&
+            r.end < cumulative.length &&
+            atM >= cumulative[r.start] - slackM &&
+            atM <= cumulative[r.end] + slackM)
+          '${warnStepSentence(r.kind)} — drawn dashed red.',
+    ];
+  }
+
   /// Infrastructure warnings worth surfacing: gaps shorter than [minFt] feet
   /// read as noise — "about 0 ft with no bike lane" helps nobody, and in
   /// Greenville almost every trip crosses a short unmarked block, so a low

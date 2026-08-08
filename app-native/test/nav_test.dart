@@ -105,6 +105,31 @@ void main() {
     expect(step('alight').icon, Icons.pin_drop);
   });
 
+  test('segment notes explain the shading at a tapped distance', () {
+    final f = _feature();
+    final props = f['properties'] as Map<String, dynamic>;
+    // A steep pitch over the first leg, a sidewalk gap over the second.
+    props['elevation_profile'] = [
+      [0.0, 800.0],
+      [100.0, 830.0], // ~9% grade over 100 m -> steep (orange)
+      [405.0, 830.0],
+    ];
+    props['mode'] = 'walk';
+    props['warn_ranges'] = [
+      {'kind': 'no_sidewalk', 'start': 1, 'end': 2, 'distance_m': 222.0},
+    ];
+    final route = NavRoute.fromFeature(f);
+    final onHill = route.segmentNotes(50.0);
+    expect(onHill.single, contains('% grade'));
+    expect(onHill.single, contains('orange'));
+    final onGap = route.segmentNotes(300.0);
+    expect(onGap.single, contains('No sidewalk'));
+    expect(onGap.single, contains('dashed red'));
+    // The flat, sidewalked stretch between them explains nothing.
+    // (hill window ends 100+30; the gap's starts at cumulative[1]-30 ≈ 153)
+    expect(route.segmentNotes(140.0), isEmpty);
+  });
+
   test('bike is the default mode', () {
     final route = NavRoute.fromFeature(_feature());
     expect(route.mode, 'bike');

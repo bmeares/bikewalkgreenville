@@ -40,7 +40,7 @@ import meerschaum as mrsm
 from meerschaum.plugins import api_plugin
 from meerschaum.utils.warnings import warn
 
-__version__ = '0.1.0'
+__version__ = '0.2.0'
 
 CATEGORIES = [
     {'id': 'broken-sidewalk', 'label': 'Broken / uneven sidewalk'},
@@ -50,6 +50,11 @@ CATEGORIES = [
     {'id': 'bike-lane-issue', 'label': 'Bike lane issue (unprotected, blocked, debris)'},
     {'id': 'signal-issue', 'label': 'Signal / crossing button issue'},
     {'id': 'lighting', 'label': 'Poor lighting'},
+    # Rider-suggested shortcuts (tunnels, cut-throughs, paths across parking
+    # lots) — reviewed, then added to map-layers.py's CUSTOM_PATHS so the
+    # router and the shortcuts layer both learn them.
+    {'id': 'missing-shortcut',
+     'label': 'Suggest a shortcut (tunnel, path, cut-through)'},
     {'id': 'other', 'label': 'Other accessibility issue'},
 ]
 CATEGORY_LABELS = {c['id']: c['label'] for c in CATEGORIES}

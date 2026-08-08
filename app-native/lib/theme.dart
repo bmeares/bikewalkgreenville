@@ -195,6 +195,26 @@ class LayerDef {
   /// context instead of competing with the route line.
   final double opacity;
 
+  /// Line layers only: draw dotted (shortcuts — unofficial connectors read
+  /// differently from mapped streets).
+  final bool dashed;
+
+  /// Always drawn when a selected mode includes it; no toggle in the layers
+  /// sheet (landmarks, shortcuts).
+  final bool fixed;
+
+  /// Experimental advocacy layers live behind Settings → Experimental
+  /// advocacy layers; enabling one there adds its toggle to the layers sheet.
+  final bool advocacy;
+
+  /// MapLibre filter expression — lets several layers render different
+  /// slices of the same GeoJSON source (crashes vs fatalities).
+  final dynamic filter;
+
+  /// Circle layers only: color to use over a light basemap when [color] is
+  /// tuned for dark (streetlight amber vanished on white).
+  final String? lightBaseColor;
+
   const LayerDef({
     required this.id,
     required this.label,
@@ -216,6 +236,11 @@ class LayerDef {
     this.pinScale = 1.0,
     this.live = false,
     this.opacity = 0.85,
+    this.dashed = false,
+    this.fixed = false,
+    this.advocacy = false,
+    this.filter,
+    this.lightBaseColor,
   });
 }
 
@@ -235,6 +260,7 @@ const layerDefs = <LayerDef>[
     modes: {TravelMode.cyclist},
     defaultOn: false,
     icon: Icons.speed,
+    advocacy: true,
   ),
   LayerDef(
     id: 'bike-lanes',
@@ -258,7 +284,9 @@ const layerDefs = <LayerDef>[
   ),
   // Curated off-grid connectors (the Springer St tunnel and friends): the
   // routes locals actually ride that no official GIS layer maps. The router
-  // uses them too — this layer is how a rider learns they exist.
+  // uses them too — this layer is how a rider learns they exist. Always
+  // drawn (no toggle), dotted so unofficial connectors read differently
+  // from mapped streets.
   LayerDef(
     id: 'custom-paths',
     label: 'Shortcuts & tunnels',
@@ -268,10 +296,13 @@ const layerDefs = <LayerDef>[
     opacity: 0.75,
     modes: {TravelMode.cyclist, TravelMode.pedestrian},
     icon: Icons.fork_right,
+    fixed: true,
+    dashed: true,
   ),
   // Named spots riders navigate by ("The Paperclip" switchbacks) that no
   // basemap labels. Curated in map-layers.py's LANDMARKS; drawn as text
   // labels, not pins — they name the map, they aren't destinations.
+  // Always shown (no toggle): they're how locals talk about the trail.
   LayerDef(
     id: 'landmarks',
     label: 'Trail landmarks',
@@ -282,6 +313,7 @@ const layerDefs = <LayerDef>[
     icon: Icons.flag,
     // Neighborhood-scale text: at city zoom the label floats on nothing.
     minZoom: 13.5,
+    fixed: true,
   ),
   // One sidewalks layer: the server merges the county lines with the city
   // lines that aren't the same sidewalk digitized twice (heavy overlap in
@@ -388,13 +420,15 @@ const layerDefs = <LayerDef>[
     icon: Icons.garage,
     // No minZoom — ten downtown garages, sparse layer, see bcycle above.
     live: true,
+    advocacy: true,
   ),
   // Land use: what downtown ground is given to cars — roadway pavement
   // (green), surface lots (orange), garages (yellow); mirrors the parking
   // Grafana dashboard's split.
   LayerDef(
     id: 'parking-landuse',
-    label: 'Parking land use',
+    // The pavement inventory only covers downtown — say so in the label.
+    label: 'Downtown parking land use',
     path: '/map-layers/parking-landuse.geojson',
     color: '#8D6E63',
     isFill: true,
@@ -407,32 +441,66 @@ const layerDefs = <LayerDef>[
     modes: {TravelMode.cyclist, TravelMode.pedestrian, TravelMode.transit},
     defaultOn: false,
     icon: Icons.crop_square,
+    advocacy: true,
   ),
-  // Ten years of bike/ped crashes (SCDPS 2014-2024), severity-weighted heat —
-  // deaths burn through a fog of fender-benders. Advocacy context, off by
-  // default. The router prices the same data into every street edge.
+  // Ten years of bike/ped crashes (SCDPS 2014-2024) — "Vulnerable road
+  // users", split three ways over the same source: severity-weighted heat,
+  // the individual crashes, and the fatalities alone. Deaths burn through a
+  // fog of fender-benders. The router prices the same data into every
+  // street edge.
   LayerDef(
-    id: 'vulnerable-crashes',
-    label: 'Crash history (bike/ped)',
+    id: 'vulnerable-heat',
+    label: 'Vulnerable road users — heatmap',
     path: '/map-layers/vulnerable-crashes.geojson',
     color: '#D32F2F',
     isHeatmap: true,
     modes: {TravelMode.cyclist, TravelMode.pedestrian, TravelMode.transit},
     defaultOn: false,
     icon: Icons.local_fire_department,
+    advocacy: true,
+  ),
+  LayerDef(
+    id: 'vulnerable-crashes',
+    label: 'Vulnerable road users — crashes',
+    path: '/map-layers/vulnerable-crashes.geojson',
+    color: '#EF6C00',
+    isCircle: true,
+    // Non-fatal crashes only; the fatalities layer marks the deaths.
+    filter: ['==', ['coalesce', ['get', 'killed'], 0], 0],
+    modes: {TravelMode.cyclist, TravelMode.pedestrian, TravelMode.transit},
+    defaultOn: false,
+    icon: Icons.warning_amber_rounded,
+    minZoom: 11,
+    advocacy: true,
+  ),
+  LayerDef(
+    id: 'vulnerable-fatalities',
+    label: 'Vulnerable road users — fatalities',
+    path: '/map-layers/vulnerable-crashes.geojson',
+    color: '#B71C1C',
+    isPoint: true,
+    filter: ['>', ['coalesce', ['get', 'killed'], 0], 0],
+    modes: {TravelMode.cyclist, TravelMode.pedestrian, TravelMode.transit},
+    defaultOn: false,
+    icon: Icons.dangerous,
+    pinScale: 0.9,
+    advocacy: true,
   ),
   // Duke Energy streetlight poles — planning a ride home after dark. The
-  // router penalizes unlit streets at night with the same data.
+  // router penalizes unlit streets at night with the same data. Amber dots
+  // vanished on the light basemap, hence the darker light-base color.
   LayerDef(
     id: 'street-lights',
     label: 'Street lights',
     path: '/map-layers/street-lights.geojson',
     color: '#FFD54F',
+    lightBaseColor: '#A66A00',
     isCircle: true,
     modes: {TravelMode.cyclist, TravelMode.pedestrian},
     defaultOn: false,
     icon: Icons.lightbulb_outline,
     minZoom: 12,
+    advocacy: true,
   ),
   // Community reports are the point of the app — always on, always drawn.
   LayerDef(
