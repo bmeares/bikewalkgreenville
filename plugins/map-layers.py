@@ -35,7 +35,7 @@ from meerschaum.actions import make_action
 from meerschaum.plugins import api_plugin
 from meerschaum.utils.warnings import info, warn
 
-__version__ = '0.10.0'
+__version__ = '0.11.0'
 
 bwg = mrsm.Plugin('bwg')
 
@@ -911,14 +911,44 @@ SPEED_STRESS_FLOOR = ((45, 'H'), (40, 'MH'), (35, 'M'))
 #: OSM paths — cycleways, foot/bike paths, plazas, and street tunnels (the
 #: Springer St tunnel is `highway=residential` + `tunnel=yes`) — fill the
 #: shortcut gaps no county GIS layer maps, without hand-curating every one
-#: into CUSTOM_PATHS. Fetched from Overpass at graph build, cached on disk
-#: (stale cache beats no data when Overpass 504s, which it does). OSM
-#: sidewalk/crossing fragments are excluded: they duplicate the street grid.
+#: into CUSTOM_PATHS. OSM sidewalk/crossing fragments are excluded: they
+#: duplicate the street grid.
+#:
+#: The data lives in the OSM_PATHS_PIPE (`MapLayers.osm_paths`, synced daily
+#: from Overpass via this plugin's `fetch()` — registered by
+#: projects/osm-paths.yaml), so it is auditable in SQL and its cadence is a
+#: schedule, not a TTL constant. The graph build reads the pipe; a direct
+#: Overpass fetch (disk-cached) remains the fallback for environments where
+#: the pipe has never synced.
 OSM_PATHS_URL = 'https://overpass-api.de/api/interpreter'
 OSM_PATHS_TTL_SECONDS = 7 * 24 * 60 * 60
 OSM_PATHS_TIMEOUT_S = 120
 #: highway= values that are their own car-free surface (category 'path').
 OSM_PATH_HIGHWAYS = ('cycleway', 'path', 'pedestrian', 'footway')
+
+OSM_PATHS_PIPE: mrsm.Pipe = mrsm.Pipe(
+    'plugin:map-layers', 'osm_paths', 'greenville',
+    instance='sql:bwg',
+)
+
+
+def fetch(pipe: mrsm.Pipe, debug: bool = False, **kwargs):
+    """Sync connector for OSM_PATHS_PIPE: Overpass path/tunnel ways as rows
+    keyed by OSM way id, geometry as LINESTRING 4326. Registered + scheduled
+    by projects/osm-paths.yaml."""
+    if pipe.metric_key != 'osm_paths':
+        return []
+    shapely_geometry = mrsm.attempt_import('shapely.geometry', lazy=False)
+    return [
+        {
+            'way_id': e['way_id'],
+            'name': e['name'],
+            'highway': e['highway'],
+            'street': e['street'],
+            'geometry': shapely_geometry.LineString(e['coords']),
+        }
+        for e in _fetch_osm_paths()
+    ]
 
 
 def _stress_floor(category: str | None, speed_mph: float | None) -> str | None:
@@ -955,7 +985,9 @@ def _parse_overpass_paths(data: dict) -> list[dict[str, Any]]:
         if name and 'swamp rabbit' in name.lower():
             continue
         entries.append({
+            'way_id': str(el.get('id') or ''),
             'name': name,
+            'highway': tags.get('highway'),
             'coords': coords,
             # A street tunnel (Springer St) is still a street; only true
             # paths get the car-free 'path' pricing.
@@ -985,11 +1017,48 @@ out geom;'''
     return _parse_overpass_paths(resp.json())
 
 
-def _osm_path_rows(debug: bool = False) -> list[tuple[list, str, str | None, bool]]:
-    """(coords, category, name, has_sidewalk) rows from OSM, disk-cached.
-    Any failure degrades to the stale cache, then to nothing — the graph
-    builds either way."""
+def _osm_path_rows_from_pipe(debug: bool = False) -> list | None:
+    """(coords, category, name, has_sidewalk) rows from the synced
+    OSM_PATHS_PIPE, or None when the pipe is missing/empty (fresh checkout,
+    first boot before the daily job has run)."""
     import json
+    try:
+        if not OSM_PATHS_PIPE.exists(debug=debug):
+            return None
+        schema = OSM_PATHS_PIPE.parameters.get('schema') or 'public'
+        target = OSM_PATHS_PIPE.target
+        df = OSM_PATHS_PIPE.instance_connector.read(
+            f'SELECT ST_AsGeoJSON("geometry") AS "gj", "name", "street" '
+            f'FROM "{schema}"."{target}"',
+            debug=debug,
+        )
+    except Exception as e:
+        warn(f"Could not read the OSM paths pipe ({e}); falling back to Overpass.")
+        return None
+    if df is None or not len(df):
+        return None
+    rows = []
+    for rec in df.to_dict(orient='records'):
+        gj = rec.get('gj')
+        if not gj:
+            continue
+        coords = (json.loads(gj).get('coordinates') or [])
+        if len(coords) < 2:
+            continue
+        name = rec.get('name')
+        name = None if name is None or name != name or not str(name).strip() else str(name)
+        rows.append((coords, ('L' if rec.get('street') else 'path'), name, True))
+    return rows or None
+
+
+def _osm_path_rows(debug: bool = False) -> list[tuple[list, str, str | None, bool]]:
+    """(coords, category, name, has_sidewalk) rows from OSM: the synced pipe
+    first, else a direct disk-cached Overpass fetch. Any failure degrades to
+    the stale cache, then to nothing — the graph builds either way."""
+    import json
+    from_pipe = _osm_path_rows_from_pipe(debug=debug)
+    if from_pipe is not None:
+        return from_pipe
     cache = _osm_paths_cache_file()
     entries = None
     try:

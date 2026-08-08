@@ -31,11 +31,18 @@ and "E Washington St" spoken as the letter E. `flutter analyze` clean,
    street tunnels (`highway=residential|service|…` + `tunnel=yes`; the
    Springer St tunnel is `highway=residential` in OSM, NOT a path) — within
    SEARCH_BOUNDS. ~4.9k ways. True paths route as category `path` (0.4, car-
-   free), street tunnels as `L`. Disk-cached at `<output>/osm-paths.json`
-   (7-day TTL; stale cache beats no data when Overpass 504s; graph builds
-   fine with none). OSM ways named "Swamp Rabbit*" are skipped — the trail is
-   already its own cheaper category. Graph: 37.7k → **44.4k nodes**, build
-   ~16 s → ~20 s. CUSTOM_PATHS stays for anything OSM doesn't know.
+   free), street tunnels as `L`. OSM ways named "Swamp Rabbit*" are skipped —
+   the trail is already its own cheaper category. Graph: 37.7k → **44.4k
+   nodes**, build ~16 s → ~20 s. CUSTOM_PATHS stays for anything OSM doesn't
+   know.
+   **v0.11.0 moved the ETL onto a pipe** (Bennett: auditable + tunable):
+   `Pipe('plugin:map-layers', 'osm_paths', 'greenville')` →
+   `MapLayers.osm_paths` (way_id PK, name, highway, street flag, LINESTRING
+   4326 + GiST), registered by `projects/osm-paths.yaml`, synced daily by
+   the **`osm-paths` job** in `mrsm-api-bwg-1` (first sync verified: 4,873
+   rows). The graph build reads the pipe first; the direct Overpass fetch +
+   `<output>/osm-paths.json` disk cache (7-day TTL) remains only as the
+   fallback for environments where the pipe has never synced.
 2. **Speed limits corroborate PCC stress** (`_stress_floor`): each stress
    segment picks up the posted SPEED of the nearest `county.TRA_STREETCL`
    centerline (nearest to the segment MIDPOINT so side streets don't inherit
