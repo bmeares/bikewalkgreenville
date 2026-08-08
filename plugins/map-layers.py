@@ -4377,8 +4377,10 @@ def init_app(app):
             ):
                 occupied = None
                 percent = None
+            name = row.get('name')
             props = {
-                'name': row.get('name'),
+                # One garage row carries NaN for a name — never serve it.
+                'name': str(name) if name is not None and name == name else None,
                 'capacity': int(capacity) if capacity is not None else None,
                 'occupied': int(occupied) if occupied is not None else None,
                 'percent_occupied': int(percent) if percent is not None else None,
