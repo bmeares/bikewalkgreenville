@@ -17,7 +17,54 @@ anything.
 - **walk-audit config** moved off env vars onto Meerschaum config (`plugins:walk-audit:{smtp,notify}`). Prod values live in the container volume at `/meerschaum/config/plugins.json` (chmod 600); the `/meerschaum/.env` hack has been **deleted**.
 - `WalkAudit.reports` is empty (the deploy-check row was removed).
 
-### 2026-08-08 latest (nineteenth session, omega) — app v1.17.0+51, map-layers v0.16.0
+### 2026-08-10 latest (twentieth session, omega) — Flutter WEB build, bwg-app plugin v0.1.0 (DEPLOYED)
+
+The app now also ships as a Flutter web build, served from prod at
+**https://bwg.mrsm.io/bwg-app/** (embeddable from bikewalkgreenville.org, same
+pattern as Who Owns The Roads — `/dash/bwg-app` is a thin full-viewport iframe
+page via `@web_page`). `flutter test` 79/79, analyze clean, prod curl + headless-
+chromium verified (map, layers, pins all draw; layer GeoJSON loads cross-origin).
+
+1. **`app-native/web/`** added (`flutter create --platforms web .`).
+   `index.html` carries the maplibre-gl JS/CSS `<script>`/`<link>` tags —
+   maplibre_gl_web 0.26.x REQUIRES them (README "Web" section); without them
+   the map is a blank div. All existing plugin deps have web implementations
+   (maplibre_gl_web, geolocator_web, image_picker_for_web,
+   flutter_local_notifications_web) — no code changes were needed.
+2. **Build**: `flutter build web --release --base-href /bwg-app/` → 31 MB
+   `build/web/`. The base-href MUST match the mount path.
+3. **`plugins/bwg-app.py`** (v0.1.0): `@api_plugin` mounts FastAPI
+   `StaticFiles(html=True)` at `/bwg-app` from `<MRSM root>/bwg-app-web/`
+   (skips the mount if the dir is absent, so dev environments don't 500);
+   `@dash_plugin`/`@web_page('bwg-app')` adds the iframe page with
+   `allow="geolocation; camera"`.
+4. **Deploy** (bundle is NOT in git — build/ is ignored; redeploy after each release):
+
+   ```bash
+   cd app-native && flutter build web --release --base-href /bwg-app/ && cd ..
+   rsync -e 'ssh -p 2269' -a --delete app-native/build/web/ meerschaum@mrsm.io:/tmp/bwg-app-web/
+   scp -P 2269 plugins/bwg-app.py meerschaum@mrsm.io:/tmp/
+   ssh -p 2269 meerschaum@mrsm.io \
+     'docker exec mrsm-api-bwg-1 rm -rf /meerschaum/bwg-app-web && \
+      docker cp /tmp/bwg-app-web mrsm-api-bwg-1:/meerschaum/ && \
+      docker cp /tmp/bwg-app.py mrsm-api-bwg-1:/meerschaum/plugins/ && \
+      docker restart mrsm-api-bwg-1'
+   ```
+
+5. Web-specific behavior notes: geolocation needs the HTTPS origin (fine on
+   bwg.mrsm.io) and prompts per-browser; `myLocationRenderMode` /
+   `setAttributionButtonMargins` log "not available in web" (harmless);
+   TTS/notifications degrade gracefully. The Dio client's prod-first base
+   URL is same-origin from `/bwg-app/`, so API calls just work.
+6. **iOS**: possible but not set up — the repo has no `ios/` dir. On a macOS
+   host: `flutter create --platforms ios .` in `app-native/`, add
+   `NSLocationWhenInUseUsageDescription` to Info.plist (maplibre_gl README),
+   then `flutter build ipa` with an Apple signing identity.
+7. `android/gradle.properties` JDK pin updated for the current omega:
+   `org.gradle.java.home=/usr/lib/jvm/java-21-temurin-jdk` (the old
+   `~/sdk/jdk21` path no longer exists).
+
+### 2026-08-08 earlier (nineteenth session, omega) — app v1.17.0+51, map-layers v0.16.0
 
 Bennett round 4: Furman College Way should route like the trail (car-free
 SRT access between the two roundabouts); direct McHan → Legacy Park still
@@ -1207,7 +1254,7 @@ If lost: keystore + passwords in Google Drive "Backup" (search `sra-upload`); SM
 
 ## Toolchain on omega
 
-Flutter `~/flutter-sdk`, Android SDK `~/Android/Sdk` (build-tools 36), **JDK 21 at `~/sdk/jdk21`** — `app-native/android/gradle.properties` pins `org.gradle.java.home=/home/bmeares/sdk/jdk21` (system JDK is 25, which maplibre_gl won't build with). Change that line if the repo moves hosts again.
+Flutter `~/flutter/3.38.7`, Android SDK `~/Android/Sdk` (build-tools 36), **JDK 21 at `/usr/lib/jvm/java-21-temurin-jdk`** — `app-native/android/gradle.properties` pins `org.gradle.java.home` there (system JDK is 25, which maplibre_gl won't build with). Change that line if the repo moves hosts again.
 
 ## Prod deploy procedure
 
