@@ -21,7 +21,7 @@ anything.
 
 The app now also ships as a Flutter web build, served from prod at
 **https://bwg.mrsm.io/bwg-app/** (embeddable from bikewalkgreenville.org, same
-pattern as Who Owns The Roads — `/dash/bwg-app` is a thin full-viewport iframe
+pattern as Who Owns The Roads — `/dash/app` is a thin full-viewport iframe
 page via `@web_page`). `flutter test` 79/79, analyze clean, prod curl + headless-
 chromium verified (map, layers, pins all draw; layer GeoJSON loads cross-origin).
 
@@ -36,7 +36,7 @@ chromium verified (map, layers, pins all draw; layer GeoJSON loads cross-origin)
 3. **`plugins/bwg-app.py`** (v0.1.0): `@api_plugin` mounts FastAPI
    `StaticFiles(html=True)` at `/bwg-app` from `<MRSM root>/bwg-app-web/`
    (skips the mount if the dir is absent, so dev environments don't 500);
-   `@dash_plugin`/`@web_page('bwg-app')` adds the iframe page with
+   `@dash_plugin`/`@web_page('app')` adds the iframe page with
    `allow="geolocation; camera"`.
 4. **Deploy** (bundle is NOT in git — build/ is ignored; redeploy after each release):
 

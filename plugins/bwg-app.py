@@ -14,7 +14,7 @@ Deploy (from the repo root, after building):
     ssh -p 2269 meerschaum@mrsm.io \
       'docker cp /tmp/bwg-app-web mrsm-api-bwg-1:/meerschaum/ && docker restart mrsm-api-bwg-1'
 
-A thin Dash page at `/dash/bwg-app` iframes the app so it can be embedded
+A thin Dash page at `/dash/app` iframes the app so it can be embedded
 from bikewalkgreenville.org exactly like Who Owns The Roads.
 """
 
@@ -41,11 +41,11 @@ def init_app(app):
 
 @dash_plugin
 def init_dash(dash_app):
-    """Add `/dash/bwg-app`: a full-viewport iframe over the static bundle."""
+    """Add `/dash/app`: a full-viewport iframe over the static bundle."""
     import dash.html as html
 
     @web_page(
-        'bwg-app',
+        'app',
         login_required=False,
         skip_navbar=True,
         page_group="Bike Walk Greenville",
