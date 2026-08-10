@@ -128,7 +128,10 @@ class ToolsScreen extends StatelessWidget {
                             dense: true,
                             contentPadding:
                                 const EdgeInsets.only(left: 32, right: 16),
-                            leading: Icon(l.icon, color: brandDark),
+                            // brandOnSurface, not brandDark: dark green on
+                            // navy was near-invisible in dark mode.
+                            leading:
+                                Icon(l.icon, color: brandOnSurface(context)),
                             title: Text(l.title),
                             trailing: const Icon(Icons.open_in_new, size: 18),
                             onTap: () => _open(l.url),
@@ -136,13 +139,17 @@ class ToolsScreen extends StatelessWidget {
                       ],
                     ),
             ),
-          const Padding(
-            padding: EdgeInsets.all(16),
+          Padding(
+            padding: const EdgeInsets.all(16),
             child: Text(
               'Bike Walk Greenville advocates for safe walking and biking in '
               'Greenville, SC. Reports submitted in the app appear on the map '
               'and are reviewed by BWG.',
-              style: TextStyle(color: Colors.black54, fontSize: 13),
+              // Theme-aware: the old Colors.black54 disappeared on navy.
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                fontSize: 13,
+              ),
             ),
           ),
         ],

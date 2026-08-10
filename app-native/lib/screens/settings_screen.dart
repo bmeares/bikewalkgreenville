@@ -55,7 +55,7 @@ class SettingsScreen extends StatelessWidget {
           ),
           SwitchListTile(
             secondary: const Icon(Icons.accessible_forward),
-            title: const Text('I use a wheelchair (roll)'),
+            title: const Text('I use a wheelchair'),
             subtitle: const Text(
                 'Strongly prefers routes with sidewalks and flags the gaps'),
             value: state.roll,
@@ -69,28 +69,76 @@ class SettingsScreen extends StatelessWidget {
             value: state.useBcycle,
             onChanged: state.setUseBcycle,
           ),
+          SwitchListTile(
+            secondary: const Icon(Icons.cruelty_free),
+            title: const Text('Prefer the Prisma Health Swamp Rabbit Trail'),
+            subtitle: const Text(
+                'Routes choose the trail even when a street way is shorter — '
+                'applies to Quiet, Balanced and Direct'),
+            value: state.preferTrail,
+            onChanged: state.setPreferTrail,
+          ),
           const Divider(),
-          _header(context, 'Route warnings'),
-          ListTile(
-            leading: const Icon(Icons.warning_amber_rounded),
-            title: const Text('Smallest gap worth a warning'),
-            subtitle: Text(
-              'Stretches with no bike lane or sidewalk shorter than '
-              '${state.warnFt.round()} ft won\'t show a warning banner.',
+          _header(context, 'Accessibility'),
+          SwitchListTile(
+            secondary: const Icon(Icons.contrast),
+            title: const Text('High contrast'),
+            subtitle: const Text(
+                'Stronger colors and bolder map lines for low vision'),
+            value: state.highContrast,
+            onChanged: state.setHighContrast,
+          ),
+          SwitchListTile(
+            secondary: const Icon(Icons.format_size),
+            title: const Text('Large text & controls'),
+            subtitle: const Text('Scales the whole app up about a third'),
+            value: state.largeUi,
+            onChanged: state.setLargeUi,
+          ),
+          const Divider(),
+          _header(context, 'Appearance'),
+          RadioGroup<ThemeMode>(
+            groupValue: state.themeMode,
+            onChanged: (v) => state.setThemeMode(v!),
+            child: const Column(
+              children: [
+                RadioListTile<ThemeMode>(
+                  value: ThemeMode.system,
+                  secondary: Icon(Icons.brightness_auto),
+                  title: Text('Match device'),
+                  subtitle: Text('Follows your phone\'s light/dark setting'),
+                ),
+                RadioListTile<ThemeMode>(
+                  value: ThemeMode.light,
+                  secondary: Icon(Icons.light_mode),
+                  title: Text('Light'),
+                ),
+                RadioListTile<ThemeMode>(
+                  value: ThemeMode.dark,
+                  secondary: Icon(Icons.dark_mode),
+                  title: Text('Dark'),
+                ),
+              ],
             ),
           ),
+          const Divider(),
+          _header(context, 'Experimental advocacy layers'),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Slider(
-              value: state.warnFt,
-              min: 0,
-              max: 1000,
-              divisions: 20,
-              label: '${state.warnFt.round()} ft',
-              activeColor: brandGreen,
-              onChanged: state.setWarnFt,
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+            child: Text(
+              'Data layers for advocacy work. Turning one on adds its toggle '
+              'to the map\'s layers sheet.',
+              style: Theme.of(context).textTheme.bodySmall,
             ),
           ),
+          for (final def in layerDefs.where((d) => d.advocacy))
+            SwitchListTile(
+              dense: true,
+              secondary: Icon(def.icon, color: hexColor(def.color)),
+              title: Text(def.label),
+              value: state.advocacyEnabled(def.id),
+              onChanged: (v) => state.setAdvocacyLayer(def.id, v),
+            ),
           const Divider(),
           _header(context, 'Navigation'),
           RadioGroup<PuckStyle>(

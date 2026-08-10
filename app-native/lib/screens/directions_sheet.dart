@@ -39,7 +39,11 @@ class DirectionsResult {
   /// `from` or `to` when the user chose "pick on map" instead of searching.
   final String? pickField;
 
-  const DirectionsResult({this.from, this.to, this.pickField});
+  /// Trail preference for THIS trip (null = untouched). The durable default
+  /// stays in Settings.
+  final bool? trail;
+
+  const DirectionsResult({this.from, this.to, this.pickField, this.trail});
 
   bool get isPick => pickField != null;
 }
@@ -54,7 +58,16 @@ class DirectionsSheet extends StatefulWidget {
   final TripEndpoint from;
   final TripEndpoint to;
 
-  const DirectionsSheet({super.key, required this.from, required this.to});
+  /// Trail preference this trip starts from (the per-trip override when one
+  /// is active, else the Settings default).
+  final bool trail;
+
+  const DirectionsSheet({
+    super.key,
+    required this.from,
+    required this.to,
+    this.trail = true,
+  });
 
   @override
   State<DirectionsSheet> createState() => _DirectionsSheetState();
@@ -63,6 +76,7 @@ class DirectionsSheet extends StatefulWidget {
 class _DirectionsSheetState extends State<DirectionsSheet> {
   late TripEndpoint _from = widget.from;
   late TripEndpoint _to = widget.to;
+  late bool _trail = widget.trail;
 
   final _fromCtl = TextEditingController();
   final _toCtl = TextEditingController();
@@ -260,7 +274,7 @@ class _DirectionsSheetState extends State<DirectionsSheet> {
                   dense: true,
                   contentPadding: EdgeInsets.zero,
                   secondary: const Icon(Icons.accessible_forward),
-                  title: const Text('I use a wheelchair (roll)'),
+                  title: const Text('I use a wheelchair'),
                   subtitle: const Text(
                       'Strongly prefers routes with sidewalks and flags the gaps'),
                   value: state.roll,
@@ -275,6 +289,20 @@ class _DirectionsSheetState extends State<DirectionsSheet> {
                       'Walk to a dock, ride a rental, dock it near the end'),
                   value: state.useBcycle,
                   onChanged: state.setUseBcycle,
+                ),
+                // Applies to Quiet, Balanced AND Direct — this is the quick
+                // settings home of the trail preference ("More" opens here).
+                SwitchListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  secondary: const Icon(Icons.cruelty_free),
+                  title:
+                      const Text('Prefer the Prisma Health Swamp Rabbit Trail'),
+                  subtitle: const Text(
+                      'Choose routes that ride the trail, even when a street '
+                      'way is shorter'),
+                  value: _trail,
+                  onChanged: (v) => setState(() => _trail = v),
                 ),
                 if (state.showsBikeOptions) ...[
                   SwitchListTile(
@@ -323,7 +351,8 @@ class _DirectionsSheetState extends State<DirectionsSheet> {
                     onPressed: _ready
                         ? () => Navigator.pop(
                               context,
-                              DirectionsResult(from: _from, to: _to),
+                              DirectionsResult(
+                                  from: _from, to: _to, trail: _trail),
                             )
                         : null,
                   ),
@@ -368,7 +397,10 @@ class _DirectionsSheetState extends State<DirectionsSheet> {
               visualDensity: VisualDensity.compact,
               icon: Icon(Icons.my_location,
                   size: 18,
-                  color: showingMyLocation ? brandGreen : Colors.black45),
+                  // Theme-aware: Colors.black45 vanished on the navy theme.
+                  color: showingMyLocation
+                      ? brandGreen
+                      : Theme.of(context).colorScheme.onSurfaceVariant),
               onPressed: () => _useMyLocation(field),
             ),
             IconButton(
@@ -377,7 +409,8 @@ class _DirectionsSheetState extends State<DirectionsSheet> {
               icon: const Icon(Icons.touch_app_outlined, size: 18),
               onPressed: () => Navigator.pop(
                 context,
-                DirectionsResult(from: _from, to: _to, pickField: field),
+                DirectionsResult(
+                    from: _from, to: _to, pickField: field, trail: _trail),
               ),
             ),
           ],

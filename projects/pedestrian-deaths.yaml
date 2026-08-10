@@ -237,6 +237,11 @@ pipes:
       primary: crash_number
     dtypes:
       geometry: geometry[Point, 4326]
+    indices:
+      # The routing graph build runs a per-segment ST_DWithin against this
+      # table (map-layers.py crash danger scoring) — unindexed it seq-scans
+      # 29k times (~8 min); indexed it is seconds.
+      geometry: geometry
     verify:
       chunk_minutes: 5256000
     sql: |-

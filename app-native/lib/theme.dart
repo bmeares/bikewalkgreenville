@@ -7,6 +7,30 @@ const brandDark = Color(0xFF33470D);
 /// Free, keyless vector basemap (OpenFreeMap, OpenMapTiles schema).
 const basemapStyleUrl = 'https://tiles.openfreemap.org/styles/liberty';
 
+/// OpenFreeMap's dark style. Navy ("fiord") was tried in v1.13–1.15 and
+/// abandoned: the thematic greens (bike lanes especially) sank into the
+/// blue. Black gives the colored line work maximum contrast.
+const basemapStyleDarkUrl = 'https://tiles.openfreemap.org/styles/dark';
+
+/// Esri World Imagery as an inline MapLibre style: keyless raster satellite.
+/// No glyphs/sprites needed — every symbol layer the app adds uses its own
+/// rendered bitmap icons, never text.
+const satelliteStyleJson = '{'
+    '"version":8,"name":"Satellite",'
+    '"sources":{"esri":{"type":"raster",'
+    '"tiles":["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],'
+    '"tileSize":256,"maxzoom":19,'
+    '"attribution":"Esri, Maxar, Earthstar Geographics, GIS User Community"}},'
+    '"layers":[{"id":"esri","type":"raster","source":"esri"}]}';
+
+/// What the map itself is drawn on. `auto` ("Standard") follows the app
+/// theme; satellite is imagery whatever the theme says. `light`/`dark` are
+/// retired — a dark basemap under light chrome (and vice versa) read as a
+/// glitch, so the theme is the single source of light/dark truth — but the
+/// enum values stay so an old persisted pref still parses (AppState migrates
+/// them to `auto` on load).
+enum MapBase { auto, light, dark, satellite }
+
 /// Greenville downtown.
 const homeLat = 34.8526;
 const homeLon = -82.3940;
@@ -130,6 +154,19 @@ class LayerDef {
 
   /// Polygon layers (parking land use) render as translucent fills.
   final bool isFill;
+
+  /// Dense point layers rendered as density heat (crash history) instead of
+  /// per-feature pins.
+  final bool isHeatmap;
+
+  /// Dense point layers rendered as tiny dots (streetlights) — 40k pins
+  /// would be soup, and they carry nothing worth tapping.
+  final bool isCircle;
+
+  /// Point layers drawn as their NAME in text (pre-rendered bitmap — the
+  /// satellite style has no glyphs, so real text layers can't render there).
+  /// Landmarks label the map the way locals talk about it.
+  final bool isLabel;
   final String color; // hex, ignored when colorByStress
   final bool colorByStress;
 
@@ -158,6 +195,26 @@ class LayerDef {
   /// context instead of competing with the route line.
   final double opacity;
 
+  /// Line layers only: draw dotted (shortcuts — unofficial connectors read
+  /// differently from mapped streets).
+  final bool dashed;
+
+  /// Always drawn when a selected mode includes it; no toggle in the layers
+  /// sheet (landmarks, shortcuts).
+  final bool fixed;
+
+  /// Experimental advocacy layers live behind Settings → Experimental
+  /// advocacy layers; enabling one there adds its toggle to the layers sheet.
+  final bool advocacy;
+
+  /// MapLibre filter expression — lets several layers render different
+  /// slices of the same GeoJSON source (crashes vs fatalities).
+  final dynamic filter;
+
+  /// Circle layers only: color to use over a light basemap when [color] is
+  /// tuned for dark (streetlight amber vanished on white).
+  final String? lightBaseColor;
+
   const LayerDef({
     required this.id,
     required this.label,
@@ -166,6 +223,9 @@ class LayerDef {
     required this.modes,
     this.isPoint = false,
     this.isFill = false,
+    this.isHeatmap = false,
+    this.isCircle = false,
+    this.isLabel = false,
     this.colorByStress = false,
     this.matchProp,
     this.matchColors,
@@ -176,6 +236,11 @@ class LayerDef {
     this.pinScale = 1.0,
     this.live = false,
     this.opacity = 0.85,
+    this.dashed = false,
+    this.fixed = false,
+    this.advocacy = false,
+    this.filter,
+    this.lightBaseColor,
   });
 }
 
@@ -195,6 +260,7 @@ const layerDefs = <LayerDef>[
     modes: {TravelMode.cyclist},
     defaultOn: false,
     icon: Icons.speed,
+    advocacy: true,
   ),
   LayerDef(
     id: 'bike-lanes',
@@ -216,6 +282,39 @@ const layerDefs = <LayerDef>[
     modes: {TravelMode.cyclist, TravelMode.pedestrian},
     icon: Icons.cruelty_free, // Material's rabbit
   ),
+  // Curated off-grid connectors (the Springer St tunnel and friends): the
+  // routes locals actually ride that no official GIS layer maps. The router
+  // uses them too — this layer is how a rider learns they exist. Always
+  // drawn (no toggle), dotted so unofficial connectors read differently
+  // from mapped streets.
+  LayerDef(
+    id: 'custom-paths',
+    label: 'Shortcuts & tunnels',
+    path: '/map-layers/custom-paths.geojson',
+    color: '#AD1457',
+    width: 3.0,
+    opacity: 0.75,
+    modes: {TravelMode.cyclist, TravelMode.pedestrian},
+    icon: Icons.fork_right,
+    fixed: true,
+    dashed: true,
+  ),
+  // Named spots riders navigate by ("The Paperclip" switchbacks) that no
+  // basemap labels. Curated in map-layers.py's LANDMARKS; drawn as text
+  // labels, not pins — they name the map, they aren't destinations.
+  // Always shown (no toggle): they're how locals talk about the trail.
+  LayerDef(
+    id: 'landmarks',
+    label: 'Trail landmarks',
+    path: '/map-layers/landmarks.geojson',
+    color: '#5D4037',
+    isLabel: true,
+    modes: {TravelMode.cyclist, TravelMode.pedestrian},
+    icon: Icons.flag,
+    // Neighborhood-scale text: at city zoom the label floats on nothing.
+    minZoom: 13.5,
+    fixed: true,
+  ),
   // One sidewalks layer: the server merges the county lines with the city
   // lines that aren't the same sidewalk digitized twice (heavy overlap in
   // city limits made two separate toggles meaningless).
@@ -226,8 +325,11 @@ const layerDefs = <LayerDef>[
     label: 'Sidewalks',
     path: '/map-layers/sidewalks.geojson',
     color: '#7BAFDE',
-    width: 1.8,
-    opacity: 0.5,
+    // Wide enough to read at a glance (low-vision feedback: 1.8 px hairlines
+    // vanished, especially over satellite imagery) while the lighter blue +
+    // sub-route opacity keep it context rather than competition.
+    width: 3.0,
+    opacity: 0.65,
     modes: {TravelMode.pedestrian},
     icon: Icons.directions_walk,
   ),
@@ -318,13 +420,15 @@ const layerDefs = <LayerDef>[
     icon: Icons.garage,
     // No minZoom — ten downtown garages, sparse layer, see bcycle above.
     live: true,
+    advocacy: true,
   ),
   // Land use: what downtown ground is given to cars — roadway pavement
   // (green), surface lots (orange), garages (yellow); mirrors the parking
   // Grafana dashboard's split.
   LayerDef(
     id: 'parking-landuse',
-    label: 'Parking land use',
+    // The pavement inventory only covers downtown — say so in the label.
+    label: 'Downtown parking land use',
     path: '/map-layers/parking-landuse.geojson',
     color: '#8D6E63',
     isFill: true,
@@ -337,6 +441,66 @@ const layerDefs = <LayerDef>[
     modes: {TravelMode.cyclist, TravelMode.pedestrian, TravelMode.transit},
     defaultOn: false,
     icon: Icons.crop_square,
+    advocacy: true,
+  ),
+  // Ten years of bike/ped crashes (SCDPS 2014-2024) — "Vulnerable road
+  // users", split three ways over the same source: severity-weighted heat,
+  // the individual crashes, and the fatalities alone. Deaths burn through a
+  // fog of fender-benders. The router prices the same data into every
+  // street edge.
+  LayerDef(
+    id: 'vulnerable-heat',
+    label: 'Vulnerable road users — heatmap',
+    path: '/map-layers/vulnerable-crashes.geojson',
+    color: '#D32F2F',
+    isHeatmap: true,
+    modes: {TravelMode.cyclist, TravelMode.pedestrian, TravelMode.transit},
+    defaultOn: false,
+    icon: Icons.local_fire_department,
+    advocacy: true,
+  ),
+  LayerDef(
+    id: 'vulnerable-crashes',
+    label: 'Vulnerable road users — crashes',
+    path: '/map-layers/vulnerable-crashes.geojson',
+    color: '#EF6C00',
+    isCircle: true,
+    // Non-fatal crashes only; the fatalities layer marks the deaths.
+    filter: ['==', ['coalesce', ['get', 'killed'], 0], 0],
+    modes: {TravelMode.cyclist, TravelMode.pedestrian, TravelMode.transit},
+    defaultOn: false,
+    icon: Icons.warning_amber_rounded,
+    minZoom: 11,
+    advocacy: true,
+  ),
+  LayerDef(
+    id: 'vulnerable-fatalities',
+    label: 'Vulnerable road users — fatalities',
+    path: '/map-layers/vulnerable-crashes.geojson',
+    color: '#B71C1C',
+    isPoint: true,
+    filter: ['>', ['coalesce', ['get', 'killed'], 0], 0],
+    modes: {TravelMode.cyclist, TravelMode.pedestrian, TravelMode.transit},
+    defaultOn: false,
+    icon: Icons.dangerous,
+    pinScale: 0.9,
+    advocacy: true,
+  ),
+  // Duke Energy streetlight poles — planning a ride home after dark. The
+  // router penalizes unlit streets at night with the same data. Amber dots
+  // vanished on the light basemap, hence the darker light-base color.
+  LayerDef(
+    id: 'street-lights',
+    label: 'Street lights',
+    path: '/map-layers/street-lights.geojson',
+    color: '#FFD54F',
+    lightBaseColor: '#A66A00',
+    isCircle: true,
+    modes: {TravelMode.cyclist, TravelMode.pedestrian},
+    defaultOn: false,
+    icon: Icons.lightbulb_outline,
+    minZoom: 12,
+    advocacy: true,
   ),
   // Community reports are the point of the app — always on, always drawn.
   LayerDef(
@@ -355,8 +519,15 @@ const layerDefs = <LayerDef>[
 Color hexColor(String hex) =>
     Color(int.parse('ff${hex.replaceFirst('#', '')}', radix: 16));
 
-ThemeData buildTheme() => ThemeData(
-      colorScheme: ColorScheme.fromSeed(seedColor: brandGreen),
+ThemeData buildTheme({bool highContrast = false}) => ThemeData(
+      colorScheme: ColorScheme.fromSeed(seedColor: brandGreen).copyWith(
+        // High contrast: ink-black text and true-white cards instead of the
+        // seeded scheme's soft greys.
+        onSurface: highContrast ? Colors.black : null,
+        onSurfaceVariant: highContrast ? const Color(0xFF1F2937) : null,
+        surface: highContrast ? Colors.white : null,
+        outline: highContrast ? const Color(0xFF4B5563) : null,
+      ),
       useMaterial3: true,
       // Floating, so toasts ride above the system navigation bar instead of
       // hiding behind 3-button nav.
@@ -364,6 +535,62 @@ ThemeData buildTheme() => ThemeData(
         behavior: SnackBarBehavior.floating,
       ),
     );
+
+// Dark theme: the M3 seeded near-black surfaces, as before the navy
+// experiment (v1.13–1.15) — navy swallowed the thematic greens. High
+// contrast pushes to true black with white inks.
+/// The leaf green that carries the brand on dark surfaces (brandDark
+/// disappears on them). Also brandOnSurface's dark value.
+const _leafOnDark = Color(0xFFB2D488);
+
+ThemeData buildDarkTheme({bool highContrast = false}) {
+  var scheme = ColorScheme.fromSeed(
+    seedColor: brandGreen,
+    brightness: Brightness.dark,
+  );
+  if (highContrast) {
+    scheme = scheme.copyWith(
+      primary: const Color(0xFFCDEC9D),
+      onPrimary: const Color(0xFF16230A),
+      surface: Colors.black,
+      surfaceContainerLowest: Colors.black,
+      surfaceContainerLow: const Color(0xFF121212),
+      surfaceContainer: const Color(0xFF1A1A1A),
+      surfaceContainerHigh: const Color(0xFF242424),
+      surfaceContainerHighest: const Color(0xFF2E2E2E),
+      onSurface: Colors.white,
+      onSurfaceVariant: const Color(0xFFE4E4E4),
+      outline: const Color(0xFFA8A8A8),
+    );
+  }
+  return ThemeData(
+    colorScheme: scheme,
+    scaffoldBackgroundColor: scheme.surface,
+    useMaterial3: true,
+    snackBarTheme: const SnackBarThemeData(
+      behavior: SnackBarBehavior.floating,
+    ),
+  );
+}
+
+/// Warning banner palette that reads on both themes: cream card with brown
+/// text in light mode, deep amber-brown card with light amber text in dark.
+Color warnBg(BuildContext c) => Theme.of(c).brightness == Brightness.dark
+    ? const Color(0xFF3E2A12)
+    : const Color(0xFFFFF3E0);
+
+Color warnFg(BuildContext c) => Theme.of(c).brightness == Brightness.dark
+    ? const Color(0xFFFFCC80)
+    : const Color(0xFF6D3B00);
+
+Color warnAccent(BuildContext c) => Theme.of(c).brightness == Brightness.dark
+    ? const Color(0xFFFFB74D)
+    : const Color(0xFFE65100);
+
+/// The brand green that reads on the current surface: full-dark line work
+/// (brandDark) disappears on a dark card, so dark mode gets a lighter leaf.
+Color brandOnSurface(BuildContext c) =>
+    Theme.of(c).brightness == Brightness.dark ? _leafOnDark : brandDark;
 
 void toast(BuildContext context, String msg) {
   ScaffoldMessenger.of(context)

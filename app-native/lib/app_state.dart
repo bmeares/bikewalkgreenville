@@ -41,8 +41,13 @@ class AppState extends ChangeNotifier {
   static const _kEbike = 'ebike';
   static const _kStress = 'stress';
   static const _kRecents = 'recent_searches';
-  static const _kWarnFt = 'warn_ft';
   static const _kPuck = 'puck_style';
+  static const _kTheme = 'theme_mode';
+  static const _kMapBase = 'map_base';
+  static const _kPreferTrail = 'prefer_trail';
+  static const _kHighContrast = 'high_contrast';
+  static const _kLargeUi = 'large_ui';
+  static const _kAdvocacy = 'advocacy_layers';
   static const _maxRecents = 8;
 
   Set<TravelMode> _modes = {TravelMode.cyclist};
@@ -50,8 +55,18 @@ class AppState extends ChangeNotifier {
   bool _useBcycle = false;
   bool _useEbike = false;
   BikeStress _stress = BikeStress.balanced;
-  double _warnFt = 200;
   PuckStyle _puckStyle = PuckStyle.arrow;
+  // Light by default: the free dark basemap hides too much detail to be
+  // anyone's default. Dark stays a choice in Settings → Appearance.
+  ThemeMode _themeMode = ThemeMode.light;
+  MapBase _mapBase = MapBase.auto;
+  bool _preferTrail = true;
+  bool _highContrast = false;
+  bool _largeUi = false;
+
+  /// Experimental advocacy layers the user has opted into (Settings) —
+  /// only these get a toggle in the layers sheet.
+  Set<String> _advocacy = {};
 
   Set<TravelMode> get modes => _modes;
   bool get roll => _roll;
@@ -61,9 +76,25 @@ class AppState extends ChangeNotifier {
 
   /// Gaps shorter than this (feet of missing bike lane / sidewalk) don't earn
   /// a warning banner. Adjustable in Settings.
-  double get warnFt => _warnFt;
 
   PuckStyle get puckStyle => _puckStyle;
+
+  /// Light / dark / follow-the-device. Drives both the Material theme and
+  /// (via [MapBase.auto]) which basemap style the map renders.
+  ThemeMode get themeMode => _themeMode;
+
+  /// The map's own base: follow the theme, force light/dark, or satellite.
+  MapBase get mapBase => _mapBase;
+
+  /// Bias routes onto the Prisma Health Swamp Rabbit Trail (the default).
+  /// Off sends `trail=0` and the trail prices like any calm street.
+  bool get preferTrail => _preferTrail;
+
+  /// Low-vision support: stronger text/surface contrast and bolder map lines.
+  bool get highContrast => _highContrast;
+
+  /// Low-vision support: larger text and controls throughout.
+  bool get largeUi => _largeUi;
 
   /// `stress=` query value for `/map-layers/route`.
   String get stressApiName => _stress.name;
@@ -108,11 +139,33 @@ class AppState extends ChangeNotifier {
   final Map<String, bool> _overrides = {};
 
   bool layerVisible(LayerDef def) =>
-      def.modes.any(_modes.contains) && (_overrides[def.id] ?? def.defaultOn);
+      def.modes.any(_modes.contains) &&
+      (!def.advocacy || _advocacy.contains(def.id)) &&
+      (def.fixed || (_overrides[def.id] ?? def.defaultOn));
 
-  /// Layers offered in the layers sheet for the current selection.
-  Iterable<LayerDef> get relevantLayers =>
-      layerDefs.where((d) => d.modes.any(_modes.contains));
+  /// Layers offered in the layers sheet for the current selection. Fixed
+  /// layers are always drawn (no toggle); advocacy layers only appear once
+  /// opted into via Settings.
+  Iterable<LayerDef> get relevantLayers => layerDefs.where((d) =>
+      !d.fixed &&
+      d.modes.any(_modes.contains) &&
+      (!d.advocacy || _advocacy.contains(d.id)));
+
+  bool advocacyEnabled(String id) => _advocacy.contains(id);
+
+  /// Opting in also switches the layer on, so the effect is immediate; the
+  /// layers sheet gains its toggle either way.
+  void setAdvocacyLayer(String id, bool on) {
+    if (on == _advocacy.contains(id)) return;
+    if (on) {
+      _advocacy = {..._advocacy, id};
+      _overrides[id] = true;
+    } else {
+      _advocacy = {..._advocacy}..remove(id);
+    }
+    notifyListeners();
+    _save();
+  }
 
   Future<void> load() async {
     try {
@@ -133,12 +186,30 @@ class AppState extends ChangeNotifier {
         (s) => s.name == savedStress,
         orElse: () => BikeStress.balanced,
       );
-      _warnFt = prefs.getDouble(_kWarnFt) ?? 200;
       final savedPuck = prefs.getString(_kPuck);
       _puckStyle = PuckStyle.values.firstWhere(
         (p) => p.name == savedPuck,
         orElse: () => PuckStyle.arrow,
       );
+      final savedTheme = prefs.getString(_kTheme);
+      _themeMode = ThemeMode.values.firstWhere(
+        (t) => t.name == savedTheme,
+        orElse: () => ThemeMode.light,
+      );
+      final savedBase = prefs.getString(_kMapBase);
+      _mapBase = MapBase.values.firstWhere(
+        (b) => b.name == savedBase,
+        orElse: () => MapBase.auto,
+      );
+      // Forced light/dark bases are retired (a dark map under light chrome
+      // read as a glitch); old persisted picks fold back into follow-theme.
+      if (_mapBase == MapBase.light || _mapBase == MapBase.dark) {
+        _mapBase = MapBase.auto;
+      }
+      _preferTrail = prefs.getBool(_kPreferTrail) ?? true;
+      _highContrast = prefs.getBool(_kHighContrast) ?? false;
+      _largeUi = prefs.getBool(_kLargeUi) ?? false;
+      _advocacy = (prefs.getStringList(_kAdvocacy) ?? const []).toSet();
       _recents = [
         for (final s in prefs.getStringList(_kRecents) ?? <String>[])
           Map<String, dynamic>.from(jsonDecode(s) as Map),
@@ -157,8 +228,13 @@ class AppState extends ChangeNotifier {
       await prefs.setBool(_kBcycle, _useBcycle);
       await prefs.setBool(_kEbike, _useEbike);
       await prefs.setString(_kStress, _stress.name);
-      await prefs.setDouble(_kWarnFt, _warnFt);
       await prefs.setString(_kPuck, _puckStyle.name);
+      await prefs.setString(_kTheme, _themeMode.name);
+      await prefs.setString(_kMapBase, _mapBase.name);
+      await prefs.setBool(_kPreferTrail, _preferTrail);
+      await prefs.setBool(_kHighContrast, _highContrast);
+      await prefs.setBool(_kLargeUi, _largeUi);
+      await prefs.setStringList(_kAdvocacy, _advocacy.toList());
     } catch (_) {}
   }
 
@@ -250,16 +326,44 @@ class AppState extends ChangeNotifier {
     _save();
   }
 
-  void setWarnFt(double value) {
-    if (value == _warnFt) return;
-    _warnFt = value;
+  void setPuckStyle(PuckStyle value) {
+    if (value == _puckStyle) return;
+    _puckStyle = value;
     notifyListeners();
     _save();
   }
 
-  void setPuckStyle(PuckStyle value) {
-    if (value == _puckStyle) return;
-    _puckStyle = value;
+  void setThemeMode(ThemeMode value) {
+    if (value == _themeMode) return;
+    _themeMode = value;
+    notifyListeners();
+    _save();
+  }
+
+  void setMapBase(MapBase value) {
+    if (value == _mapBase) return;
+    _mapBase = value;
+    notifyListeners();
+    _save();
+  }
+
+  void setPreferTrail(bool value) {
+    if (value == _preferTrail) return;
+    _preferTrail = value;
+    notifyListeners();
+    _save();
+  }
+
+  void setHighContrast(bool value) {
+    if (value == _highContrast) return;
+    _highContrast = value;
+    notifyListeners();
+    _save();
+  }
+
+  void setLargeUi(bool value) {
+    if (value == _largeUi) return;
+    _largeUi = value;
     notifyListeners();
     _save();
   }

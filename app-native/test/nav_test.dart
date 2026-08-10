@@ -105,6 +105,31 @@ void main() {
     expect(step('alight').icon, Icons.pin_drop);
   });
 
+  test('segment notes explain the shading at a tapped distance', () {
+    final f = _feature();
+    final props = f['properties'] as Map<String, dynamic>;
+    // A steep pitch over the first leg, a sidewalk gap over the second.
+    props['elevation_profile'] = [
+      [0.0, 800.0],
+      [100.0, 830.0], // ~9% grade over 100 m -> steep (orange)
+      [405.0, 830.0],
+    ];
+    props['mode'] = 'walk';
+    props['warn_ranges'] = [
+      {'kind': 'no_sidewalk', 'start': 1, 'end': 2, 'distance_m': 222.0},
+    ];
+    final route = NavRoute.fromFeature(f);
+    final onHill = route.segmentNotes(50.0);
+    expect(onHill.single, contains('% grade'));
+    expect(onHill.single, contains('orange'));
+    final onGap = route.segmentNotes(300.0);
+    expect(onGap.single, contains('No sidewalk'));
+    expect(onGap.single, contains('dashed red'));
+    // The flat, sidewalked stretch between them explains nothing.
+    // (hill window ends 100+30; the gap's starts at cumulative[1]-30 ≈ 153)
+    expect(route.segmentNotes(140.0), isEmpty);
+  });
+
   test('bike is the default mode', () {
     final route = NavRoute.fromFeature(_feature());
     expect(route.mode, 'bike');
@@ -346,6 +371,20 @@ void main() {
       // Threshold 0 shows everything.
       expect(route.visibleWarnings(0).length, 3);
     });
+
+    test('the default threshold is 1000 ft — a 300 m gap is not a hazard', () {
+      final f = _feature();
+      final props = f['properties'] as Map<String, dynamic>;
+      props['warnings'] = [
+        // 300 m ≈ 984 ft: just under the bar, so it stays quiet.
+        {'kind': 'no_bike_lane', 'distance_m': 300.0, 'label': '', 'message': 'short'},
+        {'kind': 'no_bike_lane', 'distance_m': 400.0, 'label': '', 'message': 'long'},
+        {'kind': 'steep', 'distance_m': 10.0, 'label': '', 'message': 'steep'},
+      ];
+      expect(warnMinFt, 1000.0);
+      expect(NavRoute.fromFeature(f).visibleWarnings().map((w) => w.message),
+          ['long', 'steep']);
+    });
   });
 
   group('per-mode route coloring', () {
@@ -535,6 +574,167 @@ void main() {
       expect(warnStepPhrase('something_new'), isNot(contains('bike lane')));
       expect(warnStepPhrase('something_new'), isNot(contains('sidewalk')));
       expect(warnStepSentence(null), isNot(contains('bike lane')));
+    });
+  });
+
+  group('RerouteGovernor', () {
+    final t0 = DateTime(2026, 1, 1, 12);
+    DateTime at(int seconds) => t0.add(Duration(seconds: seconds));
+
+    test('three off-route fixes trigger one announced reroute', () {
+      final g = RerouteGovernor();
+      expect(g.onFix(60, at(0)), RerouteDecision.none);
+      expect(g.onFix(60, at(1)), RerouteDecision.none);
+      expect(g.onFix(60, at(2)), RerouteDecision.announce);
+    });
+
+    test('on-route fixes never trigger', () {
+      final g = RerouteGovernor();
+      for (var i = 0; i < 20; i++) {
+        expect(g.onFix(10, at(i)), RerouteDecision.none);
+      }
+    });
+
+    test('heading back toward the route holds the reroute', () {
+      final g = RerouteGovernor();
+      // Off-route but closing distance every fix: the rider is rejoining.
+      for (final (i, d) in const [90.0, 80.0, 70.0, 60.0, 55.0].indexed) {
+        expect(g.onFix(d, at(i)), RerouteDecision.none,
+            reason: 'fix $i at $d m, approaching');
+      }
+    });
+
+    test('a repeat reroute in the same spell is silent and backed off', () {
+      final g = RerouteGovernor();
+      var s = 0;
+      expect(g.onFix(60, at(s++)), RerouteDecision.none);
+      expect(g.onFix(60, at(s++)), RerouteDecision.none);
+      expect(g.onFix(60, at(s++)), RerouteDecision.announce);
+      // Still off-route (the Springer St tunnel): within the 15 s cooldown
+      // nothing happens no matter how many fixes accumulate.
+      for (; s < 17; s++) {
+        expect(g.onFix(60, at(s)), RerouteDecision.none,
+            reason: 'fix at ${s}s is inside the first cooldown');
+      }
+      // Past the cooldown: recalculate, but silently.
+      expect(g.onFix(60, at(19)), RerouteDecision.silent);
+    });
+
+    test('the third reroute of a spell says it will stay quiet', () {
+      final g = RerouteGovernor();
+      var t = 0;
+      RerouteDecision drive() {
+        // Feed off-route fixes until the governor acts.
+        for (var i = 0; i < 400; i++) {
+          final d = g.onFix(60, at(t++));
+          if (d != RerouteDecision.none) return d;
+        }
+        fail('governor never acted');
+      }
+
+      expect(drive(), RerouteDecision.announce);
+      expect(drive(), RerouteDecision.silent);
+      expect(drive(), RerouteDecision.quietNotice);
+      expect(drive(), RerouteDecision.silent);
+    });
+
+    test('a short on-route blip does not reset the backoff', () {
+      final g = RerouteGovernor();
+      var t = 0;
+      for (var i = 0; i < 3; i++) {
+        g.onFix(60, at(t++));
+      }
+      expect(g.spellReroutes, 1);
+      // A fresh reroute passes through the rider for a few seconds…
+      for (var i = 0; i < 5; i++) {
+        expect(g.onFix(5, at(t++)), RerouteDecision.none);
+      }
+      // …then they diverge again: still the same spell, so still silent.
+      RerouteDecision d = RerouteDecision.none;
+      for (var i = 0; i < 60 && d == RerouteDecision.none; i++) {
+        d = g.onFix(60, at(t++));
+      }
+      expect(d, RerouteDecision.silent);
+    });
+
+    test('a sustained return to the route ends the spell', () {
+      final g = RerouteGovernor();
+      var t = 0;
+      for (var i = 0; i < 3; i++) {
+        g.onFix(60, at(t++));
+      }
+      expect(g.spellReroutes, 1);
+      for (var i = 0; i < RerouteGovernor.onRouteResetFixes; i++) {
+        g.onFix(5, at(t++));
+      }
+      // Next divergence is a brand-new spell: announced again.
+      var d = RerouteDecision.none;
+      for (var i = 0; i < 10 && d == RerouteDecision.none; i++) {
+        d = g.onFix(60, at(t++));
+      }
+      expect(d, RerouteDecision.announce);
+    });
+
+    test('cooldowns escalate and cap', () {
+      expect(RerouteGovernor.cooldownSeconds(1), 15);
+      expect(RerouteGovernor.cooldownSeconds(2), 30);
+      expect(RerouteGovernor.cooldownSeconds(3), 60);
+      expect(RerouteGovernor.cooldownSeconds(4), 120);
+      expect(RerouteGovernor.cooldownSeconds(8), 120);
+    });
+  });
+
+  group('spokenText (what the voice says)', () {
+    test('cardinal prefixes expand', () {
+      expect(spokenText('Turn left onto E Washington St'),
+          'Turn left onto East Washington Street');
+      expect(spokenText('Continue on N Main St'),
+          'Continue on North Main Street');
+      expect(spokenText('Turn right onto SW Court St'),
+          'Turn right onto Southwest Court Street');
+      // Titleized two-letter combos ("Ne" from the server's .title()).
+      expect(spokenText('Head east on Ne Main St'),
+          'Head east on Northeast Main Street');
+    });
+
+    test('street-type suffixes expand', () {
+      expect(spokenText('Turn left onto Pete Hollis Blvd'),
+          'Turn left onto Pete Hollis Boulevard');
+      expect(spokenText('Bear right onto W Faris Rd'),
+          'Bear right onto West Faris Road');
+      expect(spokenText('Continue onto Cedar Lane Rd'),
+          'Continue onto Cedar Lane Road');
+      expect(spokenText('Turn right onto Laurens Hwy'),
+          'Turn right onto Laurens Highway');
+    });
+
+    test('St means Saint before a name, Street otherwise', () {
+      expect(spokenText('Turn left onto St Francis Dr'),
+          'Turn left onto Saint Francis Drive');
+      // Followed by a lowercase word: still Street.
+      expect(spokenText('Bear left onto Springer St tunnel path'),
+          'Bear left onto Springer Street tunnel path');
+      // Followed by another suffix abbreviation: still Street.
+      expect(spokenText('Continue on E North St Ext'),
+          'Continue on East North Street Extension');
+      // Trailing punctuation ends the name.
+      expect(spokenText('Turn left onto E Washington St, then turn right'),
+          'Turn left onto East Washington Street, then turn right');
+    });
+
+    test('distance units expand', () {
+      expect(spokenText('In 400 ft, turn left onto E Stone Ave'),
+          'In 400 feet, turn left onto East Stone Avenue');
+      expect(spokenText('In 0.6 mi, make a U-turn onto Dunbar St'),
+          'In 0.6 miles, make a U-turn onto Dunbar Street');
+    });
+
+    test('ordinary words are left alone', () {
+      expect(spokenText('Arrive at your destination'),
+          'Arrive at your destination');
+      expect(spokenText('Head northeast on Swamp Rabbit Trail'),
+          'Head northeast on Swamp Rabbit Trail');
+      expect(spokenText('You have arrived.'), 'You have arrived.');
     });
   });
 }

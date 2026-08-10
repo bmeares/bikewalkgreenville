@@ -137,7 +137,11 @@ class WarnRange {
       );
 }
 
-/// One kind of gap, totalled across the route — what the banner says.
+/// Shortest infrastructure gap worth telling a rider about, in feet. A block
+/// or two of missing bike lane is normal here; a fifth of a mile is a decision.
+const warnMinFt = 1000.0;
+
+/// One kind of gap, totalled across the route — what the hazards sheet says.
 class RouteWarning {
   final String kind;
   final double distanceM;
@@ -586,10 +590,31 @@ class NavRoute {
         'expect $effort. Steep stretches are shaded orange–red on the map.';
   }
 
-  /// Infrastructure warnings worth the banner: gaps shorter than [minFt] feet
-  /// (default 200 in Settings) read as noise — "about 0 ft with no bike lane"
-  /// helps nobody. Steep warnings always show.
-  List<RouteWarning> visibleWarnings(double minFt) => [
+  /// Why the stretch [atM] meters from the start is shaded red/orange: the
+  /// hills and infrastructure gaps covering it (± [slackM], so a tap near a
+  /// boundary still gets the answer). Empty means the stretch is plain
+  /// route-colored and needs no explaining.
+  List<String> segmentNotes(double atM, {double slackM = 30}) {
+    const sevWords = {'mod': 'amber', 'steep': 'orange', 'vsteep': 'red'};
+    return [
+      for (final h in hillRanges())
+        if (atM >= h.startM - slackM && atM <= h.endM + slackM)
+          'Climbs at about ${(h.grade * 100).round()}% grade here — shaded '
+          '${sevWords[h.severity]} on the map.',
+      for (final r in warnRanges)
+        if (r.start >= 0 &&
+            r.end < cumulative.length &&
+            atM >= cumulative[r.start] - slackM &&
+            atM <= cumulative[r.end] + slackM)
+          '${warnStepSentence(r.kind)} — drawn dashed red.',
+    ];
+  }
+
+  /// Infrastructure warnings worth surfacing: gaps shorter than [minFt] feet
+  /// read as noise — "about 0 ft with no bike lane" helps nobody, and in
+  /// Greenville almost every trip crosses a short unmarked block, so a low
+  /// threshold cried wolf on routes that were fine. Steep warnings always show.
+  List<RouteWarning> visibleWarnings([double minFt = warnMinFt]) => [
         for (final w in warnings)
           if (w.kind == 'steep' || w.distanceM * 3.28084 >= minFt) w,
       ];
@@ -742,6 +767,189 @@ class NavProgress {
         );
     return (t, dist);
   }
+}
+
+/// What a fix means for rerouting: nothing, a full announced reroute, a
+/// silent recalculation, or a silent recalculation with a one-time "I'll stay
+/// quiet now" notice.
+enum RerouteDecision { none, announce, silent, quietNotice }
+
+/// Decides when going off-route earns a recalculation and how loudly to say
+/// so.
+///
+/// The naive rule (3 fixes >45 m → beep + "Rerouting.") loops forever when a
+/// rider takes a real-world shortcut the graph doesn't know (the Springer St
+/// tunnel): every recalculation starts at the rider, the rider keeps not
+/// following it, and the app beeps at them the whole way. So:
+///
+///  * A rider heading back TOWARD the route is left alone — they're
+///    rejoining on their own.
+///  * Repeated reroutes in one off-route spell back off exponentially
+///    (15 s → 30 s → 60 s → 120 s between recalculations).
+///  * Only the FIRST reroute of a spell gets the tone + voice; the rest are
+///    silent, with a single spoken notice on the third so the rider knows
+///    the app is deliberately staying quiet, not dead.
+///  * The spell ends after ~[onRouteResetFixes] consecutive on-route fixes
+///    (long enough to mean "genuinely back", not "the new route momentarily
+///    passes through me").
+class RerouteGovernor {
+  /// Farther than this from the route line counts as off-route.
+  static const offRouteM = 45.0;
+
+  /// Consecutive off-route fixes before the first recalculation.
+  static const triggerFixes = 3;
+
+  /// A fix must be this much closer than the last one to read as "heading
+  /// back toward the route" (GPS scatter is a few metres).
+  static const approachToleranceM = 5.0;
+
+  /// Consecutive on-route fixes (~1 Hz → seconds) that end an off-route
+  /// spell. Short stretches where a fresh reroute passes through the rider
+  /// must NOT reset the backoff, or the loop comes right back.
+  static const onRouteResetFixes = 30;
+
+  int _offHits = 0;
+  int _onHits = 0;
+  int _spellReroutes = 0;
+  DateTime? _lastRerouteAt;
+  double? _prevOffM;
+
+  /// Reroutes so far in the current off-route spell.
+  int get spellReroutes => _spellReroutes;
+
+  /// Seconds to wait after the [n]th reroute of a spell before the next one.
+  static int cooldownSeconds(int n) => math.min(15 * (1 << (n - 1)), 120);
+
+  /// Call for every GPS fix with the current distance to the route line.
+  RerouteDecision onFix(double offM, DateTime now) {
+    if (offM <= offRouteM) {
+      _offHits = 0;
+      _prevOffM = null;
+      _onHits++;
+      if (_onHits >= onRouteResetFixes) {
+        _spellReroutes = 0;
+        _lastRerouteAt = null;
+      }
+      return RerouteDecision.none;
+    }
+    _onHits = 0;
+    final approaching =
+        _prevOffM != null && offM < _prevOffM! - approachToleranceM;
+    _prevOffM = offM;
+    if (approaching) {
+      _offHits = 0;
+      return RerouteDecision.none;
+    }
+    _offHits++;
+    if (_offHits < triggerFixes) return RerouteDecision.none;
+    if (_spellReroutes > 0 && _lastRerouteAt != null) {
+      final cool = Duration(seconds: cooldownSeconds(_spellReroutes));
+      if (now.difference(_lastRerouteAt!) < cool) return RerouteDecision.none;
+    }
+    _offHits = 0;
+    _lastRerouteAt = now;
+    _spellReroutes++;
+    if (_spellReroutes == 1) return RerouteDecision.announce;
+    if (_spellReroutes == 3) return RerouteDecision.quietNotice;
+    return RerouteDecision.silent;
+  }
+
+  /// A new navigation session starts clean.
+  void reset() {
+    _offHits = 0;
+    _onHits = 0;
+    _spellReroutes = 0;
+    _lastRerouteAt = null;
+    _prevOffM = null;
+  }
+}
+
+/// GIS street names abbreviate cardinal prefixes ("E Washington St") and the
+/// TTS engine reads "E" as the letter. Two-letter combos arrive titleized
+/// ("Ne") from the server's `.title()`, so matching is case-normalized.
+const _spokenDirections = <String, String>{
+  'N': 'North',
+  'S': 'South',
+  'E': 'East',
+  'W': 'West',
+  'NE': 'Northeast',
+  'NW': 'Northwest',
+  'SE': 'Southeast',
+  'SW': 'Southwest',
+};
+
+/// Street-type suffixes the engine won't reliably expand on its own.
+const _spokenSuffixes = <String, String>{
+  'St': 'Street',
+  'Rd': 'Road',
+  'Ave': 'Avenue',
+  'Av': 'Avenue',
+  'Blvd': 'Boulevard',
+  'Dr': 'Drive',
+  'Ln': 'Lane',
+  'Ct': 'Court',
+  'Cir': 'Circle',
+  'Pl': 'Place',
+  'Hwy': 'Highway',
+  'Pkwy': 'Parkway',
+  'Ter': 'Terrace',
+  'Trl': 'Trail',
+  'Xing': 'Crossing',
+  'Ext': 'Extension',
+  'Mt': 'Mount',
+};
+
+/// Lowercase units in spoken distances ("400 ft" must not be "400 eff tee").
+const _spokenUnits = <String, String>{'ft': 'feet', 'mi': 'miles'};
+
+/// What the voice actually says for [text]: cardinal prefixes, street-type
+/// suffixes and distance units expanded ("Turn left onto E Washington St" →
+/// "Turn left onto East Washington Street"). Display text stays abbreviated —
+/// this is for the TTS engine only.
+///
+/// "St" is ambiguous: before another capitalized word it means Saint
+/// ("St Francis Dr") — unless that word is itself a suffix ("E North St Ext").
+String spokenText(String text) {
+  final words = text.split(' ');
+  String coreOf(String w) =>
+      RegExp(r'[A-Za-z]+').firstMatch(w)?.group(0) ?? '';
+  String titled(String c) => c.length > 1
+      ? c[0].toUpperCase() + c.substring(1).toLowerCase()
+      : c;
+  bool capitalized(String c) =>
+      c.isNotEmpty && c[0] == c[0].toUpperCase() && c[0] != c[0].toLowerCase();
+
+  final out = <String>[];
+  for (var i = 0; i < words.length; i++) {
+    final w = words[i];
+    final m = RegExp(r'^([^A-Za-z]*)([A-Za-z]+)([^A-Za-z]*)$').firstMatch(w);
+    if (m == null) {
+      out.add(w);
+      continue;
+    }
+    final pre = m.group(1)!, core = m.group(2)!, post = m.group(3)!;
+    final nextCore = i + 1 < words.length ? coreOf(words[i + 1]) : '';
+    final nextIsName = post.isEmpty &&
+        capitalized(nextCore) &&
+        !_spokenSuffixes.containsKey(titled(nextCore)) &&
+        !_spokenDirections.containsKey(nextCore.toUpperCase());
+    var replaced = core;
+    if (capitalized(core) && _spokenDirections.containsKey(core.toUpperCase())) {
+      replaced = _spokenDirections[core.toUpperCase()]!;
+    } else if (_spokenSuffixes.containsKey(titled(core))) {
+      if (titled(core) == 'St' && nextIsName) {
+        replaced = 'Saint';
+      } else if (titled(core) == 'Dr' && nextIsName) {
+        replaced = core; // "Dr Martin Luther King" — the engine says Doctor.
+      } else {
+        replaced = _spokenSuffixes[titled(core)]!;
+      }
+    } else if (_spokenUnits.containsKey(core)) {
+      replaced = _spokenUnits[core]!;
+    }
+    out.add('$pre$replaced$post');
+  }
+  return out.join(' ');
 }
 
 /// "400 ft" / "0.6 mi" — imperial, because Greenville.

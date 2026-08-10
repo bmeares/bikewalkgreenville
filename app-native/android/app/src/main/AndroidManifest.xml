@@ -5,8 +5,12 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <!-- Android 13+: the ongoing turn-by-turn notification. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
-    <!-- One-shot getCurrentPosition only; strip geolocator's foreground service
-         so Play review doesn't require FOREGROUND_SERVICE_LOCATION justification. -->
+    <!-- No background location: the app only ever asks for fixes while it is
+         on screen, so geolocator never gets a foregroundNotificationConfig and
+         its service never calls startForeground(). Dropping these two keeps
+         Play review from demanding a FOREGROUND_SERVICE_LOCATION
+         justification we would have nothing to write in.
+         The <service> itself MUST stay — see below. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" tools:node="remove"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" tools:node="remove"/>
 
@@ -41,13 +45,20 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
-        <!-- geolocator's bound service is REQUIRED for getPositionStream — with
-             it removed, navigation gets one fix and then silently freezes
-             (StreamHandlerImpl bails when the service is null). Keep the
-             service but strip its foregroundServiceType: we never start it
-             foreground (no foregroundNotificationConfig), and with the
-             FOREGROUND_SERVICE_LOCATION permission removed above, Play review
-             sees no location-FGS declaration to justify. -->
+        <!-- DO NOT REMOVE THIS SERVICE. It looks like dead weight for an app
+             that never goes to the background, but geolocator's position
+             STREAM is served through it: the plugin binds it at startup, and
+             StreamHandlerImpl.onListen bails out with a bare `return` — no
+             error, no endOfStream — when the bind never happened. Removing it
+             does not crash and does not log anything Dart can see; it just
+             makes getPositionStream emit nothing, forever, so every
+             turn-by-turn trip freezes the moment it starts.
+             getCurrentPosition() uses a different handler and keeps working,
+             which is what disguised this as "the follow camera is stuck".
+             Stripping foregroundServiceType keeps it a plain bound service:
+             startForeground() is only ever reached from enableBackgroundMode(),
+             which needs a foregroundNotificationConfig we never pass. -->
+
         <service
             android:name="com.baseflow.geolocator.GeolocatorLocationService"
             tools:remove="android:foregroundServiceType"/>

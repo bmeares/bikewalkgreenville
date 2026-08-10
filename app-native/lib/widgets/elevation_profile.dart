@@ -26,13 +26,15 @@ class ElevationProfile extends StatelessWidget {
     // get UNBOUNDED height — a stretch-aligned Row here must live inside an
     // explicit height or the layout throws and takes the whole bottom overlay
     // (preview, Start, FABs) down with it.
+    final labelColor = Theme.of(context).colorScheme.onSurfaceVariant;
     return SizedBox(
       height: height,
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Expanded(
-            child: CustomPaint(painter: _ProfilePainter(profile)),
+            child: CustomPaint(
+                painter: _ProfilePainter(profile, brandOnSurface(context))),
           ),
           const SizedBox(width: 8),
           Column(
@@ -40,9 +42,9 @@ class ElevationProfile extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Text('$hi ft',
-                  style: const TextStyle(fontSize: 10, color: Colors.black54)),
+                  style: TextStyle(fontSize: 10, color: labelColor)),
               Text('$lo ft',
-                  style: const TextStyle(fontSize: 10, color: Colors.black54)),
+                  style: TextStyle(fontSize: 10, color: labelColor)),
             ],
           ),
         ],
@@ -53,7 +55,11 @@ class ElevationProfile extends StatelessWidget {
 
 class _ProfilePainter extends CustomPainter {
   final List<List<double>> profile;
-  _ProfilePainter(this.profile);
+
+  /// Line color for the non-steep stretches — brand-dark on a light card,
+  /// a lighter leaf green on a dark one.
+  final Color lineColor;
+  _ProfilePainter(this.profile, this.lineColor);
 
   static const _steepGrade = 0.08;
 
@@ -90,7 +96,7 @@ class _ProfilePainter extends CustomPainter {
 
     // The line itself, segment by segment so steep stretches can go red.
     final ok = Paint()
-      ..color = brandDark
+      ..color = lineColor
       ..strokeWidth = 2
       ..strokeCap = StrokeCap.round
       ..style = PaintingStyle.stroke;
@@ -109,5 +115,6 @@ class _ProfilePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_ProfilePainter old) => old.profile != profile;
+  bool shouldRepaint(_ProfilePainter old) =>
+      old.profile != profile || old.lineColor != lineColor;
 }

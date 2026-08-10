@@ -5,7 +5,10 @@ These run against synthetic source rows (no database): `_route_source_rows`
 and `_get_route_graph` are monkeypatched, so the graph builder, A* and the
 turn-by-turn step builder are exercised in isolation.
 
-    python3 -m pytest tests/test_route_graph.py     # or just run the file
+    python3 -m pytest tests/
+
+New tests are written pytest-style (plain functions + assert); the older
+unittest classes predate that and pytest collects both.
 """
 
 import importlib.util
@@ -232,8 +235,8 @@ class TestSrtBias(RouteGraphTestCase):
 
     Geometry: a straight low-stress street A -> C, and an SRT dogleg
     A -> B -> C about 2.65x as long. With the pre-v0.6.0 srt factor (0.4) the
-    street wins (0.4 x 2.65 > 1.0); with the biased factor (0.28) the trail
-    wins. This test is the pin on that bias.
+    street wins (0.4 x 2.65 > 1.0); with the biased factor (0.18 since
+    v0.10.0) the trail wins. This test is the pin on that bias.
     """
 
     A = (34.8500, -82.4000)
@@ -254,7 +257,7 @@ class TestSrtBias(RouteGraphTestCase):
         self.assertIn('Swamp Rabbit Trail', names)
 
     def test_walking_still_takes_the_direct_street(self):
-        """The walking bias is milder (0.55): a 2.65x detour is too far to
+        """The walking bias is milder (0.45): a 2.65x detour is too far to
         walk for the trail, so the direct street should still win."""
         graph = self._graph(self._rows())
         feature = self._route(graph, self.A, self.C, mode='walk')
@@ -612,6 +615,626 @@ class TestAlternateRoutes(RouteGraphTestCase):
         self.assertEqual(
             base['geometry']['coordinates'], alt['geometry']['coordinates'],
         )
+
+
+class TestTurnDirectionLookahead(RouteGraphTestCase):
+    """Regression: the Anderson St -> Dunbar St wrong-way announcement.
+
+    The route geometry jogged a couple of metres RIGHT at the junction before
+    the real LEFT turn. Bearings measured on a single (metres-long) segment
+    read the jog as the turn, so the app said "Turn right" at a left turn --
+    the one mistake turn-by-turn navigation must never make. Maneuver bearings
+    are now measured over ~STEP_BEARING_LOOKAHEAD_M of geometry.
+    """
+
+    def test_a_tiny_jog_right_before_a_left_turn_reads_left(self):
+        # Heading north on Anderson, then a 3 m jog east-ish, then west on
+        # Dunbar. dLat of 1e-4 deg ~= 11 m; dLon of 1e-4 deg ~= 9 m.
+        anderson = {
+            'coords': [[-82.4000, 34.8480], [-82.4000, 34.8500]],
+            'name': 'ANDERSON ST', 'category': 'L', 'length_m': 222.0,
+            'start_index': 0, 'warn': None, 'climb_m': 0.0,
+        }
+        dunbar = {
+            # First segment jogs ~3 m NE (a right-hand bearing change), the
+            # rest runs clearly WEST -- the actual left turn.
+            'coords': [
+                [-82.4000, 34.8500],
+                [-82.399975, 34.850020],
+                [-82.4010, 34.850020],
+                [-82.4020, 34.850020],
+            ],
+            'name': 'DUNBAR ST', 'category': 'L', 'length_m': 190.0,
+            'start_index': 1, 'warn': None, 'climb_m': 0.0,
+        }
+        coordinates = anderson['coords'] + dunbar['coords'][1:]
+        steps = ml._build_steps([anderson, dunbar], coordinates)
+        turn = next(s for s in steps if s['name'] == 'Dunbar St')
+        self.assertIn(
+            'left', turn['maneuver'],
+            f"a left turn was announced as '{turn['maneuver']}' "
+            f"({turn['instruction']}) because of a {3:.0f} m junction jog",
+        )
+
+    def test_a_real_right_turn_still_reads_right(self):
+        a = {
+            'coords': [[-82.4000, 34.8480], [-82.4000, 34.8500]],
+            'name': 'ANDERSON ST', 'category': 'L', 'length_m': 222.0,
+            'start_index': 0, 'warn': None, 'climb_m': 0.0,
+        }
+        b = {
+            'coords': [[-82.4000, 34.8500], [-82.3990, 34.8500], [-82.3980, 34.8500]],
+            'name': 'EAST ST', 'category': 'L', 'length_m': 180.0,
+            'start_index': 1, 'warn': None, 'climb_m': 0.0,
+        }
+        steps = ml._build_steps([a, b], a['coords'] + b['coords'][1:])
+        turn = next(s for s in steps if s['name'] == 'East St')
+        self.assertIn('right', turn['maneuver'])
+
+
+class TestCustomPaths(RouteGraphTestCase):
+    """CUSTOM_PATHS entries (the Springer St tunnel) must be routable: an
+    off-grid connector beats the long way around once it's in the graph."""
+
+    # Springer St dead-ends at Church St; the tunnel + apartment lot connect
+    # it to University Ridge. Without the path, the only mapped way is a long
+    # detour south.
+    SPRINGER_W = (34.8380, -82.4030)
+    PORTAL_W = (34.8380391, -82.4008463)
+    U_RIDGE = (34.8399346, -82.4009103)
+    U_RIDGE_E = (34.8399, -82.3970)
+    DETOUR_S = (34.8340, -82.4008)
+
+    def _rows(self):
+        return [
+            (_line(self.SPRINGER_W, self.PORTAL_W), 'L', 'SPRINGER ST', True),
+            (_line(self.U_RIDGE, self.U_RIDGE_E), 'M', 'UNIVERSITY RIDGE', True),
+            # The long way around (Springer -> south -> east -> north).
+            (_line(self.PORTAL_W, self.DETOUR_S), 'M', 'CHURCH ST', True),
+            (_line(self.DETOUR_S, (34.8340, -82.3970)), 'M', 'LONG WAY', True),
+            (_line((34.8340, -82.3970), self.U_RIDGE_E), 'M', 'LONG WAY', True),
+            # The tunnel path itself, exactly as CUSTOM_PATHS feeds it in.
+            (
+                [
+                    [-82.4008463, 34.8380391],
+                    [-82.4004550, 34.8380570],
+                    [-82.4007000, 34.8390000],
+                    [-82.4009103, 34.8399346],
+                ],
+                'path', 'Springer St tunnel path', True,
+            ),
+        ]
+
+    def test_the_tunnel_wins_over_the_detour(self):
+        graph = self._graph(self._rows())
+        feature = self._route(graph, self.SPRINGER_W, self.U_RIDGE_E)
+        names = {s['name'] for s in feature['properties']['steps'] if s['name']}
+        self.assertIn('Springer St tunnel path', names,
+                      f"route skipped the tunnel: {sorted(names)}")
+        self.assertNotIn('Long Way', names)
+
+    def test_the_path_is_not_flagged_as_missing_infrastructure(self):
+        graph = self._graph(self._rows())
+        for mode in ('bike', 'walk', 'roll'):
+            feature = self._route(
+                graph, self.SPRINGER_W, self.U_RIDGE_E, mode=mode,
+            )
+            for w in feature['properties']['warn_ranges']:
+                for s in feature['properties']['steps']:
+                    if s['name'] and 'Tunnel' in s['name']:
+                        self.assertIsNone(
+                            s.get('warn'),
+                            f"{mode}: the path warned {s['warn']}",
+                        )
+
+    def test_custom_paths_reach_route_source_rows(self):
+        """The real _route_source_rows appends CUSTOM_PATHS (this suite mocks
+        it everywhere else, so pin the wiring itself). The list may be empty
+        — v0.13.0 removed the hand-drawn Springer entry once OSM supplied the
+        real tunnel — but any entry present must be well-formed."""
+        for p in ml.CUSTOM_PATHS:
+            self.assertGreaterEqual(len(p['coords']), 2)
+            self.assertTrue(p.get('name'))
+        # Categories 'path'/'footway' are wired into every routing table.
+        for cat in ('path', 'footway'):
+            self.assertIn(cat, ml.OWN_SURFACE_CATEGORIES)
+            self.assertIn(cat, ml.BIKE_FACILITY_CATEGORIES)
+            for level, factors in ml.BIKE_STRESS_FACTORS.items():
+                self.assertIn(cat, factors, f"stress '{level}' missing '{cat}'")
+            for mode in ('walk', 'roll'):
+                self.assertIn(cat, ml.MODE_FACTORS[mode])
+
+
+class TestSpeedStressFloor(unittest.TestCase):
+    """Posted speed limits corroborate the PCC stress ratings: high-speed
+    roads (Pete Hollis Blvd's 40 mph blocks, any 45+ road) are floored to a
+    stress level that matches the traffic, escalation only."""
+
+    def test_speed_floors_escalate(self):
+        self.assertEqual(ml._stress_floor('L', 45), 'H')
+        self.assertEqual(ml._stress_floor('M', 45), 'H')
+        self.assertEqual(ml._stress_floor('L', 40), 'MH')
+        self.assertEqual(ml._stress_floor('M', 40), 'MH')
+        self.assertEqual(ml._stress_floor('L', 35), 'M')
+
+    def test_speed_never_downgrades(self):
+        self.assertEqual(ml._stress_floor('H', 35), 'H')
+        self.assertEqual(ml._stress_floor('MH', 40), 'MH')
+        self.assertEqual(ml._stress_floor('H', 45), 'H')
+
+    def test_slow_or_unknown_speed_leaves_the_rating_alone(self):
+        self.assertEqual(ml._stress_floor('L', 25), 'L')
+        self.assertEqual(ml._stress_floor('M', None), 'M')
+
+    def test_non_stress_categories_pass_through(self):
+        for cat in ('srt', 'bike-lane', 'path', None):
+            self.assertEqual(ml._stress_floor(cat, 55), cat)
+
+    def test_a_fast_road_now_earns_the_bike_lane_warning(self):
+        """The point of the corroboration: a 45 mph road that PCC rated L
+        must both price like an arterial and be disclosed as one."""
+        self.assertIn(ml._stress_floor('L', 45), ml.STRESSFUL_CATEGORIES)
+
+
+class TestOsmPaths(RouteGraphTestCase):
+    """OSM ways (cycleways, foot paths, street tunnels) fill the shortcut
+    gaps no county GIS layer maps."""
+
+    def _overpass(self):
+        def way(wid, tags, *latlons):
+            return {
+                'type': 'way', 'id': wid, 'tags': tags,
+                'geometry': [{'lat': lat, 'lon': lon} for lat, lon in latlons],
+            }
+        return {'elements': [
+            way(1, {'highway': 'footway', 'name': 'Publix path'},
+                (34.85, -82.40), (34.851, -82.40)),
+            way(2, {'highway': 'residential', 'tunnel': 'yes',
+                    'name': 'Springer Street'},
+                (34.8380, -82.4008), (34.8381, -82.4004)),
+            way(3, {'highway': 'cycleway', 'name': 'Swamp Rabbit Trail'},
+                (34.86, -82.42), (34.861, -82.42)),  # skipped: already 'srt'
+            way(4, {'highway': 'path'}, (34.87, -82.41)),  # too short
+        ]}
+
+    def test_parse_categorizes_paths_and_street_tunnels(self):
+        entries = ml._parse_overpass_paths(self._overpass())
+        by_name = {e['name']: e for e in entries}
+        self.assertIn('Publix path', by_name)
+        self.assertFalse(by_name['Publix path']['street'])
+        self.assertIn('Springer Street', by_name)
+        self.assertTrue(by_name['Springer Street']['street'])
+        self.assertNotIn('Swamp Rabbit Trail', by_name,
+                         "the SRT is its own category; the OSM copy must be skipped")
+        self.assertEqual(len(entries), 2, "the 1-point way must be dropped")
+
+    def test_osm_categories(self):
+        """Street tunnels ride as 'L', cycleways/paths as 'path', bare
+        footways as 'footway' (car-free but NOT trail-grade — 0.9 for bikes
+        so apartment breezeways never beat the real street beside them)."""
+        self.assertEqual(ml._osm_category('residential', True), 'L')
+        self.assertEqual(ml._osm_category('cycleway', False), 'path')
+        self.assertEqual(ml._osm_category('pedestrian', False), 'path')
+        self.assertEqual(ml._osm_category('path', False), 'path')
+        self.assertEqual(ml._osm_category('footway', False), 'footway')
+        for level in ml.STRESS_LEVELS:
+            self.assertGreaterEqual(
+                ml.BIKE_STRESS_FACTORS[level]['footway'], 0.8,
+                "a footway must never be trail-cheap for a bike",
+            )
+
+    def test_a_bike_lane_on_a_fast_road_never_beats_a_calm_street(self):
+        """The Church St lesson: 0.4 x the 35 mph lane penalty must be >= the
+        L-street factor, or painted arterial paint out-prices quiet streets."""
+        for mph, factor in ml.LANE_SPEED_PENALTY:
+            self.assertGreaterEqual(0.4 * factor, 1.0, f"{mph} mph lane too cheap")
+
+
+class TestNominatimLabel(unittest.TestCase):
+    """Nominatim puts the house number in its own comma part; the label must
+    not present a bare "4" with the street exiled to the subtitle."""
+
+    def test_house_number_glued_to_street(self):
+        label, sub = ml._nominatim_label(
+            '4, McHan Street, Downtown, Greenville, '
+            'Greenville County, South Carolina, 29605, United States'
+        )
+        self.assertEqual(label, '4 McHan Street')
+        self.assertEqual(sub, 'Downtown, Greenville')
+
+    def test_place_names_pass_through(self):
+        label, sub = ml._nominatim_label(
+            'Swamp Rabbit Cafe, 205, Cedar Lane Road, Greenville, ...'
+        )
+        self.assertEqual(label, 'Swamp Rabbit Cafe')
+        self.assertEqual(sub, '205, Cedar Lane Road')
+
+    def test_letter_suffixed_number_still_glues(self):
+        label, _sub = ml._nominatim_label('221B, Baker Street, Greenville')
+        self.assertEqual(label, '221B Baker Street')
+
+    def test_degenerate_inputs(self):
+        self.assertEqual(ml._nominatim_label(''), ('', ''))
+        self.assertEqual(ml._nominatim_label('4'), ('4', ''))
+
+
+# --- pytest-style from here down ---------------------------------------
+
+
+def test_titleize_preserves_mc_names():
+    """.title() alone mangles Mc surnames: 'MCHAN ST' -> 'Mchan St', and the
+    street is named after the McHans. Mirrors the DB's SMART_CAPITALIZE."""
+    assert ml._titleize('MCHAN ST') == 'McHan St'
+    assert ml._titleize('MCBEE AVE') == 'McBee Ave'
+    assert ml._titleize('MCDANIEL AVE') == 'McDaniel Ave'
+    assert ml._titleize('E WASHINGTON ST') == 'E Washington St'
+
+
+def test_titleize_leaves_mixed_case_alone():
+    assert ml._titleize('McHan St') == 'McHan St'
+    assert ml._titleize('Springer St tunnel path') == 'Springer St tunnel path'
+    assert ml._titleize(None) is None
+    assert ml._titleize('') is None
+
+
+def test_instruction_speaks_mchan_correctly():
+    assert ml._instruction('left', 'MCHAN ST', 90.0) == 'Turn left onto McHan St'
+
+
+# --- crash danger, lane-speed penalty, night lighting (v0.12.0) ----------
+
+
+def test_danger_factor_scales_and_caps():
+    assert ml._danger_factor(0.0) == 1.0
+    assert ml._danger_factor(None) == 1.0
+    # Downtown-ish score: mild penalty.
+    assert 1.3 < ml._danger_factor(0.6) < 1.6
+    # Pete Hollis / White Horse class scores hit the cap.
+    assert ml._danger_factor(3.0) == ml._danger_factor(99.0)
+    assert ml._danger_factor(99.0) == 1.0 + ml.DANGER_CAP * ml.DANGER_RATE
+
+
+def test_lane_speed_penalty_erodes_the_paint_discount():
+    assert ml._lane_speed_factor(None) == 1.0
+    assert ml._lane_speed_factor(30) == 1.0
+    assert ml._lane_speed_factor(35) == 2.5
+    assert ml._lane_speed_factor(40) == 3.0
+    assert ml._lane_speed_factor(45) == 4.0
+    # A painted lane on a fast road must never price better than a calm
+    # street (the Church St lesson).
+    assert 0.4 * ml._lane_speed_factor(35) >= 1.0
+
+
+def test_lane_stress_multiplier_scales_with_the_riders_tolerance():
+    """The stress penalty on painted lanes is priced per-rider at query time:
+    a fixed build-time penalty calibrated for `balanced` read as CHEAP next
+    to `quiet`'s 8x/20x/40x street factors, so quiet riders — the most
+    Church-St-averse — were the only ones still routed onto Church's lane."""
+    balanced = ml.BIKE_STRESS_FACTORS['balanced']
+    quiet = ml.BIKE_STRESS_FACTORS['quiet']
+    direct = ml.BIKE_STRESS_FACTORS['direct']
+    # Balanced calibration unchanged from v0.12: H-street lane x10 the paint
+    # price (0.4 x 10 = 4.0 net — on the streets that kill, paint barely
+    # helps).
+    assert ml._lane_stress_multiplier(balanced, 'H') == 10.0
+    assert ml.MODE_FACTORS['bike']['M'] < 0.4 * ml._lane_stress_multiplier(
+        balanced, 'H') < ml.MODE_FACTORS['bike']['MH']
+    # Quiet: an H-street lane must price WORSE than any calm street — net
+    # 40/3 ≈ 13x, vs 2.0 for an ML street. This is the Church St regression.
+    quiet_h_lane_net = quiet['bike-lane'] * ml._lane_stress_multiplier(quiet, 'H')
+    assert quiet_h_lane_net > quiet['M']
+    assert quiet_h_lane_net > quiet['ML']
+    # Direct riders shrug: the same lane nets about a calm street.
+    assert direct['bike-lane'] * ml._lane_stress_multiplier(direct, 'H') <= 1.5
+    # Calm streets keep the full discount; unknown/missing stress is neutral.
+    assert ml._lane_stress_multiplier(balanced, 'L') == 1.0
+    assert ml._lane_stress_multiplier(balanced, None) == 1.0
+    # Walking a bike-laned street is just walking a street.
+    assert ml._lane_stress_multiplier(ml.MODE_FACTORS['walk'], 'H') == 1.0
+    # Street-fallback factors ({}) must not blow up.
+    assert ml._lane_stress_multiplier({}, 'H') == 1.0
+
+
+class TestQuietRiderAvoidsArterialPaint(RouteGraphTestCase):
+    """A painted lane on an H street must not attract exactly the riders who
+    asked for quiet (the McHan -> Legacy Park report: quiet rode S Church St's
+    lane while balanced took the calm streets)."""
+
+    A = (34.8500, -82.4000)
+    B = (34.8530, -82.4030)   # dogleg via the calm streets (~1.7x)
+    C = (34.8560, -82.4000)
+
+    def _rows(self):
+        return [
+            # Straight shot: bike lane painted on an H-rated arterial.
+            # 7-tuple row carries (danger, lit, lane_stress).
+            (_line(self.A, self.C), 'bike-lane', 'ARTERIAL LN', True, 1.0, True, 'H'),
+            (_line(self.A, self.B), 'ML', 'CALM ST', True, 1.0, True, None),
+            (_line(self.B, self.C), 'ML', 'CALM ST', True, 1.0, True, None),
+        ]
+
+    def _names(self, mode):
+        graph = self._graph(self._rows())
+        feature = self._route(graph, self.A, self.C, mode=mode)
+        return {s['name'] for s in feature['properties']['steps'] if s['name']}
+
+    def test_quiet_takes_the_calm_streets(self):
+        names = self._names('bike:quiet')
+        self.assertIn('Calm St', names)
+        self.assertNotIn('Arterial Ln', names)
+
+    def test_direct_still_takes_the_lane(self):
+        self.assertIn('Arterial Ln', self._names('bike:direct'))
+
+
+class TestTrailPreferenceToggle(RouteGraphTestCase):
+    """`?trail=0`: the SRT prices like a plain calm street, so the shorter
+    street route wins; with the default bias the trail detour wins."""
+
+    A = (34.8500, -82.4000)
+    B = (34.8530, -82.4030)   # trail dogleg (~1.7x the street)
+    C = (34.8560, -82.4000)
+
+    def _rows(self):
+        return [
+            (_line(self.A, self.C), 'L', 'PLAIN ST', True, 1.0, True, None),
+            (_line(self.A, self.B), 'srt', 'SRT', True, 1.0, True, None),
+            (_line(self.B, self.C), 'srt', 'SRT', True, 1.0, True, None),
+        ]
+
+    def _names(self, trail):
+        token = ml._TRAIL_PREF.set(trail)
+        try:
+            graph = self._graph(self._rows())
+            feature = self._route(graph, self.A, self.C, mode='bike')
+            return {s['name'] for s in feature['properties']['steps'] if s['name']}
+        finally:
+            ml._TRAIL_PREF.reset(token)
+
+    def test_default_bias_rides_the_trail(self):
+        self.assertIn('Srt', self._names(True))
+
+    def test_trail_off_takes_the_street(self):
+        names = self._names(False)
+        self.assertIn('Plain St', names)
+        self.assertNotIn('Srt', names)
+
+
+class TestTunnelNeverFusesWithTheStreetAbove(RouteGraphTestCase):
+    """The graph is 2D and the 12 m grid snap fused the Springer St tunnel
+    with the S Church St edges crossing above it — riders were told to turn
+    left onto Church St from inside the tunnel. Tunnel rows (8th tuple
+    element) now live in their own node namespace and rejoin the network
+    only through portals bridged to their own street's name."""
+
+    W = (34.8500, -82.4020)    # Springer, west surface end
+    WP = (34.8500, -82.4010)   # west portal
+    EP = (34.8500, -82.3990)   # east portal
+    E = (34.8500, -82.3980)    # Springer, east surface end
+    CN = (34.8510, -82.4000)   # Church, north end
+    MID = (34.8500, -82.4000)  # where Church crosses OVER the tunnel
+    CS = (34.8490, -82.4000)   # Church, south end
+
+    def _rows(self):
+        return [
+            (_line(self.W, self.WP), 'L', 'SPRINGER ST', True),
+            # The tunnel: 8-tuple, tunnel=True, passing exactly under MID.
+            (_line(self.WP, self.MID, self.EP), 'L', 'Springer Street',
+             True, 1.0, True, None, True),
+            (_line(self.EP, self.E), 'L', 'SPRINGER ST', True),
+            (_line(self.CN, self.MID, self.CS), 'L', 'CHURCH ST', True),
+            # A real surface connection so Church stays in the component.
+            (_line(self.CS, self.W), 'L', 'PEARL AVE', True),
+        ]
+
+    def test_no_node_joins_the_tunnel_and_the_street_above(self):
+        graph = self._graph(self._rows())
+        for lst in graph['adj'].values():
+            names = {e[6] for e in lst}
+            self.assertFalse(
+                'Springer Street' in names and 'CHURCH ST' in names,
+                f'tunnel fused with the street above: {names}',
+            )
+
+    def test_the_tunnel_still_routes_end_to_end(self):
+        graph = self._graph(self._rows())
+        feature = self._route(graph, self.W, self.E)
+        names = {s['name'] for s in feature['properties']['steps'] if s['name']}
+        self.assertIn('Springer Street', names)
+        # Direct through the bore, not around via Pearl/Church.
+        crow = ml._equirect_m(*self.W, *self.E)
+        self.assertLess(feature['properties']['distance_m'], crow * 1.3)
+
+    def test_church_is_reached_around_not_through_the_bore(self):
+        graph = self._graph(self._rows())
+        feature = self._route(graph, self.EP, self.CN)
+        # The only way onto Church is the real Pearl Ave junction: the trip
+        # must be far longer than the (impossible) hop up through the roof
+        # of the tunnel.
+        crow = ml._equirect_m(*self.EP, *self.CN)
+        self.assertGreater(feature['properties']['distance_m'], crow * 2.0)
+
+
+def test_tunnel_roof_rows_are_dropped_at_ingest():
+    """PCC/county digitized Springer St straight across Church St; those
+    surface rows are the roof of the tunnel and must not reach the graph."""
+    roof = [[-82.40080, 34.83805], [-82.40060, 34.83805]]
+    ends_at_portal = [[-82.40120, 34.83803], [-82.40088, 34.83804]]
+    assert ml._tunnel_roof('SPRINGER ST', roof)
+    assert ml._tunnel_roof('Springer Street', roof)
+    assert not ml._tunnel_roof('SPRINGER ST', ends_at_portal)
+    assert not ml._tunnel_roof('S CHURCH ST', roof)
+    assert not ml._tunnel_roof(None, roof)
+
+
+def test_grade_separated_rows_are_clipped_at_ingest():
+    """Wakefield St is severed by the Church St embankment: the crossing
+    vertex is clipped out, the street survives on both sides."""
+    part = [
+        [-82.40365, 34.83832],           # west end
+        [-82.4004476, 34.8386591],       # the fake Church crossing node
+        [-82.39855, 34.83865],           # east end (at Briar)
+    ]
+    clipped = ml._clip_grade_separated('WAKEFIELD ST', part)
+    assert clipped == []  # both survivors are single points -> dropped
+    longer = [
+        [-82.40365, 34.83832],
+        [-82.40200, 34.83850],
+        [-82.4004476, 34.8386591],
+        [-82.39950, 34.83866],
+        [-82.39855, 34.83865],
+    ]
+    clipped = ml._clip_grade_separated('Wakefield Street', longer)
+    assert len(clipped) == 2
+    assert clipped[0] == longer[:2]
+    assert clipped[1] == longer[3:]
+    # Other streets pass through untouched.
+    assert ml._clip_grade_separated('BRIAR ST', longer) == [longer]
+    assert ml._clip_grade_separated(None, longer) == [longer]
+
+
+class TestTrailTierStreets(RouteGraphTestCase):
+    """Furman College Way is closed to cars and feeds the SRT: its rows are
+    re-categorized 'srt' at graph build, so every stress level biases onto
+    it like the trail itself."""
+
+    def test_furman_college_way_prices_as_trail(self):
+        a, b = (34.8429, -82.4038), (34.8439, -82.4016)
+        graph = self._graph([
+            (_line(a, b), 'L', 'FURMAN COLLEGE WAY', True),
+            (_line(b, (34.8449, -82.4000)), 'L', 'FURMAN ST', True),
+        ])
+        categories = {
+            e[6]: e[3] for lst in graph['adj'].values() for e in lst
+        }
+        assert categories['FURMAN COLLEGE WAY'] == 'srt'
+        assert categories['FURMAN ST'] == 'L'
+
+
+def test_custom_paths_route_coords_feed_the_graph_not_the_layer():
+    """The Springer entry draws from the west tunnel portal but routes only
+    the east-of-Church stretch (surface coords under the bore would re-fuse
+    with Church St — the v0.13 lesson)."""
+    import json
+    springer = ml.CUSTOM_PATHS[0]
+    assert springer['coords'][0] == [-82.40085, 34.83804]
+    assert springer['route_coords'][0][0] > -82.4004  # east of Church
+    layer = json.loads(ml._build_custom_paths())
+    feature = layer['features'][0]
+    assert feature['geometry']['coordinates'] == springer['coords']
+    assert 'route_coords' not in feature['properties']
+
+
+def test_connectors_never_bridge_a_grade_separation_window():
+    """The Church St bike lane's chunk end sits ~10 m from the tunnel's west
+    portal, ON the bridge — a junction connector there is a fake ramp."""
+    # Inside the Springer tunnel-roof box.
+    assert ml._crosses_grade_separation(34.83805, -82.40078, 34.83803, -82.40089)
+    # Inside the Wakefield window.
+    assert ml._crosses_grade_separation(34.83866, -82.40045, 34.83868, -82.40030)
+    # Well away from every box.
+    assert not ml._crosses_grade_separation(34.8500, -82.3900, 34.8501, -82.3901)
+
+
+def test_gis_rename_says_the_streets_real_name():
+    """Fred Garrett St was renamed from Howe St; the county GIS still says
+    Howe. Steps, search labels and road-info say the real name."""
+    assert ml._gis_rename('HOWE ST') == 'Fred Garrett St'
+    assert ml._gis_rename('Howe St') == 'Fred Garrett St'
+    assert ml._gis_rename('HOWENING RD') == 'HOWENING RD'
+    assert ml._gis_rename(None) is None
+    assert ml._rename_label('4 Howe St') == '4 Fred Garrett St'
+    assert ml._rename_label('HOWE STREET') == 'Fred Garrett St'
+    assert ml._rename_label('Howell Rd') == 'Howell Rd'
+
+
+def test_is_night_honors_the_override_and_the_clock():
+    from datetime import datetime
+    token = ml._NIGHT_OVERRIDE.set(True)
+    try:
+        assert ml._is_night() is True
+    finally:
+        ml._NIGHT_OVERRIDE.reset(token)
+    token = ml._NIGHT_OVERRIDE.set(False)
+    try:
+        assert ml._is_night() is False
+    finally:
+        ml._NIGHT_OVERRIDE.reset(token)
+    assert ml._is_night(datetime(2026, 6, 15, 14, 0)) is False   # summer 2pm
+    assert ml._is_night(datetime(2026, 6, 15, 22, 0)) is True    # 10pm
+    assert ml._is_night(datetime(2026, 12, 15, 17, 30)) is True  # winter 5:30pm
+    assert ml._is_night(datetime(2026, 12, 15, 12, 0)) is False
+
+
+class TestCrashDangerRouting(RouteGraphTestCase):
+    """A crash-scarred street loses to a slightly longer clean one, even when
+    both carry the same stress rating — the White Horse Rd lesson."""
+
+    A = (34.8500, -82.4000)
+    B = (34.8530, -82.4030)   # dogleg via the clean street (~1.7x)
+    C = (34.8560, -82.4000)
+
+    def _rows(self, danger):
+        return [
+            # Deadly straight street: 6-tuple row carries (danger, lit).
+            (_line(self.A, self.C), 'L', 'DEADLY RD', True, danger, True),
+            (_line(self.A, self.B), 'L', 'SAFE ST', True, 1.0, True),
+            (_line(self.B, self.C), 'L', 'SAFE ST', True, 1.0, True),
+        ]
+
+    def _names(self, danger, mode='bike'):
+        graph = self._graph(self._rows(danger))
+        feature = self._route(graph, self.A, self.C, mode=mode)
+        return {s['name'] for s in feature['properties']['steps'] if s['name']}
+
+    def test_no_crash_history_takes_the_short_way(self):
+        self.assertIn('Deadly Rd', self._names(1.0))
+
+    def test_crash_history_takes_the_detour(self):
+        cap = 1.0 + ml.DANGER_CAP * ml.DANGER_RATE
+        self.assertIn('Safe St', self._names(cap))
+        self.assertNotIn('Deadly Rd', self._names(cap))
+
+    def test_legacy_4_tuple_rows_still_build(self):
+        graph = self._graph([
+            (_line(self.A, self.C), 'L', 'PLAIN ST', True),
+        ])
+        feature = self._route(graph, self.A, self.C)
+        names = {s['name'] for s in feature['properties']['steps'] if s['name']}
+        self.assertIn('Plain St', names)
+
+
+class TestNightLighting(RouteGraphTestCase):
+    """After dark, an unlit street loses to a lit parallel; by day the
+    shorter unlit street wins as usual."""
+
+    A = (34.8500, -82.4000)
+    B = (34.8530, -82.4025)   # lit dogleg, ~1.5x the direct distance
+    C = (34.8560, -82.4000)
+
+    def _rows(self):
+        return [
+            (_line(self.A, self.C), 'L', 'DARK ST', True, 1.0, False),
+            (_line(self.A, self.B), 'L', 'LIT AVE', True, 1.0, True),
+            (_line(self.B, self.C), 'L', 'LIT AVE', True, 1.0, True),
+        ]
+
+    def _names(self, night, mode='walk'):
+        token = ml._NIGHT_OVERRIDE.set(night)
+        try:
+            graph = self._graph(self._rows())
+            feature = self._route(graph, self.A, self.C, mode=mode)
+        finally:
+            ml._NIGHT_OVERRIDE.reset(token)
+        return {s['name'] for s in feature['properties']['steps'] if s['name']}
+
+    def test_daytime_takes_the_short_dark_street(self):
+        self.assertIn('Dark St', self._names(False))
+
+    def test_night_walk_takes_the_lit_street(self):
+        names = self._names(True)
+        self.assertIn('Lit Ave', names)
+        self.assertNotIn('Dark St', names)
 
 
 if __name__ == '__main__':

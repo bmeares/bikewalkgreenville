@@ -1,7 +1,7 @@
 # Handoff — work continues on host `omega` (repo at `~/projects/bikewalkgreenville`)
 
-Updated 2026-08-06 (eighth session, Bennett's laptop — paused mid-stream, see
-"IN FLIGHT" below). Read this + `DATA.md` before touching anything.
+Updated 2026-08-07 (twelfth session). Read this + `DATA.md` before touching
+anything.
 
 ## ⚠️ Repo is PUBLIC on GitHub
 
@@ -16,6 +16,687 @@ Updated 2026-08-06 (eighth session, Bennett's laptop — paused mid-stream, see
 - **Prod jobs registered** inside `mrsm-api-bwg-1`: `transit` (daily GTFS sync) and `bike-parking` (daily Overpass sync), alongside `annex-watch`, `trails-output`, `duke`, `who-owns-the-roads`, `parking`. Both verified running with successful first syncs (`mrsm show logs <job>`).
 - **walk-audit config** moved off env vars onto Meerschaum config (`plugins:walk-audit:{smtp,notify}`). Prod values live in the container volume at `/meerschaum/config/plugins.json` (chmod 600); the `/meerschaum/.env` hack has been **deleted**.
 - `WalkAudit.reports` is empty (the deploy-check row was removed).
+
+### 2026-08-08 latest (nineteenth session, omega) — app v1.17.0+51, map-layers v0.16.0
+
+Bennett round 4: Furman College Way should route like the trail (car-free
+SRT access between the two roundabouts); direct McHan → Legacy Park still
+crossed onto S Church St where Church rides the embankment (steps said
+Wakefield; the crossing doesn't exist — TIGER digitized it); parking lots as
+connection stop-gaps; trail pref must shape Quiet/Balanced/Direct and live
+under the preview's "More"; dark basemap hides too much detail → light is
+the default theme; assorted layer UX (below). `pytest` 76/76, `flutter
+test` 79/79, analyze clean, seeded 300-trip sweep re-run.
+
+**Backend (map-layers v0.16.0):**
+
+1. **`TRAIL_TIER_STREETS`** — rows whose suffix-stripped name matches
+   (`FURMAN COLLEGE`) are re-categorized `'srt'` at graph build; `_astar`
+   prices by category at query time, so the bias holds for every mode and
+   stress, and `?trail=0` neutralizes it with the trail.
+2. **`GRADE_SEPARATED_ROWS`** (Wakefield, Judson) — the Church St embankment
+   severs the side streets next to the Springer tunnel; matching rows get
+   the vertices inside the window CLIPPED OUT (street survives both sides,
+   the crossing is fiction). Unlike TUNNEL_ROOF_ROWS this splits rather
+   than drops.
+3. **`_crosses_grade_separation` guard in `_add_connector`** — with
+   Wakefield gone, the route escaped via a junction connector: the Church
+   bike lane's chunk end sits 10 m from the tunnel's WEST portal (on the
+   bridge) and got ramped down onto Springer. No junction/stitch connector
+   may bridge a tunnel-roof or grade-separated window now; T-namespaced
+   portals stay exempt.
+4. **Springer CUSTOM_PATHS realigned to the real lot drive** (OSM ways
+   339268048/365924783) and the drawn line now starts at the WEST portal so
+   the shortcuts layer connects to Springer St. New per-entry
+   `route_coords`: what joins the graph (east-of-Church only — surface
+   coords under the bore would re-fuse with Church, the v0.13 lesson) vs
+   the `coords` that draw. "Parking lots as stop-gaps" = keep tracing lot
+   drives into CUSTOM_PATHS; graph-wide OSM `parking_aisle` ingest was
+   scoped (10.2k ways in bounds — needs its own perf pass) and skipped.
+5. **parking-garages endpoint clamps counter glitches** — Church St. Garage
+   reported −535 occupied ("1484 of 949 spaces open"); occupancy outside
+   [0, capacity] now drops the occupancy/availability fields.
+6. walk-audit v0.2.0 grew a `missing-shortcut` category ("Suggest a
+   shortcut (tunnel, path, cut-through)") — rider-suggested shortcuts
+   arrive as ordinary moderated reports; graduate the good ones into
+   CUSTOM_PATHS.
+
+Verified on the LOCAL graph build (live sql:bwg data) pre-deploy:
+McHan → Legacy Park now rides Fred Garrett → University St → Furman College
+Way → SRT at **direct, balanced and quiet** (zero Church steps); McHan →
+Briar (south end) still rides the tunnel + the new lot path; trail=0 direct
+takes Pearl/Cleveland/McDaniel with no impossible turns.
+
+**App (v1.17.0+51):**
+
+7. **Trail pref applies to every stress level** (`_planTrip` sends
+   `trail=0` whenever the pref/override is off) and the planner ("More")
+   always shows the switch — reworded "Prefer the Prisma Health Swamp
+   Rabbit Trail" (Settings toggle matches).
+8. **Light theme is the default** (`ThemeMode.light` initial + load
+   fallback): no keyless dark vector style carries more detail than
+   OpenFreeMap `dark` (liberty/bright/positron are light; fiord failed in
+   v1.13–15), so instead of a worse map the app defaults to the detailed
+   one. "Dark app and dark map" subtitle removed.
+9. **LayerDef grew `fixed` / `advocacy` / `dashed` / `filter` /
+   `lightBaseColor`**:
+   - landmarks + custom-paths are `fixed`: always drawn, no sheet toggle
+     ("Trail landmarks" and "Shortcuts & tunnels" toggles are gone);
+     shortcuts draw DOTTED (`lineDasharray [0.5, 2]`).
+   - **Settings → "Experimental advocacy layers"**: bike-stress, parking
+     garages, downtown parking land use (renamed), VRU ×3, street lights.
+     Opting in adds the toggle to the layers sheet AND switches the layer
+     on (`AppState.setAdvocacyLayer`, persisted `advocacy_layers`); the
+     stress legend only shows while bike-stress has a sheet toggle.
+   - **Crash history → "Vulnerable road users", split three ways** over
+     the same GeoJSON: `vulnerable-heat` (heatmap), `vulnerable-crashes`
+     (circles, `filter killed == 0`), `vulnerable-fatalities` (pins,
+     `filter killed > 0`).
+   - **street-lights readable on light base**: `lightBaseColor #A66A00`
+     replaces the amber when the basemap is light.
+10. **Tap a red/orange stretch → the sheet says why**:
+    `NavRoute.segmentNotes(atM)` (unit-tested) matches the tapped
+    distance against hillRanges (grade % + shade word) and warnRanges
+    (no bike lane / no sidewalk, "drawn dashed red"); rows appear in the
+    route-segment sheet.
+
+Device test (v1.17.0+51): fresh install opens LIGHT; Settings → Dark has no
+subtitle; route drawn → More → trail switch present at every stress, off
+reroutes away from the SRT on Direct too; direct McHan → Legacy Park never
+touches Church (rides Furman College Way + trail); shortcuts layer is a
+dotted line that meets Springer St and follows the lot; landmarks show with
+no toggle; Settings → Experimental advocacy layers → enable Street lights
+(brown dots on light map), VRU heat/crashes/fatalities as three toggles;
+parking garages pins draw and Church St. Garage shows no nonsense count;
+Report → "Suggest a shortcut" category submits; tap an orange stretch of a
+route → sheet explains the grade; tap a dashed-red stretch → sheet names
+the missing infrastructure.
+
+### 2026-08-08 earlier (eighteenth session, omega) — app v1.16.0+50, map-layers v0.15.0 (DEPLOYED)
+
+Bennett round 3: navy abandoned ("too hard to see the bike lanes" — back to
+black); Springer St does NOT meet Church St at grade (it tunnels under, yet
+direct routes turned left onto Church from Springer); Paperclip label only
+at close zoom; Trail chip out of quick settings (trail preference only
+shapes Quiet); climb text off the route card; tapping the route line should
+say which street that stretch is. `pytest` 72/72, `flutter test` 74/74,
+analyze clean, sweep re-run post-change.
+
+**Backend (map-layers v0.15.0) — the tunnel/Church fusion, TWO mechanisms:**
+
+1. **Tunnel node namespace.** The graph is 2D and the 12 m grid snap fused
+   the OSM Springer tunnel way's geometry with the S Church St bike-lane
+   edges crossing ABOVE it (verified live: one node carried both). Tunnel
+   rows (OSM street rows, tuple element 8 `tunnel=True`) now key their
+   nodes into a `('T', …)` namespace — they can never share a cell with
+   surface geometry — and rejoin the network ONLY through portal
+   connectors to the nearest chunk endpoint of a street with the SAME
+   suffix-stripped name (`_street_base`: "Springer Street" == "SPRINGER
+   ST" == "Springer St"). Junction connectors also never target tunnel
+   chunks (`u[0] != 'T'`).
+2. **TUNNEL_ROOF_ROWS.** PCC's Springer stress stub is a 2-vertex straight
+   line crossing Church on the surface — the roof of the tunnel digitized
+   as a street. Vertex-in-bbox tests MISS it (both endpoints sit outside
+   any between-the-portals box); `_tunnel_roof` does segment-bbox overlap
+   and drops matching parts at ingest (both stress and gap-fill loops).
+   The offending node had been minted by the junction pass SPLITTING that
+   chunk where Church's lane end projected onto it.
+   Verified: zero nodes in the portal window carry both a SPRINGER and a
+   CHURCH edge; McHan → Briar still rides the tunnel; direct McHan →
+   Legacy Park reaches Church via Wakefield St (a real intersection).
+
+**App (v1.16.0+50):**
+
+3. **Dark theme back to black**: basemap `dark` (fiord navy swallowed the
+   bike-lane greens), Material dark = stock seeded near-black scheme; high
+   contrast = true black + white inks. All `_navy*` consts deleted;
+   `brandOnSurface` dark keeps the light leaf (`_leafOnDark`).
+4. **Paperclip label minZoom 13.5** (landmarks LayerDef).
+5. **Trail preference only shapes QUIET routes**: `_planTrip` sends
+   `trail=0` only when stress==quiet and the pref/override says off;
+   balanced/direct always ride the server's stock weighting. Trail chip
+   REMOVED from the preview quick row (chips are now Quiet/Balanced/Direct
+   + More); the planner's trail switch only shows when Quiet is selected
+   and is reworded "Prefer trail routes — choose routes that ride the
+   Prisma Health Swamp Rabbit Trail, even when a street way is shorter"
+   (Settings toggle reworded to match).
+6. **Route card is distance + ETA only** (climb lives in the hazards sheet
+   with the elevation graph).
+7. **Tap the route line → segment info**: `_onMapClick` snaps the tap with
+   `NavProgress.of` (<30 m) and opens a sheet naming the street for that
+   stretch (step name), how far the route rides it, its instruction, and a
+   "Who owns this road?" row into the existing road-info sheet.
+
+Device test (v1.16.0+50): dark mode = black map + black chrome, bike lanes
+pop; Paperclip label appears only zoomed in past ~13.5; route drawn → quick
+row has NO trail chip; planner shows the trail switch only with Quiet
+selected; card shows "3.2 mi · 25 min" with no ↑ ft; tap mid-route → sheet
+names the street; direct-stress route near the tunnel NEVER turns onto
+Church St from Springer.
+
+### 2026-08-08 earlier (seventeenth session, omega) — app v1.15.0+49, map-layers v0.14.1 (DEPLOYED)
+
+Bennett's follow-ups on v1.14: navy still too low-contrast; base picker must
+not offer a dark map on light chrome (or vice versa); Paperclip marker too
+far south + should be a LABEL not a pin; search X sometimes leaves the
+recents list up; and the two trip flows (search→"Bike here" vs the planner
+sheet) confuse people — prefs are hard to find and the planner opens with an
+empty destination. `pytest` 68/68, `flutter test` 74/74, analyze clean.
+
+**Backend (v0.14.1)**: LANDMARKS Paperclip moved onto the trail line at the
+top of the switchbacks — 34.8509, -82.3834 (was 34.8487, ~240 m south of the
+geometry). Nothing else.
+
+**App (v1.15.0+49):**
+
+1. **Dark theme contrast rework** — the fix was SPREAD, not darkness:
+   background stays deep (0xFF0C1626) but container tiers now step up ~7
+   luminance points each (low 0xFF16243C … highest 0xFF334A74) so cards and
+   sheets separate; inks near-white (onSurface 0xFFF1F4FA, variant
+   0xFFC5CFDF, outline 0xFF8FA0B8); primary leaf brightened (0xFFB2D488,
+   `_leafOnNavy`, also `brandOnSurface`'s dark value).
+2. **Base picker is Standard / Satellite.** Standard = follow the theme;
+   forced light/dark bases are GONE (mismatched chrome/basemap read as a
+   glitch). Persisted `map_base` light/dark values migrate to `auto` in
+   `AppState.load()`. Settings → Appearance is now the only light/dark
+   switch.
+3. **Landmarks draw as text labels** (`LayerDef.isLabel`): `renderLabel()`
+   in map_icons.dart paints bold-italic name bitmaps with a halo (ink picked
+   for the base — light text on dark/satellite), one `addImage` per feature,
+   symbol layer `iconImage: ['get','__img']` (property injected client-side).
+   Bitmaps because the satellite style has NO glyphs — a real text layer
+   renders nothing there.
+4. **Search X now also unfocuses** — with focus kept, the recents list
+   re-appeared under the cleared field (the "doesn't clear sometimes"
+   report was focus surviving the trip-planner round-trip).
+5. **Trip flows unified around the route preview**:
+   - `_tripPrefsRow()` on the preview (bike/walk/roll plans): Quiet /
+     Balanced / Direct chips (write the durable stress pref, same as
+     Settings), a **Trail** chip (per-trip only, `_tripTrail`), and a
+     **More** chip into the planner. Every chip replans instantly (silent —
+     the line just redraws). Chips are 38 dp — gloved-thumb-sized.
+   - **The planner always opens with the destination you're looking at**:
+     `_openDirections()` falls back active-trip `_to` → searched `_place` →
+     empty. The "search again inside the planner" friction is gone.
+   - **Planner gains the per-trip trail switch** (returned via
+     `DirectionsResult.trail` → `_tripTrail`; Settings default untouched,
+     override dies with `_clearRoute`). Pick-on-map round-trips keep it.
+6. Directions sheet's my-location icon was `Colors.black45` — invisible on
+   navy; now `onSurfaceVariant`.
+
+Device test (v1.15.0+49): dark mode — cards/sheets visibly layered, text
+crisp; layers sheet shows two base pills only (Standard/Satellite), theme
+toggle flips the standard base; "The Paperclip" renders as italic text ON
+the switchbacks (both bases), still searchable; search something → X →
+recents gone; search a place → tap the search-bar directions arrow → To is
+prefilled; route drawn → chips above the summary: tap Direct (line
+redraws), toggle Trail off (route leaves the SRT), More opens the planner
+prefilled; clear route → next trip follows Settings again.
+
+### 2026-08-08 earlier (sixteenth session, omega) — app v1.14.0+48, map-layers v0.14.0 (DEPLOYED)
+
+Bennett's list: darker navy dark theme playing nicer with the greens; drop
+the "Auto" base-map pill (the 4-pill row wrapped "Satellite" mid-word);
+tools-screen dark-mode contrast (sublink icons were brandDark-on-navy, the
+blurb was black54-on-navy); accessibility (high contrast, large UI,
+sidewalks too thin — especially on satellite); Google Play R8 warning;
+McHan → Legacy Park rides S Church St on `quiet`; Fred Garrett St (GIS
+still says Howe St); "The Paperclip" label; formal SRT name; a
+prefer-the-trail toggle. `pytest` 68/68, `flutter test` 74/74, analyze
+clean, `route_sweep` 300 trips → 3% flagged (baseline was 5%).
+
+**Backend (map-layers v0.14.0), deployed + curl-verified:**
+
+1. **The quiet-Church defect**: the bike-lane stress penalty was baked at
+   graph build, calibrated for `balanced` (H-lane ×10 → net 4.0). Under
+   `quiet` (streets M 8 / MH 20 / H 40) that fixed 3.5 net made Church St's
+   lane the CHEAPEST corridor — the tolerance most averse to Church was the
+   only one still routed onto it. Now the edge carries `lane_stress` in
+   extras (`(danger, lit, lane_stress)`) and `_astar` prices the lane at
+   `max(speed-baked, factors[stress] × LANE_STRESS_RELIEF (⅓))` per rider.
+   Balanced calibration is unchanged by construction (12 × ⅓ / 0.4 = 10).
+   Verified on the live graph: McHan → Legacy Park quiet AND balanced now
+   read McHan → Fred Garrett St → University St → Furman College Way → SRT
+   (Bennett's "quiet" line); direct takes the 0.2 mi shorter Church St lane
+   hop, which is what "direct, traffic and all" means, and warnings still
+   disclose it.
+2. **`?trail=0`** (`_TRAIL_PREF` contextvar, plan-cache key, response echo):
+   SRT factor floors at 1.0 — the trail is neutral, not forbidden.
+3. **`STREET_RENAMES`** (`_gis_rename`/`_rename_label`): HOWE ST → Fred
+   Garrett St at graph ingest (steps + voice), search labels, and search
+   queries are aliased new-name→GIS-name so "fred garrett" finds Howe rows.
+4. **`LANDMARKS` + `landmarks` layer** (point, `/map-layers/landmarks.geojson`,
+   searchable): first entry The Paperclip (34.8487, -82.3834 — the SRT
+   switchback climb between the second Lakehurst St crossing and Traxler St).
+5. **SRT formal name**: graph/step/layer-label name is now "Prisma Health
+   Swamp Rabbit Trail" (line names — Green/Blue/Orange/Gold — stay per-
+   segment props on the srt layer; the graph keeps ONE name so steps merge).
+6. Springer CUSTOM_PATHS note corrected: the lot east of the tunnel is the
+   **South Ridge** Apartments (was written "Southernside").
+
+**App (v1.14.0+48):**
+
+7. **Darker navy** `_navy*` set (surface 0xFF0B1424 down to 0xFF060C18) and
+   the dark scheme's `primary` is now `_leafOnNavy` (0xFFA9CB7F) so the
+   brand green reads on navy.
+8. **Base picker is Light/Dark/Satellite** — `MapBase.auto` survives as the
+   internal fresh-install default (follows the theme); the picker shows auto
+   resolved to the theme's base and any tap makes it explicit.
+9. **Tools screen**: sublink icons `brandOnSurface(context)`, blurb
+   `onSurfaceVariant`.
+10. **Accessibility (Settings → Accessibility)**: "High contrast" (stronger
+    scheme in both themes + thematic map lines ×1.7 width, min 0.85 opacity,
+    re-added live via `_restyleLineLayers`) and "Large text & controls"
+    (MaterialApp builder wraps a `TextScaler` ≥1.3, clamped 2.0, on top of
+    the device scale). Sidewalks are 3.0 px @ 0.65 for everyone (were
+    1.8 @ 0.5); satellite base boosts ALL thematic lines ×1.35 (imagery is
+    busy — hairlines vanished into rooftops).
+11. **"Prefer the Swamp Rabbit Trail"** switch (Settings → Riding, default
+    on, persisted `prefer_trail`) → `trail=0` on `/route` when off.
+12. **R8 for the Play warning**: `isMinifyEnabled`/`isShrinkResources` true
+    + `proguard-rules.pro` keeping maplibre/geolocator/local-notifications
+    (JNI/reflection) and `-dontwarn` Play Core. APK 83.4 MB / AAB 56.4 MB —
+    barely smaller (the weight is native .so libraries R8 can't touch); the
+    point is Play's optimization checklist, not size.
+
+Device test (v1.14.0+48): dark theme noticeably deeper navy; layers-sheet
+base pills fit on one line; Tools sublinks + footer legible in dark; toggle
+High contrast → map lines visibly bolden without reopening; Large UI scales
+text app-wide; sidewalks readable over satellite; Settings shows Prefer-
+the-trail + Accessibility; route McHan → Legacy Park on quiet = Fred
+Garrett → Furman College Way → trail (voice says "Fred Garrett Street" and
+"Prisma Health Swamp Rabbit Trail"); search "Fred Garrett" and "Paperclip"
+both hit; R8 build passes smoke (search, route, nav, layers, report,
+BCycle deep link) — minification is the risky bit, test everything once.
+
+### 2026-08-08 earlier (fifteenth session, omega) — app v1.13.0+47, map-layers v0.13.0
+
+Bennett: "routing broken 4 McHan St → Legacy Park, specifically the Springer
+tunnel — the real line is Springer → Briar → University Ridge through
+Southernside" + "how do I find other broken routing?" + navy dark theme,
+light/dark toggle, satellite base. `pytest` 63/63, `flutter test` 74/74.
+
+**The Springer tunnel bug was FOUR stacked defects (map-layers v0.13.0):**
+
+1. **PCC has no Springer St east of the tunnel** (an 8 m stub) and neither
+   does the county centerline or OSM — the street exists on the ground but
+   in no dataset, so the tunnel dead-ended in the graph. Two fixes:
+   (a) **county gap-fill** — TRA_STREETCL segments whose MIDPOINT has no
+   PCC coverage join the graph as 'L' floored by posted speed (~3.2k
+   segments, interstates/US highways excluded; graph 44k → 48.5k nodes);
+   (b) the CUSTOM_PATHS entry is now the REAL alignment: east portal →
+   straight along the Springer roadbed → Briar St's south end. The old
+   hand-drawn lot line (which crossed Church St mid-air and became a fake
+   ramp via a junction connector) is deleted.
+2. **Church St's bike lane out-priced everything**: 0.4x flat. Now
+   `_lane_factor` = worse of posted-speed (≥45 ×4, ≥40 ×3, ≥35 ×2.5) and
+   the PCC stress of the street under the paint (M ×2, MH ×3.75, **H ×10**
+   → net 4.0: on the streets that kill, paint barely helps). The stress
+   lookup is NAME-MATCHED first (a short lane piece at a junction sits
+   nearest the cross-street's rating — Church's lane matched Springer's L).
+3. **OSM footways were trail-cheap (0.4)**: new category `footway` (bike
+   0.9, walk 0.8, roll 1.0) so apartment breezeways never beat the real
+   street beside them; cycleway/path/pedestrian stay `path` 0.4.
+4. Verified: McHan → Briar reads **McHan → Howe → Francis → Springer →
+   Springer Street (tunnel) → Springer St → Briar St**. Legacy Park &
+   Cleveland Park trips ride Howe (= Fred Garrett St) → Furman College Way
+   → SRT → Green Line — Church-free; the 5.4 km "uturn onto SRT" step is
+   the REAL Green Line hairpin at Woodland Wy, not a bug.
+
+**"How can I tell?" — `python3 scripts/route_sweep.py [N] [modes...]`**:
+samples seeded node-pair trips over the live graph and flags >1 U-turn per
+8 km, >40% unnamed distance, >300 m on connectors, >2.6x crow-fly, and
+fallbacks/errors. Current baseline: 240 trips → 5% flagged, all explainable
+(SRT-bias detours + long-trip trail hairpins); walk 100% clean. Run before
+and after any weights change (seeded → comparable), exit 1 above 10%.
+
+**App (v1.13.0+47):**
+
+5. **Navy dark theme**: dark basemap is now OpenFreeMap **fiord** (navy)
+   instead of `dark` (near-black), and the Material dark scheme's surfaces
+   are deep navy (`_navy*` consts in theme.dart) to match.
+6. **Base map picker** in the layers sheet: Auto / Light / Dark / Satellite
+   (SegmentedButton, persisted `map_base`). Satellite = inline Esri World
+   Imagery raster style (`satelliteStyleJson` — keyless; no glyphs needed
+   since all app symbols are bitmap icons). `Auto` follows Settings →
+   Appearance as before. Style swaps reuse the existing re-add machinery.
+
+Device test (v1.13.0+47): dark mode = navy map + navy chrome (not black);
+layers sheet base picker: satellite shows imagery with route/pins intact
+after the swap, toggling base mid-route keeps the line; McHan → Briar St
+walks the tunnel; night route still prefers lit streets.
+
+### 2026-08-07 earlier (fourteenth session, omega) — app v1.12.0+46, map-layers v0.12.0
+
+Bennett: "we almost never recommend Church St even though it has a bike
+lane" + avoid the notoriously dangerous roads (White Horse, S Academy, Pete
+Hollis, Augusta's 4-lane stretch…) using the Vulnerable Road Users data —
+fatality-weighted, since downtown logs many incidents but few deaths — plus
+Duke streetlight data for night routing, and both datasets as default-off
+map layers. `python3 -m pytest tests/` 61/61, `flutter test` 74/74.
+
+**Backend (map-layers v0.12.0):**
+
+1. **Crash-danger multiplier on every street + bike-lane edge.** Score per
+   stress/lane segment = Σ(fatal 10 / injury-crash 1 / other 0.25) within
+   100 ft, per 100 m; edge weight × (1 + min(score, 3) × 0.75) → cap ×3.25.
+   Measured: Pete Hollis 3.0, S Academy 2.9, White Horse 2.9, Wade Hampton
+   1.8, Augusta 1.5 vs downtown Main St 0.5–0.75 (the fatality weighting is
+   what separates them). Edge tuples grew index 8: `(danger, lit)`.
+2. **A painted lane is not protection**: bike-lane edges also multiply by
+   posted speed (≥45 ×3, ≥40 ×2.25, ≥35 ×1.5), and **SHARROW rows (322) are
+   out of the graph entirely** — paint saying "share" is not infrastructure.
+   Verified: the Springer-corridor trip that rode the Church St lane in
+   v0.11 now takes the tunnel path; 4 McHan St → Cleveland Park now reads
+   McHan → Howe → Springer → tunnel → SRT (Bennett's own line).
+3. **Night routing** (Duke streetlights, `Ped.lighting`): a street with <1
+   pole per 100 m counts unlit; after dark (ET month table; `?night=0/1`
+   override, response echoes `night`) unlit street edges pay ×1.6 walk/roll,
+   ×1.35 bike. Request-scoped contextvar — no signature threading; plan
+   cache key includes the flag.
+4. **New layers**: `vulnerable-crashes` (1,650 pts, killed/injured props) and
+   `street-lights` (~40k pts).
+5. **`Ped.crashes_vulnerable` had NO geometry index** — the danger join
+   seq-scanned it 29k times (graph build 24 s → 469 s). `IX_crashes_
+   vulnerable_geometry` created on prod; `indices: geometry` added to
+   projects/pedestrian-deaths.yaml. Build back to ~24 s.
+
+**App (v1.12.0+46):**
+
+6. **Crash history heatmap** (`isHeatmap` LayerDef): severity-weighted
+   (killed 1.0 / injured 0.35 / other 0.15), yellow→deep red, default off.
+7. **Street lights** (`isCircle` LayerDef): tiny amber dots, minZoom 12,
+   default off, `enableInteraction: false` (40k dots must not eat taps).
+
+Device test (v1.12.0+46): layers sheet shows "Crash history (bike/ped)" +
+"Street lights" toggles (off); heatmap glows red along White Horse/Academy;
+bike route near Church St corridor uses the Springer tunnel; night trip
+prefers lit streets (server clock — test after sunset or curl `?night=1`).
+
+### 2026-08-07 earlier (thirteenth session, omega) — app v1.11.0+45, map-layers v0.10.0
+
+Bennett's ride feedback round 2: jarring reroute audio, missing shortcuts
+(Springer tunnel class), stronger SRT pull, speed limits vs the stress layer,
+and "E Washington St" spoken as the letter E. `flutter analyze` clean,
+`flutter test` 74/74, `python3 -m pytest tests/` 53/53 (pytest is the test
+runner now; new Python tests are pytest-style plain functions).
+
+Post-release fixes on the same day (backend only, all deployed + verified):
+map-layers v0.11.0 moved the OSM ETL onto the `MapLayers.osm_paths` pipe
+(see item 1); v0.11.1 fixed Nominatim search labels showing a bare house
+number ("4" / "McHan Street, Downtown" → "4 McHan Street"); v0.11.2 fixed
+Mc-name casing everywhere — search arms now use the DB's SMART_CAPITALIZE
+(was INITCAP → "Mchan St") and `_titleize` mirrors it in Python for
+turn-by-turn step names.
+
+**Backend (map-layers v0.10.0):**
+
+1. **OSM paths in the routing graph** (`_osm_path_rows`): Overpass ways —
+   cycleway/path/pedestrian, footway minus `footway=sidewalk|crossing`, and
+   street tunnels (`highway=residential|service|…` + `tunnel=yes`; the
+   Springer St tunnel is `highway=residential` in OSM, NOT a path) — within
+   SEARCH_BOUNDS. ~4.9k ways. True paths route as category `path` (0.4, car-
+   free), street tunnels as `L`. OSM ways named "Swamp Rabbit*" are skipped —
+   the trail is already its own cheaper category. Graph: 37.7k → **44.4k
+   nodes**, build ~16 s → ~20 s. CUSTOM_PATHS stays for anything OSM doesn't
+   know.
+   **v0.11.0 moved the ETL onto a pipe** (Bennett: auditable + tunable):
+   `Pipe('plugin:map-layers', 'osm_paths', 'greenville')` →
+   `MapLayers.osm_paths` (way_id PK, name, highway, street flag, LINESTRING
+   4326 + GiST), registered by `projects/osm-paths.yaml`, synced daily by
+   the **`osm-paths` job** in `mrsm-api-bwg-1` (first sync verified: 4,873
+   rows). The graph build reads the pipe first; the direct Overpass fetch +
+   `<output>/osm-paths.json` disk cache (7-day TTL) remains only as the
+   fallback for environments where the pipe has never synced.
+2. **Speed limits corroborate PCC stress** (`_stress_floor`): each stress
+   segment picks up the posted SPEED of the nearest `county.TRA_STREETCL`
+   centerline (nearest to the segment MIDPOINT so side streets don't inherit
+   the arterial they dead-end into), then the stress level is floored:
+   ≥45 → H, ≥40 → MH, ≥35 → M. Escalation only. ~3.3k of 28.4k segments
+   escalate (Pete Hollis Blvd's 40 mph blocks → MH; any 45 mph road rated L
+   was a data gap). Escalated levels also drive the no-bike-lane warnings.
+3. **SRT bias deepened again**: srt factor quiet 0.2 → **0.12**, balanced
+   0.28 → **0.18**, direct 0.4 → **0.3**; walk 0.55 → **0.45**, roll 0.5 →
+   **0.45**. A balanced bike now detours up to ~5.5× the direct distance to
+   ride the trail. Verified: 101 N Main → Swamp Rabbit Cafe rides the SRT.
+4. **PROPOSED bike lanes no longer route as real** — the bike-lanes graph
+   source now filters `STATUS != 'PROPOSED'` (133 rows of paint that doesn't
+   exist yet were priced at 0.4 like real lanes). The *visual* bike-lanes
+   layer still draws them — decide separately if that should change.
+
+**App (v1.11.0+45):**
+
+5. **Reroute audio gentler**: the ToneGenerator beep is GONE (MainActivity's
+   `bwg/tone` channel deleted — even TONE_PROP_ACK read as an alarm on the
+   road); the announce phrase is now "Finding a new route." instead of
+   "Rerouting." Backoff/quiet-notice governor unchanged.
+6. **TTS pronunciation** (`spokenText()` in nav.dart, unit-tested): cardinal
+   prefixes (E/N/S/W/NE/NW/SE/SW → East/…), street suffixes (St/Rd/Ave/Blvd/
+   Dr/Ln/Ct/Hwy/Pkwy/… → Street/…), units (ft/mi → feet/miles). "St" before a
+   capitalized name means Saint ("St Francis Dr") unless that word is itself
+   a suffix ("E North St Ext" → Street Extension). Display text stays
+   abbreviated — only `_speak` calls in `_announce` are expanded.
+
+Device test checklist (v1.11.0+45):
+- Voice says "East Washington Street", "Pete Hollis Boulevard", "In 400
+  feet…" — never the letter E or "S T".
+- Go off-route: NO beep; a calm "Finding a new route." once; then the usual
+  quiet backoff.
+- Springer St → University Ridge: still rides the tunnel path.
+- Bike routes lean visibly harder onto the SRT; Pete Hollis/45 mph roads
+  avoided unless direct is chosen (and warned when ridden).
+- Publix-class shortcuts (paths/tunnels the county GIS lacks) now route.
+
+### 2026-08-07 earlier (twelfth session, omega) — app v1.10.1+44 (BUILT + SIGNED)
+
+**GPS navigation never worked on Android — root cause found, one line of XML.**
+`flutter analyze` clean, `flutter test` 69/69, signed APK + AAB, versionCode 44.
+
+`android/app/src/main/AndroidManifest.xml` had removed geolocator's service
+since the very first app commit (`c08570a`):
+
+```xml
+<service android:name="com.baseflow.geolocator.GeolocatorLocationService"
+         tools:node="remove"/>
+```
+
+That service is what serves the position **stream**. `GeolocatorPlugin` binds
+it at startup; `StreamHandlerImpl.onListen` then does:
+
+```java
+if (foregroundLocationService == null) {
+  Log.e(TAG, "Location background service has not started correctly");
+  return;   // no events.error, no endOfStream
+}
+```
+
+No exception, no Dart-visible error, no `onDone` — `getPositionStream` simply
+emits nothing, forever. `getCurrentPosition()` runs through
+`MethodCallHandlerImpl` and is unaffected, which is why Start always found the
+rider, `_locateMe` worked, and the blue dot worked, while the follow camera,
+step advancement, off-route detection and reroutes were dead from the first
+second of every trip.
+
+**This is why c0463dc did not fix it.** That session read "frozen map" as a
+fix-RATE problem and set `AndroidSettings(intervalDuration: 1s)` plus a
+watchdog — correct changes to a stream that was never alive. The watchdog then
+resubscribed every 5 s forever and converted a silent hang into a recurring
+"Waiting for GPS…" toast, which read as flaky GPS. Both of those changes are
+KEPT; they are right, they were just downstream of the real fault.
+
+Fix: restore the `<service>`, with `tools:remove="android:foregroundServiceType"`
+so it stays a plain **bound** service. `startForeground()` is reachable only
+from `enableBackgroundMode()`, which fires only when `AndroidSettings` carries
+a `foregroundNotificationConfig` — map_screen.dart passes none. So the
+`FOREGROUND_SERVICE` / `FOREGROUND_SERVICE_LOCATION` permission removals STAY,
+and there is still no Play justification to write. Verified in the merged
+manifest (`build/app/intermediates/merged_manifests/release/.../AndroidManifest.xml`):
+service present, `exported="false"`, no `foregroundServiceType`, and zero
+`FOREGROUND_SERVICE*` permissions in the APK.
+
+Regression guard: `test/android_manifest_test.dart` fails if the service is
+ever node-removed again, or if a foreground permission reappears without the
+config to back it.
+
+Device test (v1.10.1+44) — this is the one that matters, omega has no phone:
+- Start a trip and stand still: the puck must keep updating and the trip bar
+  ETA must tick. Before this fix, nothing moved and "Waiting for GPS…" toasted
+  every ~5 s.
+- Walk/ride a block: steps advance, voice announces, off-route + reroute work.
+
+### 2026-08-07 earlier (twelfth session, omega) — app v1.10.0+43 (BUILT + SIGNED)
+
+Bennett: "the bike lane warning, Report, Clear route, layers/GPS are crowding
+the viewport — zooming in/out feels claustrophobic", plus a compass bug. App
+only; **no backend change**, so `map-layers` stays at v0.9.1 in prod and
+nothing was redeployed. `flutter analyze` clean, `flutter test` 67/67, signed
+APK (87 MB) + AAB (58 MB), signer SHA-1 `537F9A88…A843`, versionCode 43 —
+**not device-verified** (no phone on omega).
+
+1. **Hazards button replaces the warning banner.** `_hazards(route)` in
+   map_screen.dart builds one list — fallback note, `visibleWarnings()`, the
+   hill summary. When it is non-empty, the control rail grows a badged amber
+   ⚠ button opening `_openHazardsSheet()`: the same lines, the "dashed red on
+   the map" note, the elevation graph, and a "See every turn" row into the
+   steps sheet. `_warningBanner` is **deleted**; the elevation card is out of
+   `_routePreview` too. The steps sheet no longer repeats the route-wide
+   caveats (per-step red subtitles stay).
+2. **Warning threshold 200 ft → 1000 ft**, as `warnMinFt` in nav.dart, now the
+   default arg of `visibleWarnings([minFt])`. `AppState._warnFt` /
+   `warnFt` / `setWarnFt` / the `warn_ft` pref are **deleted** — the slider
+   went away in v1.9.1, so the persisted value was dead weight that would have
+   pinned old installs at 200. Almost every Greenville trip crosses a short
+   unmarked block; at 200 ft the banner cried wolf on routes that were fine.
+3. **Control rail replaces the FAB stack.** One rounded `Material` column of
+   `IconButton`s (compass / layers / hazards / locate) instead of 2–3 separate
+   round FABs — narrower, reads as one object, leaves the map's middle for
+   pinch-zoom. Buttons with nothing to say are absent.
+4. **"Clear route" FAB deleted** — the ✕ on the route summary bar directly
+   below already calls `_clearRoute`. Two cancels for one route was half the
+   crowding. "Report" stays an extended FAB (only shown when no route is
+   drawn, i.e. the least crowded state); its icon is now
+   `add_location_alt_outlined` so it never reads as the hazards triangle.
+5. **Compass fix**: the native MapLibre compass drew itself *under the status
+   bar* and vanished on tap (it fades out facing north). `compassEnabled:
+   false` now; ours is a rail button that appears only when `_bearing.abs() >
+   2`, rotates its needle to stay pointing north, and taps to
+   `CameraUpdate.bearingTo(0)`. `_onCameraMove` tracks `_bearing` and repaints
+   only on a >2° change, and never mid-navigation (the camera rotates on every
+   GPS fix there and the compass is hidden anyway).
+
+Device test checklist (v1.10.0+43):
+- Plan a route with a real bike-lane gap: NO banner on the map; the rail
+  shows a ⚠ with a count; tapping it lists the gaps + hills + elevation graph.
+- A route whose only gap is a block or two: no ⚠ button at all (1000 ft bar).
+- Rotate the map two-finger: compass appears in the rail *below* the status
+  bar, needle points north; tap → map swings north-up and the button leaves.
+- Idle map: rail + Report only. Route drawn: rail + alternatives + route bar
+  (✕ clears it). Mid-nav: rail is just locate (+ ⚠ if the route has any).
+
+### 2026-08-07 later (eleventh session, omega) — app v1.9.1+42, map-layers v0.9.1 (DEPLOYED)
+
+Bennett's dark-theme + polish feedback on v1.9.0. `flutter analyze` clean,
+`flutter test` 66/66, Python 39/39; signed APK + AAB versionCode 42.
+
+1. **Dark theme sweep**: mode pills, alternatives/"Different route" chips,
+   planning chip, elevation preview card (+ line/label colors via
+   `brandOnSurface`/painter param), warning banner (`warnBg`/`warnFg`/
+   `warnAccent` helpers in theme.dart — amber-on-dark-brown in dark mode),
+   nav trip bar (surface + onSurfaceVariant, End keeps white-on-red),
+   upcoming strip, steps sheet (done-steps use `disabledColor`; black26/45
+   were invisible on dark), bcycle/road-info secondary text. Pattern: map
+   overlays use `Theme.of(context).colorScheme.surface`, never Colors.white.
+2. **Settings**: "I use a wheelchair" (dropped " (roll)", also in the
+   directions sheet); "Smallest gap worth a warning" slider REMOVED (AppState
+   `warnFt` logic + persistence kept at default 200 ft — UI only).
+3. **Puck reads in isometric**: `iconPitchAlignment: 'viewport'` (billboard —
+   at 60° tilt a map-pitched icon foreshortened to a sliver; this was "too
+   flat"), and renderPuck redrawn 2.5D: radial-gradient sphere, grounded
+   blurred ellipse shadow, glyph drop shadow, 48 dp. TRUE 3D model would need
+   a custom native MapLibre render layer — deliberately not done.
+4. **Search finds businesses**: Nominatim was fallback-only, so ANY local hit
+   (street prefix) hid every POI. Now `/map-layers/search` = curated
+   BIKE_BUSINESSES matches + local (parking/stops/addresses/streets) +
+   Nominatim POIs filling remaining slots (q ≥ 3 chars), deduped by label,
+   with a server-side 1.1 s min-interval guard on Nominatim (usage policy).
+   Beyond OSM coverage would mean a paid geocoder (Google Places) — not done.
+5. **"Clear route" extended FAB** whenever a route is drawn and not
+   navigating: clears line/pin/endpoints, camera back to flat (tilt 0).
+6. **SRT geometry verified current — nothing was stale on the backend**: the
+   `srt` layer + routing graph read `SRT.segments_owners` (projects/srt.yaml,
+   sourced from the BWG Google My Map via plugin:gmaps). Gold Line (1.72 mi,
+   TR) is in the DB, in the served layer, and routable (curl-verified route
+   rides it end-to-end). If a segment ever goes missing on-device again:
+   check the pregenerated `srt.geojson` in the container's output dir and
+   the 24 h graph cache (restart the container to rebuild), and re-sync
+   `mrsm compose sync pipes --file projects/srt.yaml` if the My Map changed.
+
+Device test (v1.9.1+42): dark mode end-to-end (preview + warnings + nav bars
++ steps sheet legible); puck upright and readable at nav tilt; search "Willy
+Taco" / "Swamp Rabbit Cafe" returns results; Clear route FAB flattens map;
+wheelchair labels; no warn slider in Settings.
+
+### 2026-08-07 (tenth session, omega) — app v1.9.0+41 (BUILT + SIGNED), map-layers v0.9.0 (DEPLOYED + curl-verified)
+
+Bennett's feedback from a real ride (Springer St tunnel → South Ridge lot →
+University Ridge → Cleveland St). All implemented; `flutter analyze` clean,
+`flutter test` 66/66, `python3 tests/test_route_graph.py` 39/39; signed APK
+(84 MB) + AAB (56 MB) built, signer SHA-1 `537F9A88…A843`, versionCode 41 —
+**not device-verified** (no phone on omega, as ever).
+
+1. **WRONG-TURN FIX (backend)**: `_build_steps` measured maneuver bearings on
+   a single geometry segment, so a ~3 m junction jog right before a left turn
+   announced "Bear right" (the Anderson St → Dunbar St report). Bearings now
+   measured over ~15 m (`STEP_BEARING_LOOKAHEAD_M`, `_bearing_into` /
+   `_bearing_out_of`). Regression test reproduces the exact jog: old code says
+   right, new says left.
+2. **CUSTOM_PATHS (backend)**: curated off-grid connectors — new category
+   `path` (car-free; priced like a bike lane, neutral for roll, own-surface so
+   no `no_sidewalk`/`no_bike_lane` warnings). First entry: **Springer St
+   tunnel** (OSM way 338586347) + South Ridge Apartments lot up to University
+   Ridge. Served at `/map-layers/custom-paths.geojson` ("Shortcuts & tunnels"
+   layer in the app, bike+walk modes). Verified live: route Springer St →
+   University Ridge steps read "Bear left onto Springer St tunnel path";
+   route-stats shows `path: 4 edges / 0.2 km`. Add more entries to the
+   CUSTOM_PATHS list in map-layers.py and redeploy.
+3. **Reroute governor (app)**: `RerouteGovernor` in nav.dart (unit-tested).
+   Off-route rider heading BACK toward the route is left alone; repeat
+   reroutes in one spell back off 15→30→60→120 s; only the first reroute of a
+   spell beeps + speaks ("Rerouting."), the third says once "Looks like you
+   know a shortcut. I'll keep the route updated quietly", everything else is
+   silent. Spell resets after 30 consecutive on-route fixes (NOT a short blip
+   — a fresh reroute passing through the rider must not reset the backoff).
+   Tone softened: `TONE_PROP_ACK` at volume 70 (was BEEP2 @ 85).
+4. **Nav visibility (app)**: maneuver card icon 42→56, distance 26→34 w800,
+   instruction 16→20 w600 (2 lines), "then" row white70 @15, warning lines
+   12.5→14, upcoming strip 40 px tall w600 @14, trip bar ETA 20→24.
+5. **Route options row (app)**: the current plan now renders as the FIRST chip
+   (filled green, icon + label + duration) ahead of the alternatives — the row
+   reads as a set of selectable itineraries, so picking bike+bus over pure
+   bike is an explicit visible choice. Tapping the current chip opens steps.
+6. **Dark mode (app)**: Settings → Appearance (Match device / Light / Dark,
+   persisted `theme_mode`, default system). Dark Material theme + OpenFreeMap
+   `dark` basemap. A style swap wipes MapLibre sources/layers/images:
+   `build()` detects the URL change, clears `_styleReady`/`_addedLayers`/
+   `_puckImages`, and `_onStyleLoaded` re-adds everything and re-pushes the
+   active route + puck (`_activeStyle` field). Test dark toggle WITH a route
+   drawn and mid-nav.
+7. **TTS voice (app)**: `_initTts` picks a Google en-US "network" voice when
+   the engine offers one (falls back silently).
+
+Device test checklist (v1.9.0+41):
+- Ride past a turn where the route jogs: instruction must match the real
+  turn direction (Anderson → Dunbar was the failing case).
+- Go off-route and STAY off: one soft tone + "Rerouting", then silence except
+  a single "shortcut" notice; back on route for ~30 s then off again →
+  announced again.
+- Springer St tunnel: route 4 McHan St-ish → County Square area with bike;
+  route should use the tunnel path; "Shortcuts & tunnels" layer draws it.
+- Settings → Dark: map + app go dark; with a route drawn, the line survives
+  the swap; toggle back mid-nav and the puck/route re-appear.
+- Route preview: green filled chip = current plan with duration; alternatives
+  beside it.
+- Nav card legible at arm's length in sunlight.
 
 ### Hotfix 2026-08-06 — app v1.8.1+40: nav froze on a real ride (GPS fix rate)
 

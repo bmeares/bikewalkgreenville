@@ -1,0 +1,43 @@
+### OSM path/tunnel ways for the routing graph (see plugins/map-layers.py:
+### `fetch()` pulls Overpass; `_osm_path_rows` reads this pipe at graph build).
+
+project_name: osm-paths
+
+root_dir: ../root
+
+plugins_dir:
+- ../.installed_plugins
+- ../plugins
+
+sync:
+  schedule: "daily"
+
+pipes:
+
+- connector: "plugin:map-layers"
+  metric: "osm_paths"
+  location: "greenville"
+  parameters:
+    schema: "MapLayers"
+    target: "osm_paths"
+    columns:
+      primary: "way_id"
+    dtypes:
+      way_id: "string"
+      name: "string"
+      highway: "string"
+      street: "bool"
+      geometry: "geometry[LINESTRING, 4326]"
+    indices:
+      geometry: "geometry"
+
+config:
+  meerschaum:
+    instance: sql:bwg
+    connectors:
+      sql:
+        bwg: "{sql:bwg}"
+
+  plugins:
+    bwg:
+      data_path: '{MRSM_ROOT_DIR}/../data'
