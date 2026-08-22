@@ -30,6 +30,8 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Take photos to attach to reports and submissions.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Your location shows where you are on the Greenville bike and pedestrian map.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Your location shows where you are on the Greenville bike and pedestrian map.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
