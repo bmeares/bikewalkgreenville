@@ -139,3 +139,7 @@ dmypy.json
 # Flutter app source is not a Python venv lib dir
 !app-native/lib/
 !app-native/lib/**
+
+# Play Developer API service-account key — never commit (repo is public)
+play-service-account*.json
+*-service-account*.json
