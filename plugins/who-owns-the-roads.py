@@ -695,20 +695,24 @@ def init_dash(dash_app):
     @dash_app.callback(
         Output('wotr-click-marker-container', 'children'),
         Output('wotr-map', 'viewport', allow_duplicate=True),
-        Input({'type': 'wotr-lines', 'ix': ALL}, 'clickData'),
+        ### `n_clicks` (not `clickData`) so that re-clicking the same road fires
+        ### again — its `clickData` is identical, so Dash would skip the update.
+        Input({'type': 'wotr-lines', 'ix': ALL}, 'n_clicks'),
+        State({'type': 'wotr-lines', 'ix': ALL}, 'clickData'),
         State('wotr-map', 'clickData'),
         prevent_initial_call=True,
     )
-    def drop_marker_on_click(lines_click_data, map_click_data):
-        if not callback_context.inputs:
+    def drop_marker_on_click(lines_n_clicks, lines_click_data, map_click_data):
+        triggered_id = callback_context.triggered_id
+        if triggered_id is None or not map_click_data:
             raise PreventUpdate
 
         line_click_data = None
-        for line_input in callback_context.args_grouping[0]:
-            if (value := line_input.get('value')):
-                line_click_data = value
+        for line_input, click_data in zip(callback_context.args_grouping[0], lines_click_data):
+            if line_input.get('id') == triggered_id:
+                line_click_data = click_data
                 break
-        if not line_click_data or not map_click_data:
+        if not line_click_data:
             raise PreventUpdate
 
         props = line_click_data['properties']
@@ -717,6 +721,12 @@ def init_dash(dash_app):
 
         popup = dl.Popup(
             build_tooltip_contents(props),
+            ### A fresh ID per click remounts the popup; a closed one stays
+            ### closed if React reuses the old component.
+            id={
+                'type': 'wotr-click-popup',
+                'ix': str(sum(n_clicks or 0 for n_clicks in lines_n_clicks)),
+            },
             keepInView=False,
             position=latlng,
             closeButton=True,
