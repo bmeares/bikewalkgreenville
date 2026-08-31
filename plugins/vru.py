@@ -423,8 +423,15 @@ def init_dash(dash_app):
             children=(
                 [
                     dl.TileLayer(
-                        url='https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-                        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+                        url="https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+                        attribution='Tiles &copy; Esri &mdash; &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+                        maxNativeZoom=16,
+                        maxZoom=19,
+                    ),
+                    dl.TileLayer(
+                        url="https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}",
+                        maxNativeZoom=16,
+                        maxZoom=19,
                     ),
                 ]
                 + ([dl.GestureHandling()] if iframe_scroll else [])
