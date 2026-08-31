@@ -8,7 +8,7 @@ Add the "Who Owns the Roads" search application.
 import meerschaum as mrsm
 from meerschaum.plugins import web_page, dash_plugin
 
-__version__ = '0.5.0'
+__version__ = '0.6.0'
 
 required: list[str] = ['dash-leaflet']
 
@@ -79,6 +79,17 @@ LINK_PREFIXES = {
     'Phone': 'tel:',
     'Online Form': '',
 }
+MAPLIBRE_STYLE_URL: str = 'https://tiles.openfreemap.org/styles/dark'
+MAPLIBRE_JS_URL: str = 'https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/5.24.0/maplibre-gl.min.js'
+MAPLIBRE_CSS_URL: str = 'https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/5.24.0/maplibre-gl.min.css'
+MAPLIBRE_LEAFLET_JS_URL: str = (
+    'https://cdn.jsdelivr.net/npm/@maplibre/maplibre-gl-leaflet@0.1.4/leaflet-maplibre-gl.js'
+)
+MAPLIBRE_ATTRIBUTION: str = (
+    '&copy; <a href="https://openfreemap.org/">OpenFreeMap</a> '
+    '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+)
+
 LOG_PIPE: mrsm.Pipe = mrsm.Pipe(
     'dash', 'usage', 'Roads',
     instance='sql:bwg',
@@ -140,6 +151,7 @@ def init_dash(dash_app):
         """Return the layout objects for this page."""
         return [
             dcc.Location(id='who-owns-the-roads-location'),
+            dcc.Store(id='wotr-basemap-hooked'),
             html.Div(id='who-owns-the-roads-output-div'),
         ]
 
@@ -163,11 +175,16 @@ def init_dash(dash_app):
     @dash_app.callback(
         Output('who-owns-the-roads-output-div', 'children'),
         Input('who-owns-the-roads-location', 'pathname'),
+        Input('wotr-basemap-hooked', 'data'),
         State('who-owns-the-roads-location', 'search'),
         State('who-owns-the-roads-location', 'href'),
     )
-    def render_page_on_url_change(pathname: str, search: str, href: str):
-        """Reload page contents when the URL path changes.""" 
+    def render_page_on_url_change(pathname: str, basemap_hooked, search: str, href: str):
+        """Reload page contents when the URL path changes."""
+        ### Wait for the MapLibre hook so `L.Map.addInitHook()` sees the map.
+        if not basemap_hooked:
+            raise PreventUpdate
+
         url_params = get_url_params(search)
         is_embed = get_embed_status(search)
         non_embed_params = {
@@ -279,10 +296,100 @@ def init_dash(dash_app):
                 };
                 setTimeout(() => tryClick(0), 100);
             }
+
             return '';
         }
         """,
         Output('wotr-dummy-for-clientside', 'children'),
+        Input('who-owns-the-roads-location', 'pathname'),
+    )
+
+    ### Registers the MapLibre GL basemap hook before the map is built; the page
+    ### render callback waits on this store so `addInitHook()` sees every map.
+    clientside_callback(
+        """
+        function(pathname) {
+            try {
+                /* Load MapLibre GL + the Leaflet glue, and hook L.Map so every
+                 * map dash_leaflet builds gets the vector basemap in its tile
+                 * pane, underneath the GeoJSON overlays. */
+                if (!window._wotrBasemap) {
+                    window._wotrBasemap = true;
+                    const pending = [];
+                    const addTag = (tag, attrs) => new Promise((resolve, reject) => {
+                        const el = document.createElement(tag);
+                        Object.assign(el, attrs);
+                        el.onload = resolve;
+                        el.onerror = reject;
+                        document.head.appendChild(el);
+                    });
+                    const libs = (
+                        addTag('link', {rel: 'stylesheet', href: '%(css)s'})
+                        .then(() => addTag('script', {src: '%(js)s'}))
+                        .then(() => addTag('script', {src: '%(gl_leaflet)s'}))
+                    );
+                    const attach = () => libs.then(() => {
+                        while (pending.length) {
+                            const map = pending.shift();
+                            const layer = window.L.maplibreGL({
+                                style: '%(style)s',
+                                pane: 'tilePane',
+                            }).addTo(map);
+                            if (map.attributionControl) {
+                                map.attributionControl.addAttribution('%(attribution)s');
+                            }
+                            /* The GL canvas is sized on creation, which can beat the
+                             * container's final layout — re-sync once it settles. */
+                            const resync = () => {
+                                map.invalidateSize({animate: false});
+                                const glMap = layer.getMaplibreMap && layer.getMaplibreMap();
+                                if (glMap) {
+                                    glMap.resize();
+                                }
+                            };
+                            map.whenReady(() => setTimeout(resync, 0));
+                            setTimeout(resync, 500);
+                            window.addEventListener('resize', resync);
+                        }
+                    }).catch((err) => console.error('MapLibre basemap failed to load', err));
+                    const hook = (L) => {
+                        if (!L || !L.Map || L.Map._wotrHooked) {
+                            return;
+                        }
+                        L.Map._wotrHooked = true;
+                        L.Map.addInitHook(function () {
+                            pending.push(this);
+                            attach();
+                        });
+                    };
+                    if (window.L) {
+                        hook(window.L);
+                    } else {
+                        /* dash_leaflet has not loaded yet — hook the moment it sets window.L. */
+                        let _L;
+                        Object.defineProperty(window, 'L', {
+                            configurable: true,
+                            get: () => _L,
+                            set: (value) => {
+                                _L = value;
+                                hook(value);
+                            },
+                        });
+                    }
+                }
+            } catch (err) {
+                console.error('MapLibre basemap hook failed', err);
+            }
+            return true;
+        }
+        """ % {
+            'css': MAPLIBRE_CSS_URL,
+            'js': MAPLIBRE_JS_URL,
+            'gl_leaflet': MAPLIBRE_LEAFLET_JS_URL,
+            'style': MAPLIBRE_STYLE_URL,
+            'attribution': MAPLIBRE_ATTRIBUTION,
+        },
+        Output('wotr-basemap-hooked', 'data'),
         Input('who-owns-the-roads-location', 'pathname'),
     )
 
@@ -690,17 +797,9 @@ def init_dash(dash_app):
     ):
         return dl.Map(
             children=[
-                dl.TileLayer(
-                    url="https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
-                    attribution='Tiles &copy; Esri &mdash; &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-                    maxNativeZoom=16,
-                    maxZoom=19,
-                ),
-                dl.TileLayer(
-                    url="https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}",
-                    maxNativeZoom=16,
-                    maxZoom=19,
-                )] + ([dl.GestureHandling()] if iframe_scroll else []) + [
+                # The basemap is a MapLibre GL vector layer attached client-side
+                # (see BASEMAP_JS) — raster tiles blur past their max zoom.
+                ] + ([dl.GestureHandling()] if iframe_scroll else []) + [
                 dl.GeoJSON(
                     url='https://meerschaum.io/files/bwg/output/geojson/Boundaries/boundaries_greenville.geojson',
                     id='wotr-boundaries-greenville',
@@ -749,6 +848,7 @@ def init_dash(dash_app):
                 )
             ],
             zoom=10,
+            maxZoom=19,
             style={'height': '45vh'},
             center=[34.843739, -82.393905],
             id='wotr-map',
