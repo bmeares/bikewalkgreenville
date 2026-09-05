@@ -35,7 +35,7 @@ from meerschaum.actions import make_action
 from meerschaum.plugins import api_plugin
 from meerschaum.utils.warnings import info, warn
 
-__version__ = '0.20.0'
+__version__ = '0.20.1'
 # Freeze at import: a deployment may replace this file while a refresh runs.
 _ROUTER_CODE_DIGEST = __import__('hashlib').sha256(
     __import__('pathlib').Path(__file__).read_bytes()
@@ -5139,7 +5139,10 @@ def init_app(app):
             return JSONResponse({'error': 'Request too large.'}, status_code=413)
         try:
             body = await request.json()
-            revision = str(body.get('id', ''))
+            ids = [str(x) for x in (body.get('ids') or []) if x] or [str(body.get('id', ''))]
+            ids = list(dict.fromkeys(i for i in ids if i))
+            if not ids or len(ids) > 200:
+                raise ValueError('Choose between 1 and 200 contributions.')
             reason = str(body.get('reason', '')).strip()
             if not reason or len(reason) > 2000:
                 raise ValueError('Please explain the rollback (up to 2000 characters).')
@@ -5147,19 +5150,33 @@ def init_app(app):
             return JSONResponse({'error': str(e)}, status_code=400)
         with _COMMUNITY_LOCK:
             _COMMUNITY_CACHE['at'] = 0.0
-            current = next((r for r in _active_community() if r['id'] == revision), None)
-            if current is None:
+            rows = _community_rows()
+            by_id = {r['id']: r for r in rows}
+            active = {r['id'] for r in _active_community(rows)}
+            reverted = {r['reverts'] for r in rows if r.get('reverts')}
+            skipped = [i for i in ids if i not in active]
+            if len(skipped) == len(ids):
                 return JSONResponse({'error': 'This contribution is already rolled back or does not exist.'}, status_code=409)
+            # Removing a contribution takes the WHOLE thing off the map: every
+            # earlier version in its `replaces` chain is reverted too, so an
+            # edit's predecessor never resurfaces (that "peel one layer" behaviour
+            # is why only the newest edit ever seemed removable).
+            targets: list[str] = []
+            for i in ids:
+                cur = i if i in active else None
+                while cur and cur in by_id and cur not in reverted and cur not in targets:
+                    targets.append(cur)
+                    cur = by_id[cur].get('replaces')
             success, _ = COMMUNITY_PIPE.sync([{
                 'id': uuid.uuid4().hex, 'category': 'rollback',
-                'name': current.get('name'), 'comment': reason, 'reverts': revision, 'replaces': None,
-                'geometry_json': json.dumps({'type': 'Point', 'coordinates': [current['lon'], current['lat']]}),
-                'lat': current['lat'], 'lon': current['lon'],
-            }])
+                'name': by_id[t].get('name'), 'comment': reason, 'reverts': t, 'replaces': None,
+                'geometry_json': json.dumps({'type': 'Point', 'coordinates': [by_id[t]['lon'], by_id[t]['lat']]}),
+                'lat': by_id[t]['lat'], 'lon': by_id[t]['lon'],
+            } for t in targets])
         if not success:
             return JSONResponse({'error': 'Rollback was not saved. Please retry.'}, status_code=503)
         _community_changed()
-        return {'ok': True}
+        return {'ok': True, 'removed': len([i for i in ids if i not in skipped]), 'skipped': skipped}
 
     @app.get('/map-layers/route')
     def map_layers_route(

@@ -50,11 +50,14 @@ def test_publish_edit_rollback_and_conflict():
         second = response.json()['id']
         assert client.get('/map-layers/community.geojson').json()['features'][0]['properties']['name'] == 'Corrected path'
         assert client.post('/map-layers/submit-point', data=dict(data, replaces=first)).status_code == 409
-        response = client.post('/map-layers/community/rollback', json={'id': second, 'reason': 'Original name was correct'})
+        response = client.post('/map-layers/community/rollback', json={'id': second, 'reason': 'Not a real path'})
         assert response.status_code == 200, response.text
-        assert client.get('/map-layers/community.geojson').json()['features'][0]['properties']['name'] == 'Local path'
+        # Removing an edited contribution removes its whole chain — the earlier
+        # version must NOT resurface on the map.
+        assert client.get('/map-layers/community.geojson').json()['features'] == []
         history = client.get('/map-layers/community/history').json()['revisions']
-        assert len(history) == 3
+        assert len(history) == 4
+        assert sum(r['type'] == 'rollback' for r in history) == 2
         assert not any('ip' in r or 'user_agent' in r for r in history)
         assert client.post('/map-layers/community/rollback', json={'id': second, 'reason': 'Repeated'}).status_code == 409
         pipe.fail = True
@@ -80,10 +83,11 @@ def test_polygon_validation_publication_edit_and_rollback():
         response = client.post('/map-layers/submit-point',data=dict(data,replaces=first,name='Updated closure'))
         assert response.status_code == 200
         second = response.json()['id']
-        assert client.post('/map-layers/community/rollback',json={'id':second,'reason':'Restore original'}).status_code == 200
-        assert ml._active_community()[0]['id'] == first
-        assert client.post('/map-layers/community/rollback',json={'id':first,'reason':'Reopened'}).status_code == 200
+        assert client.post('/map-layers/community/rollback',json={'id':second,'reason':'Reopened'}).status_code == 200
+        # The whole chain goes: the original closure does not come back.
+        assert ml._active_community() == []
         assert ml._exclusion_index(ml._active_community()) is None
+        assert client.post('/map-layers/community/rollback',json={'id':first,'reason':'Again'}).status_code == 409
         assert client.post('/map-layers/submit-point',data=dict(data,category='shortcut')).status_code == 400
         assert client.post('/map-layers/submit-point',data=dict(data,geometry='')).status_code == 400
         crossing = {'type':'Polygon','coordinates':[[ring[0],ring[2],ring[1],ring[3],ring[0]]]}
@@ -138,3 +142,23 @@ def test_confirmations_count_dedupe_and_hide_from_layer():
         assert sum(r['type'] == 'confirm' for r in history) == 2
         assert not any('voter' in r for r in history)
         assert client.post('/map-layers/community/confirm', json={'id': 'nope', 'voter': 'voter0003'}).status_code == 409
+
+
+def test_batch_rollback_removes_many_in_one_request():
+    pipe = MemoryPipe()
+    with patch.object(ml, 'COMMUNITY_PIPE', pipe), patch.object(ml, '_community_changed', lambda: ml._COMMUNITY_CACHE.update(at=0)), patch.object(ml, '_get_route_graph', lambda: {'nodes': {}, 'adj': {}}), patch.object(ml, '_get_transit_data', lambda: {}):
+        ml._COMMUNITY_CACHE.update(at=0, rows=[])
+        ml._SUBMIT_HITS.clear()
+        app = FastAPI(); ml.init_app(app); client = TestClient(app)
+        ids = []
+        for i in range(3):
+            data = {'category': 'bike-parking', 'name': f'Rack {i}', 'comment': 'x', 'lat': 34.85 + i * 0.001, 'lon': -82.4}
+            ids.append(client.post('/map-layers/submit-point', data=data).json()['id'])
+        assert len(client.get('/map-layers/community.geojson').json()['features']) == 3
+        r = client.post('/map-layers/community/rollback', json={'ids': ids[:2] + ['nope'], 'reason': 'Duplicates'})
+        assert r.status_code == 200, r.text
+        assert r.json()['removed'] == 2 and r.json()['skipped'] == ['nope']
+        left = client.get('/map-layers/community.geojson').json()['features']
+        assert [f['properties']['id'] for f in left] == [ids[2]]
+        assert client.post('/map-layers/community/rollback', json={'ids': ids[:2], 'reason': 'Again'}).status_code == 409
+        assert client.post('/map-layers/community/rollback', json={'ids': [], 'reason': 'Nothing'}).status_code == 400

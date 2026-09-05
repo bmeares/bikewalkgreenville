@@ -41,6 +41,45 @@ class CommunityScreen extends StatefulWidget {
 class _CommunityScreenState extends State<CommunityScreen> {
   late Future<List<Map<String, dynamic>>> _history = _load();
   String? _busy;
+  // Select mode: pick several on-the-map contributions, remove them with one
+  // reason in one request.
+  bool _selecting = false;
+  final Set<String> _selected = {};
+
+  bool _removable(Map<String, dynamic> row) =>
+      row['active'] == true && row['type'] != 'report' && row['id'] != null;
+
+  Future<void> _removeSelected() async {
+    final ids = _selected.toList();
+    if (ids.isEmpty) return;
+    final reason = await askReason(
+      context,
+      title: 'Remove ${ids.length} contribution${ids.length == 1 ? '' : 's'}?',
+      body:
+          'They leave the community map and routing. Each one and your reason stay in public history.',
+      action: 'Remove',
+    );
+    if (reason == null || !mounted) return;
+    setState(() => _busy = 'batch');
+    try {
+      await api.rollbackContributions(ids, reason);
+      if (mounted) {
+        setState(() {
+          _selected.clear();
+          _selecting = false;
+          _history = _load();
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString())),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = null);
+    }
+  }
 
   Future<List<Map<String, dynamic>>> _load() async {
     final results = await Future.wait([
@@ -93,12 +132,40 @@ class _CommunityScreenState extends State<CommunityScreen> {
       title: const Text('Community edits'),
       actions: [
         IconButton(
+          tooltip: _selecting ? 'Done selecting' : 'Select several',
+          icon: Icon(_selecting ? Icons.close : Icons.checklist),
+          onPressed: () => setState(() {
+            _selecting = !_selecting;
+            _selected.clear();
+          }),
+        ),
+        IconButton(
           tooltip: 'Refresh history',
           icon: const Icon(Icons.refresh),
           onPressed: () => setState(() => _history = _load()),
         ),
       ],
     ),
+    bottomNavigationBar: _selecting
+        ? SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: FilledButton.icon(
+                icon: _busy == 'batch'
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.delete_outline),
+                label: Text('Remove ${_selected.length}'),
+                onPressed: _selected.isEmpty || _busy != null
+                    ? null
+                    : _removeSelected,
+              ),
+            ),
+          )
+        : null,
     body: FutureBuilder<List<Map<String, dynamic>>>(
       future: _history,
       builder: (ctx, snapshot) {
@@ -145,10 +212,30 @@ class _CommunityScreenState extends State<CommunityScreen> {
                   '${row['active'] == true ? ' · On the map' : ''}'
                   '\n${row['comment'] ?? ''}',
                 ),
-                onTap: row['geometry'] == null
+                onTap: _selecting
+                    ? (_removable(row)
+                        ? () => setState(() {
+                            final id = row['id'].toString();
+                            _selected.contains(id)
+                                ? _selected.remove(id)
+                                : _selected.add(id);
+                          })
+                        : null)
+                    : row['geometry'] == null
                     ? null
                     : () => Navigator.pop(context, row),
-                trailing: row['active'] == true && row['type'] != 'report'
+                trailing: _selecting
+                    ? (_removable(row)
+                        ? Checkbox(
+                            value: _selected.contains(row['id'].toString()),
+                            onChanged: (v) => setState(() {
+                              v == true
+                                  ? _selected.add(row['id'].toString())
+                                  : _selected.remove(row['id'].toString());
+                            }),
+                          )
+                        : null)
+                    : _removable(row)
                     ? IconButton(
                         tooltip: 'Roll back contribution',
                         icon: _busy == row['id']

@@ -17,6 +17,23 @@ anything.
 - **walk-audit config** moved off env vars onto Meerschaum config (`plugins:walk-audit:{smtp,notify}`). Prod values live in the container volume at `/meerschaum/config/plugins.json` (chmod 600); the `/meerschaum/.env` hack has been **deleted**.
 - `WalkAudit.reports` is empty (the deploy-check row was removed).
 
+### 2026-09-05 evening (omega) — app v1.21.1+63, map-layers v0.20.1 batch removal + web icon
+
+- **Why only the newest edit was removable**: the history list shows the undo
+  icon only on ACTIVE rows (heads of edit chains), and a rollback reverted one
+  revision, resurrecting its predecessor ("peel one layer"). Now
+  `POST /community/rollback` takes `ids: [...]` (≤200, one request = one
+  rate-limit hit) and reverts each active id **plus its whole `replaces`
+  chain**; returns `{ok, removed, skipped}`. Tests updated
+  (`test_community_api.py`: chain removal, batch, 409 only when nothing valid).
+- App: Community edits AppBar ☑ toggles select mode (checkboxes on removable
+  rows, bottom "Remove N" → one reason → `Api.rollbackContributions`). The map's
+  "Remove this contribution" now removes the whole chain too (copy already said so).
+- Web icons: `web/favicon.png` + `icons/Icon-192/512` are the BWG logo masked to
+  an iOS-style squircle (superellipse n=5, transparent corners); maskable
+  variants stay square on white inside the 80 % safe zone. Generated with PIL
+  from `ios/.../Icon-App-1024x1024@1x.png`.
+
 ### 2026-09-05 later (omega) — app v1.21.0+62, map-layers v0.20.0 "Prefer community routes"
 
 **DEPLOYED 2026-09-05 12:40 ET**: map-layers v0.20.0 + web bundle 1.21.0+62 live on

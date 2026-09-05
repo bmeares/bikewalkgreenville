@@ -212,14 +212,20 @@ class Api {
     return (response.data['confirmations'] as num?)?.toInt() ?? 0;
   }
 
-  Future<void> rollbackContribution(String id, String reason) async {
+  Future<void> rollbackContribution(String id, String reason) =>
+      rollbackContributions([id], reason);
+
+  /// Remove several contributions (whole edit chains) with one reason, in one
+  /// request — the server's hourly change limit counts requests, not ids.
+  Future<void> rollbackContributions(List<String> ids, String reason) async {
     await _pin();
     final response = await _dio.post(
       '$base/map-layers/community/rollback',
-      data: {'id': id, 'reason': reason},
+      data: {'ids': ids, 'id': ids.first, 'reason': reason},
     );
     if (response.data is! Map || response.data['ok'] != true) {
-      throw ApiError('Rollback was not saved. Please try again.');
+      final detail = (response.data is Map) ? response.data['error'] : null;
+      throw ApiError(detail?.toString() ?? 'Rollback was not saved. Please try again.');
     }
   }
 
