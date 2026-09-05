@@ -1273,6 +1273,39 @@ class _MapScreenState extends State<MapScreen> {
                   if (updated == true && mounted) await _refreshCommunity();
                 },
               ),
+              // Delete lives where the thing is: tapping a contribution is how
+              // people find it, not the history list.
+              if (def?.id.startsWith('community') == true &&
+                  props['id'] != null)
+                TextButton.icon(
+                  icon: const Icon(Icons.delete_outline),
+                  label: const Text('Remove this contribution'),
+                  onPressed: () async {
+                    Navigator.pop(ctx);
+                    final reason = await askReason(
+                      context,
+                      title: 'Remove this contribution?',
+                      body:
+                          'This takes it off the community map and out of routing. '
+                          'The original and your reason stay in public history under Community edits.',
+                      action: 'Remove',
+                    );
+                    if (reason == null || !mounted) return;
+                    try {
+                      await api.rollbackContribution(
+                        props['id'].toString(),
+                        reason,
+                      );
+                      if (!mounted) return;
+                      toast(context, 'Removed. History keeps it.');
+                      await _refreshCommunity();
+                    } catch (_) {
+                      if (mounted) {
+                        toast(context, 'Could not remove. Refresh and retry.');
+                      }
+                    }
+                  },
+                ),
               if (def?.id == 'reports')
                 TextButton.icon(
                   icon: const Icon(Icons.visibility_off_outlined),

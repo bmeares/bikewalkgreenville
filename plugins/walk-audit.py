@@ -201,7 +201,8 @@ def _rows(pipe, columns) -> list:
     df = pipe.get_data(select_columns=columns)
     if df is None:
         return []
-    return df.where(df.notna(), None).to_dict(orient='records')
+    # astype(object): `where` alone leaves NaN in float/all-null columns (not JSON).
+    return df.astype(object).where(df.notna(), None).to_dict(orient='records')
 
 
 def _edit_rows() -> list:

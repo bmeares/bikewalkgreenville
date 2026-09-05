@@ -90,3 +90,27 @@ def test_polygon_validation_publication_edit_and_rollback():
         assert client.post('/map-layers/submit-point',data=dict(data,geometry=json.dumps(crossing))).status_code == 400
         opened = {'type':'Polygon','coordinates':[ring[:-1]]}
         assert client.post('/map-layers/submit-point',data=dict(data,geometry=json.dumps(opened))).status_code == 400
+
+
+def test_history_serializes_all_null_columns():
+    """Postgres reads an all-null column back as float NaN, which is not JSON."""
+    class NaNPipe(MemoryPipe):
+        def read(self, sql):
+            df = super().read(sql)
+            # An all-null text column comes back float64/NaN, not None.
+            df['reverts'] = df['replaces'] = float('nan')
+            return df
+
+    pipe = NaNPipe()
+    pipe.rows = [{
+        'id': 'a' * 32, 'ts': pd.Timestamp('2026-09-05T00:00:00Z'), 'category': 'shortcut',
+        'name': 'Springer St tunnel', 'comment': 'Cross Church St', 'reverts': None,
+        'replaces': None, 'lat': 34.8377, 'lon': -82.4034,
+        'geometry_json': json.dumps({'type': 'LineString', 'coordinates': [[-82.4034, 34.8377], [-82.4028, 34.8377]]}),
+    }]
+    with patch.object(ml, 'COMMUNITY_PIPE', pipe):
+        ml._COMMUNITY_CACHE.update(at=0, rows=[])
+        app = FastAPI(); ml.init_app(app); client = TestClient(app)
+        response = client.get('/map-layers/community/history')
+        assert response.status_code == 200, response.text
+        assert response.json()['revisions'][0]['replaces'] is None

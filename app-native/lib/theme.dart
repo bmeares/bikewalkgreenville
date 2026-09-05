@@ -269,10 +269,20 @@ const layerDefs = <LayerDef>[
     modes: {TravelMode.cyclist, TravelMode.pedestrian, TravelMode.transit},
     icon: Icons.block,
     live: true,
+    // Shade only what the server stored as a no-entry area. Geometry-type
+    // alone left a drawn route one bad polygon away from reading as keep-out.
     filter: [
-      '==',
-      ['geometry-type'],
-      'Polygon',
+      'all',
+      [
+        '==',
+        ['geometry-type'],
+        'Polygon',
+      ],
+      [
+        '==',
+        ['get', 'category'],
+        'no-entry',
+      ],
     ],
   ),
   LayerDef(

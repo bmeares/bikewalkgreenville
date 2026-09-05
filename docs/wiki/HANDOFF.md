@@ -17,6 +17,31 @@ anything.
 - **walk-audit config** moved off env vars onto Meerschaum config (`plugins:walk-audit:{smtp,notify}`). Prod values live in the container volume at `/meerschaum/config/plugins.json` (chmod 600); the `/meerschaum/.env` hack has been **deleted**.
 - `WalkAudit.reports` is empty (the deploy-check row was removed).
 
+### 2026-09-05 (omega) — app v1.20.1+61, map-layers + walk-audit NaN fix (DEPLOYED, Play beta + TestFlight)
+
+- **`/map-layers/community/history` 500'd in prod**, so the Community edits page
+  showed "History could not load" — and roll back (the only delete) lives on that
+  page. Cause: `df.where(df.notna(), None)` leaves **NaN** in an all-null column
+  (Postgres reads all-null `replaces`/`reverts` back as float64), and NaN is not
+  JSON. Fixed with `df.astype(object).where(...)` in `_community_rows()`
+  (map-layers) and `_rows()` (walk-audit — same latent bug). Regression test:
+  `tests/test_community_api.py::test_history_serializes_all_null_columns`
+  (its `NaNPipe` forces the float column; the test fails without the fix).
+- **Delete from the map**: the feature sheet now has "Remove this contribution"
+  for community features (askReason → `rollbackContribution` → `_refreshCommunity`),
+  so removing no longer requires the history list.
+- **`community-areas` fill filter** is now `all(geometry-type == Polygon,
+  category == 'no-entry')` — a drawn route can never shade as keep-out.
+- Verified: `/map-layers/community/history` 200, `/walk-audit/history` 200,
+  rollback of an unknown id → 409, `/bwg-app/version.json` = 1.20.1+61.
+  Play **beta** versionCode 61 live; TestFlight build uploaded from `mac`
+  (`~/projects/bwg-release-61`).
+- Open: the Springer St tunnel contribution is stored correctly as a
+  `LineString`/`shortcut` (verified in `MapLayers.community_revisions`), and only
+  `no-entry` **polygons** exclude routing — if shading still shows there it is
+  the amber tap highlight (12 px, 0.55 opacity) or the parking land-use fill
+  (5 of its polygons overlap that corridor), not the contribution.
+
 ### 2026-08-10 latest (twentieth session, omega) — Flutter WEB build, bwg-app plugin v0.1.0 (DEPLOYED)
 
 The app now also ships as a Flutter web build, served from prod at

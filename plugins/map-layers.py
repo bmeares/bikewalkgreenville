@@ -4498,7 +4498,9 @@ def _community_rows():
     )
     if df is None:
         raise RuntimeError('Community history could not be read.')
-    rows = df.where(df.notna(), None).to_dict(orient='records')
+    # astype(object) first: on a float/all-null column `where` keeps NaN, which
+    # is not JSON — the history endpoint 500'd on an all-null 'replaces'.
+    rows = df.astype(object).where(df.notna(), None).to_dict(orient='records')
     _COMMUNITY_CACHE.update(at=time.time(), rows=rows)
     return rows
 
