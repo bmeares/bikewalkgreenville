@@ -61,3 +61,49 @@ Future<T?> showAppSheet<T>({
     ),
   );
 }
+
+/// Required free-text reason for a public, logged action (rollback, dismiss).
+/// Returns null when cancelled. Uses [showAppSheet] so it is web-safe over the map.
+Future<String?> askReason(
+  BuildContext context, {
+  required String title,
+  required String body,
+  required String action,
+}) async {
+  final controller = TextEditingController();
+  final reason = await showAppSheet<String>(
+    context: context,
+    builder: (ctx) => Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: Theme.of(ctx).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          Text(body),
+          const SizedBox(height: 12),
+          TextField(
+            controller: controller,
+            maxLength: 2000,
+            maxLines: 3,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: 'Reason (required)'),
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: FilledButton(
+              onPressed: () {
+                final text = controller.text.trim();
+                if (text.isNotEmpty) Navigator.pop(ctx, text);
+              },
+              child: Text(action),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+  Future<void>.delayed(const Duration(seconds: 1), controller.dispose);
+  return reason;
+}

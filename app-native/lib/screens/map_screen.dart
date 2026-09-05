@@ -590,6 +590,9 @@ class _MapScreenState extends State<MapScreen> {
             fillOpacity: 0.45,
             fillOutlineColor: def.color,
           ),
+          // Without the geometry-type filter MapLibre closes every
+          // LineString in the shared community source into a red polygon.
+          filter: def.filter,
           belowLayerId: 'lyr-highlight-line',
         );
       } else {
@@ -761,6 +764,35 @@ class _MapScreenState extends State<MapScreen> {
         toast(context, 'Published. Community history includes rollback.');
       }
     }
+  }
+
+  /// Fly to a GeoJSON geometry picked from the Community edits list.
+  Future<void> _fitGeometry(dynamic geometry) async {
+    final points = geometryLatLngs(geometry);
+    if (points.isEmpty) return;
+    if (points.length == 1) {
+      await _map?.animateCamera(CameraUpdate.newLatLngZoom(points.first, 17));
+      return;
+    }
+    var minLat = 90.0, maxLat = -90.0, minLon = 180.0, maxLon = -180.0;
+    for (final p in points) {
+      minLat = math.min(minLat, p.latitude);
+      maxLat = math.max(maxLat, p.latitude);
+      minLon = math.min(minLon, p.longitude);
+      maxLon = math.max(maxLon, p.longitude);
+    }
+    await _map?.animateCamera(
+      CameraUpdate.newLatLngBounds(
+        LatLngBounds(
+          southwest: LatLng(minLat, minLon),
+          northeast: LatLng(maxLat, maxLon),
+        ),
+        left: 60,
+        right: 60,
+        top: 120,
+        bottom: 160,
+      ),
+    );
   }
 
   Future<void> _refreshCommunity() async {
@@ -986,17 +1018,19 @@ class _MapScreenState extends State<MapScreen> {
           children: [
             ListTile(
               leading: const Icon(Icons.history),
-              title: const Text('Community history & rollback'),
+              title: const Text('Community edits & history'),
               subtitle: const Text(
-                'Published contributions are not endorsed by BWG',
+                'Contributions, rollbacks and dismissed reports — not endorsed by BWG',
               ),
               onTap: () async {
                 Navigator.pop(ctx);
-                await Navigator.push(
+                final picked = await Navigator.push<Map<String, dynamic>>(
                   context,
                   MaterialPageRoute(builder: (_) => const CommunityScreen()),
                 );
-                if (mounted) await _refreshCommunity();
+                if (!mounted) return;
+                await _refreshCommunity();
+                if (picked != null) await _fitGeometry(picked['geometry']);
               },
             ),
             ListTile(
@@ -1239,6 +1273,32 @@ class _MapScreenState extends State<MapScreen> {
                   if (updated == true && mounted) await _refreshCommunity();
                 },
               ),
+              if (def?.id == 'reports')
+                TextButton.icon(
+                  icon: const Icon(Icons.visibility_off_outlined),
+                  label: const Text('Dismiss this report'),
+                  onPressed: () async {
+                    Navigator.pop(ctx);
+                    final reason = await askReason(
+                      context,
+                      title: 'Dismiss this report?',
+                      body:
+                          'This removes it from the map. The report and your reason stay in public history under Community edits.',
+                      action: 'Dismiss',
+                    );
+                    if (reason == null || !mounted) return;
+                    try {
+                      await api.dismissReport(props['id'].toString(), reason);
+                      if (!mounted) return;
+                      toast(context, 'Report dismissed. History keeps it.');
+                      await _refreshReports();
+                    } catch (_) {
+                      if (mounted) {
+                        toast(context, 'Could not dismiss. Refresh and retry.');
+                      }
+                    }
+                  },
+                ),
               const SizedBox(height: 8),
               if (isBcycle) _bcycleAvailability(ctx, props),
               for (final e in rows)
@@ -2481,7 +2541,12 @@ class _MapScreenState extends State<MapScreen> {
             bottom: MediaQuery.of(context).padding.bottom + (kIsWeb ? 52 : 36),
             child: PointerInterceptor(
               intercepting: kIsWeb,
-              child: Column(
+              // pointer_interceptor's web shield is a centered Stack, so the
+              // column must claim the full width or the rail/Report button
+              // drift to the middle of the screen on web.
+              child: SizedBox(
+                width: double.infinity,
+                child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
@@ -2519,6 +2584,7 @@ class _MapScreenState extends State<MapScreen> {
                     _placeCard(),
                   ],
                 ],
+                ),
               ),
             ),
           ),

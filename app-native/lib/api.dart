@@ -207,6 +207,29 @@ class Api {
     }
   }
 
+  /// Reports and dismissals from walk-audit, same row shape as
+  /// [communityHistory] (type, ts_display, geometry, active).
+  Future<List<Map<String, dynamic>>> walkAuditHistory() async {
+    await _pin();
+    final response = await _dio.get('$base/walk-audit/history');
+    return List<Map<String, dynamic>>.from(response.data['edits']);
+  }
+
+  /// Removes a reported issue from the map; the dismissal is public history.
+  Future<void> dismissReport(String id, String reason) async {
+    await _pin();
+    final response = await _dio.post(
+      '$base/walk-audit/dismiss',
+      data: {'id': id, 'reason': reason},
+    );
+    if (response.data is! Map || response.data['ok'] != true) {
+      final detail = response.data is Map ? response.data['error'] : null;
+      throw ApiError(
+        detail?.toString() ?? 'Dismissal was not saved. Please try again.',
+      );
+    }
+  }
+
   Future<void> submitBikeParkingFeedback({
     required String spotName,
     required double lat,

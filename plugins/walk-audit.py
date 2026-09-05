@@ -15,7 +15,12 @@ Routes (mounted on the Meerschaum API FastAPI app, i.e. https://bwg.mrsm.io):
   POST /walk-audit/submit           -> multipart: category, comment, lat, lon,
                                        photo (optional)
   GET  /walk-audit/reports.geojson  -> FeatureCollection of submitted reports
+                                       (dismissed reports are excluded)
   GET  /walk-audit/categories.json  -> report categories for the app UI
+  POST /walk-audit/dismiss          -> json: id, reason. Removes a report from
+                                       the map; the report and the dismissal
+                                       both stay in public history.
+  GET  /walk-audit/history          -> every report and dismissal, newest first
 
 Owner resolution: nearest segment in "Roads".roads (KNN, SRID 6570).
 
@@ -40,7 +45,7 @@ import meerschaum as mrsm
 from meerschaum.plugins import api_plugin
 from meerschaum.utils.warnings import warn
 
-__version__ = '0.2.0'
+__version__ = '0.3.0'
 
 CATEGORIES = [
     {'id': 'broken-sidewalk', 'label': 'Broken / uneven sidewalk'},
@@ -129,6 +134,56 @@ def _nearest_road(lat: float, lon: float) -> dict:
         'owner_form': _val('Online Form'),
         'distance_ft': round(float(row['distance_ft']), 1),
     }
+
+
+#: Public edit log for reports. Only `dismiss` exists today; the `action`
+#: column is what a future "restore" would key on.
+EDITS_PIPE: mrsm.Pipe = mrsm.Pipe(
+    'app', 'report_edits', 'WalkAudit',
+    instance='sql:bwg',
+    parameters={
+        'autotime': True,
+        'schema': 'WalkAudit',
+        'target': 'report_edits',
+        'columns': {'datetime': 'ts', 'id': 'id'},
+        'dtypes': {
+            'ts': 'datetime',
+            'id': 'string',
+            'report_id': 'string',
+            'action': 'string',
+            'reason': 'string',
+            'ip': 'string',
+        },
+    },
+)
+
+
+def _fmt_et(ts) -> str:
+    """'Sep 5, 2026 · 12:33 AM ET' — the app shows this instead of an ISO stamp."""
+    import pandas as pd
+    try:
+        dt = pd.Timestamp(ts)
+        dt = dt.tz_localize('UTC') if dt.tzinfo is None else dt
+        return dt.tz_convert('America/New_York').strftime('%b %-d, %Y · %-I:%M %p ET')
+    except (ValueError, TypeError):
+        return str(ts or '')
+
+
+def _rows(pipe, columns) -> list:
+    if not pipe.exists():
+        return []
+    df = pipe.get_data(select_columns=columns)
+    if df is None:
+        return []
+    return df.where(df.notna(), None).to_dict(orient='records')
+
+
+def _edit_rows() -> list:
+    return _rows(EDITS_PIPE, ['ts', 'id', 'report_id', 'action', 'reason'])
+
+
+def _dismissed_ids(edits=None) -> set:
+    return {e['report_id'] for e in (_edit_rows() if edits is None else edits) if e.get('action') == 'dismiss'}
 
 
 def _photos_dir():
@@ -307,9 +362,10 @@ def init_app(app):
                         'road_name', 'owner',
                     ],
                 )
+                dismissed = _dismissed_ids()
                 for row in (df.to_dict(orient='records') if df is not None else []):
                     lat, lon = row.get('lat'), row.get('lon')
-                    if lat is None or lon is None:
+                    if lat is None or lon is None or row.get('id') in dismissed:
                         continue
                     features.append({
                         'type': 'Feature',
@@ -330,3 +386,60 @@ def init_app(app):
         except Exception as e:
             warn(f"walk-audit: reports.geojson failed: {e}")
         return JSONResponse({'type': 'FeatureCollection', 'features': features})
+
+    @app.post('/walk-audit/dismiss')
+    async def dismiss_report(request: Request):
+        if len(await request.body()) > 4096:
+            return JSONResponse({'error': 'Request too large.'}, status_code=413)
+        try:
+            body = await request.json()
+            report_id = str(body.get('id', ''))
+            reason = str(body.get('reason', '')).strip()
+            if not report_id or not reason or len(reason) > 2000:
+                raise ValueError('Please explain the dismissal (up to 2000 characters).')
+        except (ValueError, AttributeError):
+            return JSONResponse({'error': 'Please explain the dismissal (up to 2000 characters).'}, status_code=400)
+        if not any(r.get('id') == report_id for r in _rows(REPORTS_PIPE, ['id'])):
+            return JSONResponse({'error': 'This report does not exist.'}, status_code=404)
+        if report_id in _dismissed_ids():
+            return JSONResponse({'error': 'This report is already dismissed.'}, status_code=409)
+        client = request.client
+        success, _ = EDITS_PIPE.sync([{
+            'id': uuid.uuid4().hex, 'report_id': report_id, 'action': 'dismiss',
+            'reason': reason, 'ip': client.host if client else None,
+        }])
+        if not success:
+            return JSONResponse({'error': 'Dismissal was not saved. Please retry.'}, status_code=503)
+        return {'ok': True}
+
+    @app.get('/walk-audit/history')
+    def walk_audit_history():
+        """Reports and dismissals as one public edit log (no ip / user agent)."""
+        reports = {r['id']: r for r in _rows(
+            REPORTS_PIPE, ['ts', 'id', 'category', 'comment', 'lat', 'lon', 'road_name'],
+        )}
+        edits = _edit_rows()
+        dismissed = _dismissed_ids(edits)
+        rows = []
+        for r in reports.values():
+            rows.append({
+                'id': r['id'], 'ts': str(r.get('ts') or ''), 'ts_display': _fmt_et(r.get('ts')),
+                'type': 'report', 'category': r.get('category'),
+                'name': CATEGORY_LABELS.get(r.get('category'), 'Issue')
+                        + (f" near {r['road_name']}" if r.get('road_name') else ''),
+                'comment': r.get('comment') or '', 'active': r['id'] not in dismissed,
+                'geometry': {'type': 'Point', 'coordinates': [r.get('lon'), r.get('lat')]},
+            })
+        for e in edits:
+            r = reports.get(e.get('report_id'), {})
+            rows.append({
+                'id': e['id'], 'ts': str(e.get('ts') or ''), 'ts_display': _fmt_et(e.get('ts')),
+                'type': e.get('action'), 'category': r.get('category'),
+                'name': CATEGORY_LABELS.get(r.get('category'), 'Issue')
+                        + (f" near {r['road_name']}" if r.get('road_name') else ''),
+                'comment': e.get('reason') or '', 'active': False,
+                'geometry': {'type': 'Point', 'coordinates': [r.get('lon'), r.get('lat')]}
+                            if r else None,
+            })
+        rows.sort(key=lambda x: x['ts'], reverse=True)
+        return {'edits': rows}

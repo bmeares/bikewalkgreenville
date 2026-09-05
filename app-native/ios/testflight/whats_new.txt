@@ -1,10 +1,8 @@
-Community map editor and routing improvements.
+Community edits, report dismissal, and layout fixes.
 
-• Satellite view now uses public South Carolina imagery, with a USGS fallback.
-• Draw local routes with numbered vertices or a freehand pen. Move, insert, delete, extend either end, add curves, and undo/redo. The eraser removes vertices and joins the remaining neighbors; review the resulting path before publishing.
-• Draw no-entry polygons for private property, closures, and hazards. New route requests avoid those areas immediately; community history supports edits and rollback.
-• Automatic service-drive and parking-aisle shortcuts are removed. The explicit Springer-to-Briar connection remains.
-• Routing considers arrival direction and penalizes U-turns and unnecessary left turns.
-• Web search results dismiss reliably, attribution has reserved space below action buttons, and only the app's GPS button remains visible.
+• Dismiss a reported issue from its pin with a public reason. Dismissed reports leave the map but stay in history.
+• The Community edits page now lists every contribution, edit, rollback, report, and dismissal with its type, a shape preview, and Eastern time. Tap an entry to fly to it on the map.
+• Community route lines no longer draw a red no-entry fill behind them.
+• Web: the Report button and map controls sit at the right edge instead of the center.
 
-Please test familiar routes, the editor on your phone, and web search dismissal. Community submissions publish immediately and are not endorsed by Bike Walk Greenville. Check actual access signs, crossings, and conditions; follow traffic laws and use appropriate protective equipment.
+Please test dismissing a report, rolling back a contribution, and the Community edits list. Community submissions publish immediately and are not endorsed by Bike Walk Greenville. Check actual access signs, crossings, and conditions; follow traffic laws and use appropriate protective equipment.

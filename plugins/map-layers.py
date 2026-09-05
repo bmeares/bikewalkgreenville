@@ -35,7 +35,7 @@ from meerschaum.actions import make_action
 from meerschaum.plugins import api_plugin
 from meerschaum.utils.warnings import info, warn
 
-__version__ = '0.18.0'
+__version__ = '0.19.0'
 # Freeze at import: a deployment may replace this file while a refresh runs.
 _ROUTER_CODE_DIGEST = __import__('hashlib').sha256(
     __import__('pathlib').Path(__file__).read_bytes()
@@ -4503,6 +4503,18 @@ def _community_rows():
     return rows
 
 
+
+def _fmt_et(ts) -> str:
+    """'Sep 5, 2026 · 12:33 AM ET' — the app shows this instead of an ISO stamp."""
+    import pandas as pd
+    try:
+        dt = pd.Timestamp(ts)
+        dt = dt.tz_localize('UTC') if dt.tzinfo is None else dt
+        return dt.tz_convert('America/New_York').strftime('%b %-d, %Y · %-I:%M %p ET')
+    except (ValueError, TypeError):
+        return str(ts or '')
+
+
 def _active_community(rows=None):
     rows = _community_rows() if rows is None else rows
     reverted = {r['reverts'] for r in rows if r.get('reverts')}
@@ -4948,11 +4960,15 @@ def init_app(app):
 
     @app.get('/map-layers/community/history')
     def community_history():
+        import json
         rows = _community_rows()
         active = {r['id'] for r in _active_community(rows)}
         return {'revisions': [
             {**{k: str(r[k]) if k == 'ts' else r.get(k)
                 for k in ('id', 'ts', 'category', 'name', 'comment', 'reverts', 'replaces')},
+             'ts_display': _fmt_et(r['ts']),
+             'type': 'rollback' if r.get('reverts') else 'edit' if r.get('replaces') else 'add',
+             'geometry': json.loads(r['geometry_json']) if r.get('geometry_json') else None,
              'active': r['id'] in active}
             for r in reversed(rows)
         ]}
