@@ -35,7 +35,11 @@ from meerschaum.actions import make_action
 from meerschaum.plugins import api_plugin
 from meerschaum.utils.warnings import info, warn
 
-__version__ = '0.16.0'
+__version__ = '0.18.0'
+# Freeze at import: a deployment may replace this file while a refresh runs.
+_ROUTER_CODE_DIGEST = __import__('hashlib').sha256(
+    __import__('pathlib').Path(__file__).read_bytes()
+).hexdigest()[:16]
 
 bwg = mrsm.Plugin('bwg')
 
@@ -47,6 +51,10 @@ FT_PER_M = 3.28084
 #: `tolerance_m`: Douglas-Peucker tolerance in meters (lines only; applied in
 #:   the native ft-based CRS before reprojection).
 LAYERS: dict[str, dict[str, Any]] = {
+    'community': {
+        'label': 'Community knowledge', 'kind': 'line',
+        'builder': '_build_community_layer', 'props': {}, 'color': '#7B1FA2',
+    },
     'bus-routes': {
         'label': 'Bus Routes',
         'kind': 'line',
@@ -1168,8 +1176,8 @@ def _bike_mode(ebike: bool = False, stress: str = DEFAULT_STRESS) -> str:
     return f"{'ebike' if ebike else 'bike'}:{level}"
 
 
-ROUTE_SNAP_MAX_M = 400      # reject termini farther than this from the network
-ROUTE_SNAP_RELAXED_M = 2500  # street-fallback snap: warn, don't refuse
+ROUTE_SNAP_MAX_M = 80      # reject termini farther than this from the network
+ROUTE_SNAP_RELAXED_M = 80  # never widen access links to kilometers
 ROUTE_SUBDIVIDE_M = 120.0   # split long lines so they're enterable mid-way
 ROUTE_GRID_M = 12.0         # endpoint snap cell (stitches segment breaks)
 ROUTE_STITCH_M = 60.0       # max connector length between components
@@ -1355,6 +1363,8 @@ def fetch(pipe: mrsm.Pipe, debug: bool = False, **kwargs):
             'name': e['name'],
             'highway': e['highway'],
             'street': e['street'],
+            'tags_json': __import__('json').dumps(e.get('tags', {})),
+            'tunnel': e.get('tags', {}).get('tunnel') == 'yes',
             'geometry': shapely_geometry.LineString(e['coords']),
         }
         for e in _fetch_osm_paths()
@@ -1374,7 +1384,27 @@ def _stress_floor(category: str | None, speed_mph: float | None) -> str | None:
 
 
 def _osm_paths_cache_file():
-    return _output_dir() / 'osm-paths.json'
+    return _output_dir() / 'osm-paths-access-v2.json'
+
+
+def _allowed_modes(tags):
+    """Legal access is a constraint, independent of a rider's traffic tolerance."""
+    restricted = {'no', 'private', 'customers', 'destination', 'permit', 'delivery'}
+    gate_default = 'private' if tags.get('barrier') in ('gate', 'lift_gate', 'swing_gate', 'fence', 'wall', 'stile', 'turnstile') else ''
+    general = str(tags.get('access', gate_default)).lower()
+    allowed = set()
+    for mode, key in (('bike', 'bicycle'), ('walk', 'foot'), ('roll', 'wheelchair')):
+        value = str(tags.get(key, tags.get('foot', general) if mode == 'roll' else general)).lower()
+        if value not in restricted:
+            allowed.add(mode)
+    if tags.get('highway') == 'steps':
+        allowed.discard('roll')
+    # Conditional permission is not unconditional public access.
+    if any(k.endswith(':conditional') for k in tags):
+        for mode, key in (('bike', 'bicycle'), ('walk', 'foot'), ('roll', 'wheelchair')):
+            if 'access:conditional' in tags or key + ':conditional' in tags:
+                allowed.discard(mode)
+    return frozenset(allowed)
 
 
 def _osm_category(highway: str | None, street: bool) -> str:
@@ -1392,22 +1422,26 @@ def _parse_overpass_paths(data: dict) -> list[dict[str, Any]]:
     offset OSM copy would just shadow it."""
     entries = []
     for el in (data.get('elements') or []):
+        geometry = el.get('geometry') or []
+        if el.get('type') == 'node' and 'lat' in el and 'lon' in el:
+            geometry = [el, {'lon': el['lon'] + 0.00000001, 'lat': el['lat']}]
         coords = [
             [p['lon'], p['lat']]
-            for p in (el.get('geometry') or [])
+            for p in geometry
             if 'lon' in p and 'lat' in p
         ]
         if len(coords) < 2:
             continue
         tags = el.get('tags') or {}
         name = tags.get('name')
-        if name and 'swamp rabbit' in name.lower():
+        if name and 'swamp rabbit' in name.lower() and len(_allowed_modes(tags)) == 3:
             continue
         entries.append({
-            'way_id': str(el.get('id') or ''),
+            'way_id': ('node-' if el.get('type') == 'node' else '') + str(el.get('id') or ''),
             'name': name,
             'highway': tags.get('highway'),
             'coords': coords,
+            'tags': tags,
             # A street tunnel (Springer St) is still a street; only true
             # paths get the car-free 'path' pricing.
             'street': tags.get('highway') not in OSM_PATH_HIGHWAYS,
@@ -1421,7 +1455,13 @@ def _fetch_osm_paths() -> list[dict[str, Any]]:
     bbox = f'{minlat},{minlon},{maxlat},{maxlon}'
     query = f'''[out:json][timeout:90];
 (
-  way["highway"~"^(cycleway|path|pedestrian)$"]({bbox});
+  way["highway"~"^(cycleway|path|pedestrian|track|service)$"]({bbox});
+  way["highway"]["access"~"^(private|no|customers|destination|permit)$"]({bbox});
+  way["highway"]["bicycle"="no"]({bbox});
+  way["highway"]["foot"="no"]({bbox});
+  node["barrier"~"^(gate|lift_gate|swing_gate|stile|turnstile)$"]({bbox});
+  node["highway"="traffic_signals"]({bbox});
+  node["crossing"="traffic_signals"]({bbox});
   way["highway"="footway"]["footway"!~"^(sidewalk|crossing)$"]({bbox});
   way["highway"~"^(residential|service|living_street|unclassified|track)$"]["tunnel"="yes"]({bbox});
 );
@@ -1447,8 +1487,9 @@ def _osm_path_rows_from_pipe(debug: bool = False) -> list | None:
         schema = OSM_PATHS_PIPE.parameters.get('schema') or 'public'
         target = OSM_PATHS_PIPE.target
         df = OSM_PATHS_PIPE.instance_connector.read(
-            f'SELECT ST_AsGeoJSON("geometry") AS "gj", "name", "highway", "street" '
-            f'FROM "{schema}"."{target}"',
+            f'SELECT ST_AsGeoJSON("geometry") AS "gj", "name", "highway", "street", '
+            f"to_jsonb(src)->>'tags_json' AS tags_json "
+            f'FROM "{schema}"."{target}" AS src',
             debug=debug,
         )
     except Exception as e:
@@ -1458,6 +1499,17 @@ def _osm_path_rows_from_pipe(debug: bool = False) -> list | None:
         return None
     rows = []
     for rec in df.to_dict(orient='records'):
+        raw_tags = rec.get('tags_json')
+        if not isinstance(raw_tags, str) or not raw_tags:
+            return None  # SQL NULL may arrive as NaN; use the access-aware cache.
+        try:
+            tags = json.loads(raw_tags)
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(tags, dict):
+            return None
+        if tags.get('barrier') in ('fence', 'wall'):
+            continue  # A node on a fence outline is not an entrance gate.
         gj = rec.get('gj')
         if not gj:
             continue
@@ -1479,7 +1531,8 @@ def _osm_path_rows_from_pipe(debug: bool = False) -> list | None:
             name,
             True,
             1.0, True, None,
-            street,
+            tags.get('tunnel') == 'yes',
+            _allowed_modes(tags), tags,
         ))
     return rows or None
 
@@ -1521,10 +1574,12 @@ def _osm_path_rows(debug: bool = False) -> list[tuple[list, str, str | None, boo
             True,
             1.0, True, None,
             # Street rows here are exactly the tunnel'd streets.
-            bool(p.get('street')),
+            p.get('tags', {}).get('tunnel') == 'yes',
+            _allowed_modes(p.get('tags', {})), p.get('tags', {}),
         )
         for p in entries
         if len(p.get('coords') or []) >= 2
+        and p.get('tags', {}).get('barrier') not in ('fence', 'wall')
     ]
 
 # Transit tuning: how far someone will walk to/from a stop, how close a stop
@@ -1563,6 +1618,7 @@ _COSLAT = math.cos(math.radians(34.85))  # Greenville-latitude lon scale
 _GRAPH: dict[str, Any] = {'epoch': 0.0, 'nodes': None, 'adj': None}
 _GRAPH_LOCK = threading.Lock()
 _GRAPH_TTL_SECONDS = 24 * 60 * 60
+_GRAPH_GENERATION = 0
 
 
 def _equirect_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -1741,6 +1797,17 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str, bool]]
         FROM "{schema}"."{target}" AS src
         {f'WHERE {where}' if where else ''}
         '''
+        if is_street:
+            private_filter = f'''NOT EXISTS (
+                SELECT 1 FROM "{sp_schema}"."{sp_table}" AS private
+                WHERE private."FEAT_CODE" IN (1375, 1376)
+                  AND ST_DWithin(private."geometry", {mid}, 35)
+                  AND ST_Length(ST_Intersection(
+                      ST_Transform(src."geometry", {sp_srid}),
+                      ST_Buffer(private."geometry", 20))) >
+                      ST_Length(ST_Transform(src."geometry", {sp_srid})) * 0.5
+            )'''
+            query += (' AND ' if where else ' WHERE ') + private_filter
         df = conn.read(query, debug=debug)
 
         def _num(rec, key):
@@ -1839,7 +1906,7 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str, bool]]
         ) AS "lights",
         ST_Length(ST_Transform(src."geometry", 4326)::geography) AS "len_m"
     FROM "{sp_schema}"."{sp_table}" AS src
-    WHERE COALESCE(src."FEAT_CODE", 0) NOT IN (1370, 1371)
+    WHERE COALESCE(src."FEAT_CODE", 0) NOT IN (1370, 1371, 1375, 1376)
       AND NOT EXISTS (
         SELECT 1 FROM "pcc"."stress_levels" AS s
         -- Midpoint test, not whole-line: a street whose ENDPOINT touches a
@@ -1878,6 +1945,13 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str, bool]]
                 continue
             for sub in _clip_grade_separated(name, part):
                 rows.append((sub, category, name, bool(rec.get('has_sidewalk')), danger, lit))
+    private_df = conn.read(f'''SELECT ST_AsGeoJSON(ST_Transform("geometry",4326)) AS gj
+        FROM "{sp_schema}"."{sp_table}" WHERE "FEAT_CODE" IN (1375,1376)''')
+    for rec in private_df.to_dict(orient='records'):
+        geom = json.loads(rec['gj'])
+        parts = geom['coordinates'] if geom['type'] == 'MultiLineString' else [geom['coordinates']]
+        for coords in parts:
+            rows.append((coords, 'private', None, False, 1.0, True, None, False, frozenset()))
     # OSM cycleways, paths and tunnels: the shortcuts no county layer maps.
     rows.extend(_osm_path_rows(debug=debug))
     # Curated off-grid connectors (tunnels, cut-throughs): straight from the
@@ -1887,6 +1961,12 @@ def _route_source_rows(debug: bool = False) -> list[tuple[list, str, str, bool]]
         coords = p.get('route_coords') or p.get('coords') or []
         if len(coords) >= 2:
             rows.append((coords, 'path', p.get('name'), True))
+    import json
+    for r in _active_community():
+        geom = json.loads(r['geometry_json'])
+        if r['category'] in ('shortcut', 'route-suggestion') and geom['type'] == 'LineString':
+            rows.append((geom['coordinates'], 'path', r.get('name') or 'Community path', True,
+                         1.0, True, None, False, frozenset(('bike','walk','roll')), {'community': True}))
     return rows
 
 
@@ -1912,6 +1992,17 @@ def _subdivide(coords: list) -> list[list]:
     if len(chunk) >= 2:
         chunks.append(chunk)
     return chunks
+
+
+def _automatic_parking_access(row):
+    """Stop promoting service drives / parking aisles to trail-grade shortcuts.
+
+    Keep their access metadata for restrictions, and keep mapped street tunnels.
+    Explicitly curated / community paths are separate from this automatic import.
+    """
+    tags = row[9] if len(row) > 9 else {}
+    return (tags.get('highway') == 'service' and tags.get('tunnel') != 'yes'
+            or tags.get('service') in ('parking_aisle', 'driveway', 'drive-through'))
 
 
 def _build_route_graph(debug: bool = False) -> dict[str, Any]:
@@ -1946,16 +2037,72 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
             adj[cell] = []
         return cell
 
+    source_rows = list(_route_source_rows(debug=debug))
+    from shapely.geometry import LineString
+    from shapely.strtree import STRtree
+    blocked = []
+    blocked_modes = []
+    blocked_barriers = []
+    controlled_points = []
+    busy_lines = []
+    for row in source_rows:
+        tags = row[9] if len(row) > 9 else {}
+        if tags.get('highway') == 'traffic_signals' or tags.get('crossing') == 'traffic_signals':
+            controlled_points.append(row[0][0])
+        if row[1] in ('H', 'MH') and len(row[0]) >= 2 and not (len(row) > 7 and row[7]):
+            busy_lines.append(LineString([(p[0] * _COSLAT * M_PER_DEG_LAT, p[1] * M_PER_DEG_LAT) for p in row[0]]))
+        permitted = row[8] if len(row) > 8 else frozenset(('bike', 'walk', 'roll'))
+        if len(permitted) < 3 and len(row[0]) >= 2:
+            blocked.append(LineString([(p[0] * _COSLAT * M_PER_DEG_LAT, p[1] * M_PER_DEG_LAT) for p in row[0]]))
+            blocked_modes.append(permitted)
+            blocked_barriers.append(bool(tags.get('barrier')))
+    restriction_tree = STRtree(blocked) if blocked else None
+    busy_tree = STRtree(busy_lines) if busy_lines else None
+
+    def crossing_cost(coords, tunnel=False):
+        if tunnel or busy_tree is None:
+            return 0.0
+        line = LineString([(p[0] * _COSLAT * M_PER_DEG_LAT, p[1] * M_PER_DEG_LAT) for p in coords])
+        for i in busy_tree.query(line):
+            if not line.crosses(busy_lines[i]):
+                continue
+            point = line.intersection(busy_lines[i]).centroid
+            lat, lon = point.y / M_PER_DEG_LAT, point.x / (_COSLAT * M_PER_DEG_LAT)
+            return 80.0 if any(_equirect_m(lat, lon, p[1], p[0]) < 20 for p in controlled_points) else 1000.0
+        return 0.0
+
+    def permitted_along(coords, connector=False):
+        allowed = frozenset(('bike', 'walk', 'roll'))
+        line = LineString([(p[0] * _COSLAT * M_PER_DEG_LAT, p[1] * M_PER_DEG_LAT) for p in coords])
+        if connector and busy_tree is not None:
+            for i in busy_tree.query(line):
+                if line.crosses(busy_lines[i]):
+                    return frozenset()  # No invented crossing across an arterial.
+        for i in (() if restriction_tree is None else restriction_tree.query(line.buffer(6))):
+            overlap = line.intersection(blocked[i].buffer(5)).length
+            # Real mapped streets must overlap; synthetic hops also cannot
+            # cross a private road to stitch two public components together.
+            if (overlap > max(1, line.length * 0.5)
+                or (blocked_barriers[i] and overlap > 0.1)
+                or (connector and line.crosses(blocked[i]))):
+                allowed = allowed.intersection(blocked_modes[i])
+        return allowed
+
     bike_factors = MODE_FACTORS['bike']
-    for row in _route_source_rows(debug=debug):
+    for row in source_rows:
         # Rows may be legacy 4-tuples (tests, custom paths) or carry the
         # (danger, lit, lane_stress, tunnel) context as elements 5-8.
         coords, category, name, has_sidewalk = row[:4]
+        if _automatic_parking_access(row):
+            continue
         extras = (
             (float(row[4]) if len(row) > 4 else 1.0),
             (bool(row[5]) if len(row) > 5 else True),
             (row[6] if len(row) > 6 else None),
         )
+        allowed = row[8] if len(row) > 8 else frozenset(('bike', 'walk', 'roll'))
+        if not allowed:
+            continue
         tunnel = bool(row[7]) if len(row) > 7 else False
         # Car-free trail-access streets ride at trail price (Furman College
         # Way) — every mode and stress level, since _astar prices by category.
@@ -1967,6 +2114,10 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
             tunnel_portals.append((_node(*coords[0], tunnel=True), name))
             tunnel_portals.append((_node(*coords[-1], tunnel=True), name))
         for chunk in _subdivide(coords):
+            chunk_allowed = allowed.intersection(permitted_along(chunk, connector=(len(row) > 9 and row[9].get('community', False))))
+            if not chunk_allowed:
+                continue
+            chunk_extras = (*extras, chunk_allowed, crossing_cost(chunk, tunnel))
             length_m = sum(
                 _equirect_m(a[1], a[0], b[1], b[0])
                 for a, b in zip(chunk, chunk[1:])
@@ -1986,7 +2137,7 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
             # Keep the cheapest edge per node pair (bike lane painted on a
             # stressful street should win).
             existing = next(
-                (e for e in adj[u] if e[0] == v), None,
+                (e for e in adj[u] if e[0] == v and e[8][3] == chunk_allowed), None,
             )
             if existing is not None and existing[1] <= weight:
                 continue
@@ -1994,10 +2145,10 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
                 adj[u] = [e for e in adj[u] if e[0] != v]
                 adj[v] = [e for e in adj[v] if e[0] != u]
             adj[u].append(
-                (v, weight, length_m, category, chunk, False, name, has_sidewalk, extras)
+                (v, weight, length_m, category, chunk, False, name, has_sidewalk, chunk_extras)
             )
             adj[v].append(
-                (u, weight, length_m, category, chunk, True, name, has_sidewalk, extras)
+                (u, weight, length_m, category, chunk, True, name, has_sidewalk, chunk_extras)
             )
 
     def _add_connector(u, v):
@@ -2020,9 +2171,12 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
             [nodes[u][1], nodes[u][0]],
             [nodes[v][1], nodes[v][0]],
         ]
+        allowed = permitted_along(coords, connector=True)
+        if not allowed:
+            return
         length = max(d, 1.0)
-        adj[u].append((v, length, length, 'connector', coords, False, None, None, (1.0, True, None)))
-        adj[v].append((u, length, length, 'connector', coords, True, None, None, (1.0, True, None)))
+        adj[u].append((v, length, length, 'connector', coords, False, None, None, (1.0, True, None, allowed)))
+        adj[v].append((u, length, length, 'connector', coords, True, None, None, (1.0, True, None, allowed)))
 
     # Tunnel portals rejoin the surface network HERE and only here: each
     # portal connects to the nearest chunk endpoint of a street with the
@@ -2137,7 +2291,7 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
             category, name, has_sidewalk = edge[3], edge[6], edge[7]
             extras = edge[8] if len(edge) > 8 else (1.0, True)
             factor = bike_factors.get(category, MODE_DEFAULT_FACTOR['bike'])
-            requests.sort()
+            requests.sort(key=lambda request: request[0])
             # Cut the chunk at every projection, in order along it.
             pieces = []
             prev_si, prev_pt = 0, coords[0]
@@ -2220,11 +2374,31 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
     best_comp = comps[0] if comps else set()
     nodes = {c: nodes[c] for c in best_comp}
     adj = {c: adj[c] for c in best_comp}
+    crossings = {}
+    controlled_crossings = set()
+    for node, edges in adj.items():
+        if node[0] == 'T':
+            continue
+        busy = [e for e in edges if e[3] in ('H', 'MH') or
+                (e[3] == 'bike-lane' and len(e[8]) > 2 and e[8][2] in ('H', 'MH'))]
+        calm = [e for e in edges if e[3] in ('L', 'ML', 'srt', 'path', 'footway', 'connector')]
+        if busy and calm:
+            crossings[node] = next((e[6] for e in busy if e[6]), 'a busy road')
+            if any(_equirect_m(*nodes[node], p[1], p[0]) < 20 for p in controlled_points):
+                controlled_crossings.add(node)
     return {
         'epoch': time.time(),
         'nodes': nodes,
         'adj': adj,
         'elev': _node_elevations(nodes, debug=debug),
+        'crossings': crossings,
+        'controlled_crossings': controlled_crossings,
+        'busy_tree': busy_tree,
+        'busy_lines': busy_lines,
+        'blocked_barriers': blocked_barriers,
+        'restriction_tree': restriction_tree,
+        'blocked': blocked,
+        'blocked_modes': blocked_modes,
     }
 
 
@@ -2331,21 +2505,75 @@ def _node_elevations(nodes: dict, debug: bool = False) -> dict:
     return elev
 
 
-def _get_route_graph(debug: bool = False) -> dict[str, Any]:
-    with _GRAPH_LOCK:
-        if (
-            _GRAPH['nodes'] is None
-            or (time.time() - _GRAPH['epoch']) > _GRAPH_TTL_SECONDS
-        ):
-            info("Building routing graph...")
+def _graph_cache_path():
+    return _output_dir() / f'router-{_ROUTER_CODE_DIGEST}.pickle'
+
+
+def _community_revision_key():
+    return tuple(sorted(r['id'] for r in _community_rows()))
+
+
+def _save_route_graph(graph, revision):
+    """Private, locally generated cache; exact code and community revisions only."""
+    import os
+    import pickle
+    path = _graph_cache_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix('.tmp')
+    with open(temp, 'wb') as stream:
+        os.chmod(temp, 0o600)
+        pickle.dump((revision, graph), stream, protocol=5)
+    temp.replace(path)
+
+
+def _load_route_graph():
+    import pickle
+    path = _graph_cache_path()
+    try:
+        if not path.exists() or time.time() - path.stat().st_mtime > _GRAPH_TTL_SECONDS:
+            return None
+        with open(path, 'rb') as stream:
+            revision, graph = pickle.load(stream)
+        return graph if revision == _community_revision_key() else None
+    except Exception:
+        return None
+
+
+def _refresh_route_graph(debug=False):
+    global _GRAPH
+    if not _GRAPH_LOCK.acquire(blocking=False):
+        return
+    try:
+        while True:
+            generation = _GRAPH_GENERATION
+            revision = _community_revision_key()
             built = _build_route_graph(debug=debug)
-            _GRAPH.pop('nearest_index', None)  # stale after a rebuild
-            _GRAPH.pop('edge_index', None)
-            _GRAPH.update(built)
-            info(
-                f"Routing graph: {len(built['nodes'])} nodes, "
-                f"{sum(len(v) for v in built['adj'].values()) // 2} edges."
-            )
+            _nearest_index(built)
+            _edge_index(built)
+            _GRAPH = built
+            if generation == _GRAPH_GENERATION:
+                _save_route_graph(built, revision)
+                if generation == _GRAPH_GENERATION:
+                    break
+        info(f"Routing graph: {len(built['nodes'])} nodes.")
+    except Exception as e:
+        warn(f'Routing refresh failed; retaining the previous network: {e}')
+    finally:
+        _GRAPH_LOCK.release()
+
+
+def _get_route_graph(debug: bool = False) -> dict[str, Any]:
+    global _GRAPH
+    if _GRAPH['nodes'] is None:
+        cached = _load_route_graph()
+        if cached is not None:
+            _GRAPH = cached
+        else:
+            _refresh_route_graph(debug)
+        if _GRAPH['nodes'] is None:
+            raise ValueError('Routing is warming up. Please try again shortly.')
+    elif time.time() - _GRAPH['epoch'] > _GRAPH_TTL_SECONDS:
+        threading.Thread(target=_refresh_route_graph, daemon=True).start()
     return _GRAPH
 
 
@@ -2459,7 +2687,58 @@ def _poly_len_m(coords: list) -> float:
     )
 
 
-def _snap_edge(graph: dict, lat: float, lon: float):
+def _exclusion_index(rows):
+    """Snapshot of public no-entry polygons, in local meters."""
+    import json
+    from shapely.geometry import Polygon
+    from shapely.strtree import STRtree
+    polygons = []
+    for row in rows:
+        if row.get('category') != 'no-entry':
+            continue
+        geom = json.loads(row['geometry_json'])
+        if geom.get('type') != 'Polygon':
+            continue
+        ring = geom['coordinates'][0]
+        polygons.append(Polygon([(p[0] * _COSLAT * M_PER_DEG_LAT,
+                                  p[1] * M_PER_DEG_LAT) for p in ring]))
+    return {'polygons': polygons, 'tree': STRtree(polygons)} if polygons else None
+
+
+def _excluded_coords(graph, coords):
+    index = graph.get('exclusions')
+    if not index or not coords:
+        return False
+    from shapely.geometry import LineString, Point
+    pts = [(p[0] * _COSLAT * M_PER_DEG_LAT, p[1] * M_PER_DEG_LAT) for p in coords]
+    shape = Point(pts[0]) if len(set(pts)) == 1 else LineString(pts)
+    return any(shape.intersects(index['polygons'][i]) for i in index['tree'].query(shape))
+
+
+def _access_link_allowed(graph, start, end, mode):
+    """Even short first/last-meter links must respect gates and private access."""
+    if _excluded_coords(graph, [start, end]):
+        return False
+    from shapely.geometry import LineString
+    line = LineString([(p[0] * _COSLAT * M_PER_DEG_LAT, p[1] * M_PER_DEG_LAT) for p in (start, end)])
+    tree = graph.get('restriction_tree')
+    if tree is not None:
+        for i in tree.query(line.buffer(5)):
+            if mode in graph['blocked_modes'][i]:
+                continue
+            blocked = graph['blocked'][i]
+            if (line.intersection(blocked.buffer(4)).length > 0.1
+                or line.distance(blocked) < 0.1):
+                return False
+    tree = graph.get('busy_tree')
+    if tree is not None:
+        for i in tree.query(line):
+            if line.crosses(graph['busy_lines'][i]):
+                return False
+    return True
+
+
+def _snap_edge(graph: dict, lat: float, lon: float, mode: str | None = None):
     """Nearest point on any real edge to (lat, lon), or None.
     Returns (edge_i, seg_i, t, [lon, lat], meters)."""
     index = _edge_index(graph)
@@ -2471,7 +2750,7 @@ def _snap_edge(graph: dict, lat: float, lon: float):
     home = (int(lat / cell_lat), int(lon / cell_lon))
     best = None
     seen: set = set()
-    for ring in range(0, 40):
+    for ring in range(0, 2 if mode else 40):
         if best is not None and best[4] <= (ring - 1) * _NEAREST_GRID_M:
             break
         for dy in range(-ring, ring + 1):
@@ -2482,23 +2761,30 @@ def _snap_edge(graph: dict, lat: float, lon: float):
                     if ei in seen:
                         continue
                     seen.add(ei)
-                    coords = edges[ei][1][4]
+                    edge = edges[ei][1]
+                    if mode and len(edge) > 8 and len(edge[8]) > 3 and mode not in edge[8][3]:
+                        continue
+                    coords = edge[4]
+                    if _excluded_coords(graph, coords):
+                        continue
                     for si, (a, b) in enumerate(zip(coords, coords[1:])):
                         d, t, pt = _project_seg(lat, lon, a, b)
-                        if best is None or d < best[4]:
+                        if (best is None or d < best[4]) and (not mode or _access_link_allowed(graph, [lon, lat], pt, mode)):
                             best = (ei, si, t, pt, d)
     return best
 
 
-def _snap_terminus(graph: dict, lat: float, lon: float, tag: str) -> dict:
+def _snap_terminus(graph: dict, lat: float, lon: float, tag: str, mode: str | None = None) -> dict:
     """Snap a route terminus to the nearest point ON the network, not just the
     nearest node. Termini that land mid-edge get a virtual node (the edge is
     split for this request only), which is what stops the router from walking
     to a node behind you and doubling back — the McHan St / Haynie St U-turn.
     """
     node, node_d = _nearest_node(graph, lat, lon)
-    hit = _snap_edge(graph, lat, lon)
-    if hit is None or (node_d is not None and node_d <= hit[4] + 0.01):
+    hit = _snap_edge(graph, lat, lon, mode=mode)
+    if mode and hit is None:
+        return {'node': None, 'dist': float('inf'), 'virtual': None}
+    if not mode and (hit is None or (node_d is not None and node_d <= hit[4] + 0.01)):
         return {'node': node, 'dist': node_d, 'virtual': None}
     ei, seg_i, t, pt, d = hit
     u, edge = _edge_index(graph)['edges'][ei]
@@ -2721,25 +3007,65 @@ def _astar(
     # Tiebreaker: virtual-node ids aren't comparable with grid cells, so the
     # heap must never fall through to comparing nodes.
     seq = itertools.count()
-    dist = {start: 0.0}
-    prev: dict = {start: (None, None)}
-    heap = [(h(start), 0.0, next(seq), start)]
+    start_state = (start, None, None)
+    dist = {start_state: 0.0}
+    prev: dict = {start_state: (None, None)}
+    heap = [(h(start), 0.0, next(seq), start_state)]
+    bearings = {}
+
+    def headings(cur, edge):
+        key = (cur, id(edge[4]), edge[5])
+        if key not in bearings:
+            coords = list(reversed(edge[4])) if edge[5] else edge[4]
+            if len(coords) < 2:
+                coords = [list(reversed(_pos(cur))), list(reversed(_pos(edge[0])))]
+            bearings[key] = (_bearing_into(coords, 8), _bearing_out_of(coords, 8))
+        return bearings[key]
+
     visited: set = set()
     while heap:
-        _f, g, _seq, cur = heapq.heappop(heap)
-        if cur in visited:
+        _f, g, _seq, state = heapq.heappop(heap)
+        if state in visited:
             continue
-        visited.add(cur)
+        visited.add(state)
+        cur, previous_node, incoming = state
         if cur == goal:
             path = []
-            node = goal
-            while node is not None:
-                parent, edge = prev[node]
-                path.append((node, edge))
-                node = parent
+            while state is not None:
+                parent, edge = prev[state]
+                path.append((state[0], edge))
+                state = parent
             return list(reversed(path))
         for edge in itertools.chain(adj.get(cur, ()), extra_adj.get(cur, ())):
+            access_mode = _base_mode(climb_mode or mode)
+            extras = edge[8] if len(edge) > 8 else ()
+            if len(extras) > 3 and access_mode != 'street' and access_mode not in extras[3]:
+                continue
+            if _excluded_coords(graph, edge[4]):
+                continue
             nbr, weight = edge[0], edge_weight(edge)
+            departure, arrival = headings(cur, edge)
+            # Keep turns through short connector hops meaningful. A short hop
+            # must not reset the incoming heading and hide a reversal.
+            short_hop = edge[3] == 'connector' and edge[2] < 15
+            delta = 0 if incoming is None or short_hop else (departure - incoming + 180) % 360 - 180
+            if nbr == previous_node:
+                weight += 1200  # Returning along the edge just used.
+            elif abs(delta) >= 150:
+                weight += 900   # Geometric reversal onto an offset duplicate.
+            elif abs(delta) >= 45:
+                weight += 24 if delta < 0 else 8  # Favor a simple right over two lefts.
+            elif abs(delta) >= 25:
+                weight += 4
+            next_heading = incoming if short_hop and incoming is not None else round(arrival)
+            next_state = (nbr, cur, next_heading)
+            if len(extras) > 4 and extras[4]:
+                multiplier = {'quiet': 1.8, 'balanced': 1.0, 'direct': 0.5}.get(_stress_level(climb_mode or mode), 1.0)
+                weight += extras[4] * (multiplier if extras[4] >= 1000 else 1.0)
+            if nbr in graph.get('crossings', {}) and nbr != goal:
+                tolerance = _stress_level(climb_mode or mode)
+                weight += (80.0 if nbr in graph.get('controlled_crossings', set()) else
+                           {'quiet': 1800.0, 'balanced': 1000.0, 'direct': 500.0}.get(tolerance, 1000.0))
             if climb_factor:
                 weight += _climb_m(_elev(cur), _elev(nbr)) * climb_factor
             # Alternate routes: edges the previous route used cost extra, so
@@ -2748,10 +3074,10 @@ def _astar(
             if avoid_pairs and (cur, nbr) in avoid_pairs:
                 weight *= ALT_AVOID_FACTOR
             ng = g + weight
-            if nbr not in dist or ng < dist[nbr]:
-                dist[nbr] = ng
-                prev[nbr] = (cur, edge)
-                heapq.heappush(heap, (ng + h(nbr), ng, next(seq), nbr))
+            if next_state not in dist or ng < dist[next_state]:
+                dist[next_state] = ng
+                prev[next_state] = (state, edge)
+                heapq.heappush(heap, (ng + h(nbr), ng, next(seq), next_state))
     return None
 
 
@@ -2995,6 +3321,7 @@ def _build_steps(
 #: kind -> (short label template, spoken/banner sentence template). `{d}` is
 #: the formatted distance.
 WARNING_LABELS = {
+    'busy_crossing': ('Busy road crossing', 'This route meets or crosses a busy road. Crossing protection is unverified; check traffic and use a controlled crossing where possible.'),
     'no_sidewalk': (
         '{d} with no sidewalk',
         'About {d} of this route runs along streets with no sidewalk mapped — '
@@ -3086,16 +3413,20 @@ def _route_core(
     own pairs (both directions, real nodes only) for the next pass.
     """
     graph = _get_route_graph()
+    # Read at request time: no-entry publication/rollback applies even while the
+    # graph is rebuilding. Never mutate the shared graph's routing snapshot.
+    graph = {**graph, 'exclusions': _exclusion_index(_active_community())}
     if not graph['nodes']:
         raise ValueError("Routing network is unavailable.")
     warn_mode = warn_mode or mode
 
-    snap_s = _snap_terminus(graph, from_lat, from_lon, 'start')
-    snap_g = _snap_terminus(graph, to_lat, to_lon, 'goal')
+    snap_s = _snap_terminus(graph, from_lat, from_lon, 'start', mode=_base_mode(warn_mode))
+    snap_g = _snap_terminus(graph, to_lat, to_lon, 'goal', mode=_base_mode(warn_mode))
     start, start_d = snap_s['node'], snap_s['dist']
     goal, goal_d = snap_g['node'], snap_g['dist']
     if start is None or goal is None:
-        raise ValueError("Routing network is unavailable.")
+        noun = MODE_NETWORK_NOUN.get(warn_mode, 'permitted')
+        raise ValueError(f"No {noun} connection at that point. Choose a public access point outside no-entry areas.")
     if start_d > snap_max_m or goal_d > snap_max_m:
         noun = MODE_NETWORK_NOUN.get(warn_mode, 'routable')
         raise ValueError(f"No {noun} network near that point.")
@@ -3189,6 +3520,7 @@ def _route_core(
             ):
                 pairs_out.add((prev_node, _node))
                 pairs_out.add((_node, prev_node))
+            crossing = graph.get('crossings', {}).get(_node)
             prev_node = _node
             leg_warn = _edge_deficiency(edge, warn_mode)
             # A hill only gets the callout when nothing worse is wrong with the
@@ -3205,6 +3537,8 @@ def _route_core(
                 and grade_m / length_m > STEEP_GRADE
             ):
                 leg_warn = 'steep'
+            if crossing or (len(edge) > 8 and len(edge[8]) > 4 and edge[8][4]):
+                leg_warn = 'busy_crossing'
             legs.append({
                 'coords': leg_coords,
                 'name': name,
@@ -3414,39 +3748,12 @@ def _walk_or_direct(
     toward: str = 'your stop',
     mode: str = 'walk',
 ) -> dict[str, Any]:
-    """Access/egress leg for a multi-leg trip (transit, bike share), falling
-    back to a straight line when the leg is too short or too far off-network to
-    route. `mode` is the rider's own mode for that leg."""
-    try:
-        return _route(from_lat, from_lon, to_lat, to_lon, mode=mode)
-    except ValueError:
-        coords = [[from_lon, from_lat], [to_lon, to_lat]]
-        dist = _equirect_m(from_lat, from_lon, to_lat, to_lon)
-        speed = MODE_SPEED_M_S.get(mode, MODE_SPEED_M_S['walk'])
-        verb = _ACCESS_VERB.get(_base_mode(mode), 'Head')
-        return {
-            'type': 'Feature',
-            'geometry': {'type': 'LineString', 'coordinates': coords},
-            'properties': {
-                'distance_m': round(dist, 1),
-                'duration_min': round(dist / speed / 60, 1),
-                'warn_ranges': [],
-                'warnings': [],
-                'steps': [{
-                    'maneuver': 'depart',
-                    'name': None,
-                    'category': None,
-                    'instruction': f'{verb} toward {toward}',
-                    'distance_m': round(dist, 1),
-                    'duration_min': round(dist / speed / 60, 2),
-                    'start_index': 0,
-                    'location': coords[0],
-                    'bearing': 0.0,
-                    'warn': None,
-                    'warn_m': 0.0,
-                }],
-            },
-        }
+    """Transit and bike-share access obey the same network/access constraints.
+
+    A routing failure cannot become an unverified straight line across a gate,
+    river, or arterial just because this leg leads to a bus stop.
+    """
+    return _route(from_lat, from_lon, to_lat, to_lon, mode=mode)
 
 
 def _route_transit(
@@ -3978,6 +4285,7 @@ def _compute_plan(
         alt = 0
     key = (
         plan, bike_mode, alt, _is_night(), _TRAIL_PREF.get(),
+        _GRAPH.get('epoch', 0), _GRAPH_GENERATION,
         round(from_lat, 5), round(from_lon, 5),
         round(to_lat, 5), round(to_lon, 5),
     )
@@ -4065,15 +4373,21 @@ def _route_multimodal(
     if plan and plan not in keys:
         keys = keys + [plan]
 
+    exclusions = {'exclusions': _exclusion_index(_active_community())}
     computed: dict[str, dict] = {}
     failures: list[dict[str, str]] = []
     for key in keys:
         try:
-            computed[key] = _compute_plan(
+            candidate = _compute_plan(
                 key, from_lat, from_lon, to_lat, to_lon,
                 bike_mode=bike_mode,
                 alt=(alt if key == plan else 0),
             )
+            # Include the bus ride and stitched inter-leg links, not only
+            # access legs computed by A*. Cached plans must pass this too.
+            if _excluded_coords(exclusions, candidate['geometry']['coordinates']):
+                raise ValueError('This itinerary enters a community no-entry area.')
+            computed[key] = candidate
         except ValueError as e:
             failures.append({'plan': key, 'reason': str(e)})
         except Exception as e:
@@ -4130,7 +4444,7 @@ def _route_multimodal(
 
 # User-submitted missing points (bike parking, repair stations, fountains...).
 # Deliberately anonymous — no usernames until the login question is settled;
-# rows are moderated by hand before any OSM upstreaming.
+# Legacy reports remain private; new community revisions publish immediately.
 SUBMISSION_PIPE: mrsm.Pipe = mrsm.Pipe(
     'app', 'point_submissions', 'MapLayers',
     instance='sql:bwg',
@@ -4157,6 +4471,102 @@ SUBMISSION_PIPE: mrsm.Pipe = mrsm.Pipe(
     },
 )
 
+# Append-only public revisions; legacy point submissions stay private.
+COMMUNITY_PIPE = mrsm.Pipe(
+    'app', 'community_revisions', 'MapLayers', instance='sql:bwg',
+    parameters={
+        'autotime': True, 'schema': 'MapLayers', 'target': 'community_revisions',
+        'columns': {'datetime': 'ts', 'id': 'id'},
+        'dtypes': {'id': 'string', 'ts': 'datetime', 'category': 'string',
+                   'name': 'string', 'comment': 'string', 'geometry_json': 'string',
+                   'reverts': 'string', 'replaces': 'string', 'photo_filename': 'string', 'lat': 'float', 'lon': 'float'},
+    },
+)
+_COMMUNITY_CACHE = {'at': 0.0, 'rows': []}
+_COMMUNITY_LOCK = threading.Lock()
+
+
+def _community_rows():
+    if time.time() - _COMMUNITY_CACHE['at'] < 30:
+        return _COMMUNITY_CACHE['rows']
+    if not COMMUNITY_PIPE.exists():
+        return []
+    df = COMMUNITY_PIPE.instance_connector.read(
+        'SELECT "id", "ts", "category", "name", "comment", "geometry_json", '
+        '"reverts", "replaces", "lat", "lon" FROM "MapLayers"."community_revisions" '
+        'ORDER BY "ts", "id"'
+    )
+    if df is None:
+        raise RuntimeError('Community history could not be read.')
+    rows = df.where(df.notna(), None).to_dict(orient='records')
+    _COMMUNITY_CACHE.update(at=time.time(), rows=rows)
+    return rows
+
+
+def _active_community(rows=None):
+    rows = _community_rows() if rows is None else rows
+    reverted = {r['reverts'] for r in rows if r.get('reverts')}
+    versions = [r for r in rows if not r.get('reverts') and r['id'] not in reverted]
+    replaced = {r['replaces'] for r in versions if r.get('replaces')}
+    return [r for r in versions if r['id'] not in replaced]
+
+
+def _build_community_layer(debug=False):
+    import json
+    return json.dumps({'type': 'FeatureCollection', 'features': [
+        {'type': 'Feature', 'geometry': json.loads(r['geometry_json']),
+         'properties': {k: r.get(k) for k in ('id', 'name', 'comment', 'category')}}
+        for r in _active_community()
+    ]})
+
+
+def _validate_contribution_geometry(raw, lat, lon):
+    import json
+    if len(raw) > 20000:
+        raise ValueError('Geometry is too large.')
+    geom = json.loads(raw) if raw else {'type': 'Point', 'coordinates': [lon, lat]}
+    if not isinstance(geom, dict) or geom.get('type') not in ('Point', 'LineString', 'Polygon'):
+        raise ValueError('Draw a point, path, or no-entry polygon.')
+    coords = geom.get('coordinates')
+    if geom['type'] == 'Polygon':
+        if not isinstance(coords, list) or len(coords) != 1:
+            raise ValueError('Use one polygon boundary without holes.')
+        pts = coords[0]
+        if not isinstance(pts, list) or len(pts) < 4 or pts[0] != pts[-1]:
+            raise ValueError('An area needs at least three vertices and a closed boundary.')
+    else:
+        pts = [coords] if geom['type'] == 'Point' else coords
+    max_pts = 201 if geom['type'] == 'Polygon' else 200
+    if not isinstance(pts, list) or not 1 <= len(pts) <= max_pts:
+        raise ValueError('Use at most 200 vertices.')
+    if geom['type'] == 'LineString' and len(pts) < 2:
+        raise ValueError('A path needs at least two points.')
+    minlon, minlat, maxlon, maxlat = SEARCH_BOUNDS
+    for pt in pts:
+        if (not isinstance(pt, list) or len(pt) != 2
+            or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in pt)
+            or not (minlon <= pt[0] <= maxlon and minlat <= pt[1] <= maxlat)):
+            raise ValueError('Use valid points within the Greenville service area.')
+    if geom['type'] == 'LineString' and not 2 <= _poly_len_m(pts) <= 30000:
+        raise ValueError('A path must be between 2 m and 30 km long.')
+    if geom['type'] == 'Polygon':
+        from shapely.geometry import Polygon
+        polygon = Polygon([(p[0] * _COSLAT * M_PER_DEG_LAT, p[1] * M_PER_DEG_LAT) for p in pts])
+        if not polygon.is_valid or not 4 <= polygon.area <= 25_000_000:
+            raise ValueError('Draw a non-crossing boundary covering between 4 square meters and 25 square kilometers.')
+    return {'type': geom['type'], 'coordinates': geom['coordinates']}
+
+
+def _community_changed():
+    global _GRAPH_GENERATION
+    _COMMUNITY_CACHE['at'] = 0.0
+    _GRAPH_GENERATION += 1
+    _CACHE.pop('community', None)
+    _ROUTE_CACHE.clear()
+    # Route graph is rebuilt in the background; readers keep its prior snapshot.
+    threading.Thread(target=_refresh_route_graph, daemon=True).start()
+
+
 #: Allowed categories for point submissions (server-side guard: the endpoint
 #: is public, so free-text categories invite junk).
 SUBMISSION_CATEGORIES = (
@@ -4164,6 +4574,7 @@ SUBMISSION_CATEGORIES = (
     'repair-station',
     'water-fountain',
     'bike-business',
+    'shortcut', 'route-suggestion', 'map-correction', 'access-issue', 'crossing', 'no-entry',
     'other',
 )
 
@@ -4429,6 +4840,9 @@ def init_app(app):
                 return JSONResponse({'error': str(e)}, status_code=500)
             return Response(json_str, media_type='application/geo+json')
 
+        if layer_id == 'community':
+            return Response(_build_community_layer(), media_type='application/geo+json', headers={'Cache-Control': 'no-store'})
+
         pregenerated = _output_dir() / f'{layer_id}.geojson'
         if pregenerated.exists():
             return FileResponse(pregenerated, media_type='application/geo+json')
@@ -4456,9 +4870,11 @@ def init_app(app):
         lat: float = Form(None),
         lon: float = Form(None),
         photo: UploadFile = File(None),
+        geometry: str = Form(''),
+        replaces: str = Form(''),
     ):
         """A missing point on the map (bike rack, repair station...), submitted
-        by a rider. Anonymous by design; moderated before anything downstream."""
+        by a rider. Anonymous, immediately public, and reversible through history."""
         category = (category or '').strip().lower()
         if category not in SUBMISSION_CATEGORIES:
             return JSONResponse(
@@ -4502,21 +4918,75 @@ def init_app(app):
                     {'error': 'Photo is too large (8 MB max).'},
                     status_code=413,
                 )
-        SUBMISSION_PIPE.sync(
-            [{
-                'id': rec_id,
-                'category': category,
-                'name': (name or '').strip()[:200] or None,
-                'comment': (comment or '').strip()[:2000] or None,
-                'lat': lat,
-                'lon': lon,
+        try:
+            geom = _validate_contribution_geometry(geometry, lat, lon)
+            if (geom['type'] == 'Polygon') != (category == 'no-entry'):
+                raise ValueError('No-entry areas require a polygon; polygons must use the no-entry category.')
+        except (ValueError, TypeError) as e:
+            if photo_filename:
+                (_photos_dir() / photo_filename).unlink(missing_ok=True)
+            return JSONResponse({'error': str(e)}, status_code=400)
+        # Public revision excludes IP, user-agent and uploaded photo metadata.
+        import json
+        with _COMMUNITY_LOCK:
+            _COMMUNITY_CACHE['at'] = 0.0
+            if replaces and not any(r['id'] == replaces for r in _active_community()):
+                return JSONResponse({'error': 'This contribution changed. Refresh before editing.'}, status_code=409)
+            success, message = COMMUNITY_PIPE.sync([{
+                'id': rec_id, 'category': category,
+                'name': name.strip()[:200], 'comment': comment.strip()[:2000],
+                'lat': lat, 'lon': lon, 'geometry_json': json.dumps(geom),
+                'reverts': None, 'replaces': replaces or None,
                 'photo_filename': photo_filename,
-                'ip': client.host if client else None,
-                'user_agent': request.headers.get('user-agent'),
-            }],
-            blocking=False,
-        )
-        return JSONResponse({'ok': True, 'id': rec_id})
+            }])
+        if not success:
+            if photo_filename:
+                (_photos_dir() / photo_filename).unlink(missing_ok=True)
+            return JSONResponse({'error': 'Could not save the contribution. Please retry.'}, status_code=503)
+        _community_changed()
+        return JSONResponse({'ok': True, 'id': rec_id, 'status': 'published'})
+
+    @app.get('/map-layers/community/history')
+    def community_history():
+        rows = _community_rows()
+        active = {r['id'] for r in _active_community(rows)}
+        return {'revisions': [
+            {**{k: str(r[k]) if k == 'ts' else r.get(k)
+                for k in ('id', 'ts', 'category', 'name', 'comment', 'reverts', 'replaces')},
+             'active': r['id'] in active}
+            for r in reversed(rows)
+        ]}
+
+    @app.post('/map-layers/community/rollback')
+    async def community_rollback(request: Request):
+        import json
+        if _submit_rate_limited(request.client.host if request.client else None):
+            return JSONResponse({'error': 'Too many changes. Please try later.'}, status_code=429)
+        if len(await request.body()) > 4096:
+            return JSONResponse({'error': 'Request too large.'}, status_code=413)
+        try:
+            body = await request.json()
+            revision = str(body.get('id', ''))
+            reason = str(body.get('reason', '')).strip()
+            if not reason or len(reason) > 2000:
+                raise ValueError('Please explain the rollback (up to 2000 characters).')
+        except (ValueError, AttributeError) as e:
+            return JSONResponse({'error': str(e)}, status_code=400)
+        with _COMMUNITY_LOCK:
+            _COMMUNITY_CACHE['at'] = 0.0
+            current = next((r for r in _active_community() if r['id'] == revision), None)
+            if current is None:
+                return JSONResponse({'error': 'This contribution is already rolled back or does not exist.'}, status_code=409)
+            success, _ = COMMUNITY_PIPE.sync([{
+                'id': uuid.uuid4().hex, 'category': 'rollback',
+                'name': current.get('name'), 'comment': reason, 'reverts': revision, 'replaces': None,
+                'geometry_json': json.dumps({'type': 'Point', 'coordinates': [current['lon'], current['lat']]}),
+                'lat': current['lat'], 'lon': current['lon'],
+            }])
+        if not success:
+            return JSONResponse({'error': 'Rollback was not saved. Please retry.'}, status_code=503)
+        _community_changed()
+        return {'ok': True}
 
     @app.get('/map-layers/route')
     def map_layers_route(

@@ -1,5 +1,4 @@
 // Screenshot tour for App Store captures. Run via ~/asc-scripts/ios_shots.zsh.
-import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';

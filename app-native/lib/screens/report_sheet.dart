@@ -6,6 +6,7 @@ import 'package:maplibre_gl/maplibre_gl.dart';
 
 import '../api.dart';
 import '../theme.dart';
+import '../widgets/safety_notice.dart';
 
 /// Walk-audit report form (also handles bike-parking spot feedback when
 /// [spotName] is set). Pops with the submit response map on success.
@@ -213,6 +214,7 @@ class _ReportSheetState extends State<ReportSheet> {
                   child: Text(_error!,
                       style: const TextStyle(color: Colors.red)),
                 ),
+              const Text(routeDisclaimer, style: TextStyle(fontSize: 12)),
               const SizedBox(height: 16),
               SizedBox(
                 width: double.infinity,

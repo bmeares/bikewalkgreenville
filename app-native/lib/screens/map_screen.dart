@@ -13,6 +13,9 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import '../api.dart';
 import '../app_state.dart';
 import '../map_icons.dart';
+import '../widgets/app_sheet.dart';
+import '../widgets/travel_modes.dart';
+import '../widgets/safety_notice.dart';
 import '../nav.dart';
 import '../nav_notifier.dart';
 import '../theme.dart';
@@ -20,6 +23,10 @@ import '../widgets/elevation_profile.dart';
 import 'add_point_sheet.dart';
 import 'directions_sheet.dart';
 import 'report_sheet.dart';
+import 'community_screen.dart';
+import 'geometry_editor_screen.dart';
+import 'package:pointer_interceptor/pointer_interceptor.dart';
+import 'package:flutter/foundation.dart';
 import 'tools_screen.dart';
 
 class MapScreen extends StatefulWidget {
@@ -34,6 +41,12 @@ class _MapScreenState extends State<MapScreen> {
   bool _styleReady = false;
   bool _locationEnabled = false;
 
+  // Web addImage fixes pixelRatio at 1; only iOS decodes PNGs at screen scale.
+  // Avoid oversized sprites and atlas churn when zooming dense downtown POIs.
+  double get _imageDpr => !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS
+      ? MediaQuery.of(context).devicePixelRatio
+      : 1.0;
+
   /// Basemap style currently on the widget. Changing it (dark mode) makes
   /// MapLibre reload the whole style, which drops every source and layer we
   /// added — [build] detects the swap and resets the bookkeeping so
@@ -46,6 +59,7 @@ class _MapScreenState extends State<MapScreen> {
   final _searchFocus = FocusNode();
   Timer? _searchDebounce;
   List<dynamic> _results = [];
+  int _searchSeq = 0;
 
   /// Destination picked from search — drives the bottom place card.
   Map<String, dynamic>? _place;
@@ -83,6 +97,7 @@ class _MapScreenState extends State<MapScreen> {
   Timer? _navWatchdog;
   DateTime _lastFixAt = DateTime.fromMillisecondsSinceEpoch(0);
   bool _gpsDryToastShown = false;
+
   /// Last raw fix while navigating — feeds the live speed / GPS-health line
   /// in the trip bar, the visible proof the screen is tracking, not frozen.
   Position? _lastNavFix;
@@ -137,6 +152,7 @@ class _MapScreenState extends State<MapScreen> {
   void dispose() {
     _searchDebounce?.cancel();
     _searchFocus.dispose();
+    _searchCtl.dispose();
     _navWatchdog?.cancel();
     _posSub?.cancel();
     _tts?.stop();
@@ -149,14 +165,16 @@ class _MapScreenState extends State<MapScreen> {
 
   Future<void> _onStyleLoaded() async {
     final map = _map!;
-    final ratio = MediaQuery.of(context).devicePixelRatio;
+    final ratio = _imageDpr;
 
     // Tap highlight: one source, two layers — the line layer renders when the
     // tapped feature is a line, the circle layer when it's a point. The
     // geometry-type filters matter: without them the circle layer draws a
     // ring on EVERY VERTEX of a tapped line (the SRT turned into dot soup).
     await map.addSource(
-        'highlight', GeojsonSourceProperties(data: _emptyCollection));
+      'highlight',
+      GeojsonSourceProperties(data: _emptyCollection),
+    );
     await map.addLineLayer(
       'highlight',
       'lyr-highlight-line',
@@ -167,7 +185,11 @@ class _MapScreenState extends State<MapScreen> {
         lineCap: 'round',
         lineJoin: 'round',
       ),
-      filter: ['==', ['geometry-type'], 'LineString'],
+      filter: [
+        '==',
+        ['geometry-type'],
+        'LineString',
+      ],
       enableInteraction: false,
     );
     await map.addCircleLayer(
@@ -180,7 +202,11 @@ class _MapScreenState extends State<MapScreen> {
         circleStrokeColor: '#FFC107',
         circleStrokeWidth: 2.5,
       ),
-      filter: ['==', ['geometry-type'], 'Point'],
+      filter: [
+        '==',
+        ['geometry-type'],
+        'Point',
+      ],
       enableInteraction: false,
     );
 
@@ -189,26 +215,33 @@ class _MapScreenState extends State<MapScreen> {
     // in below the highlight, symbol pins below the route casing, so draw
     // order stays lines → highlight → pins → route → pin.
     await map.addSource(
-        'route', GeojsonSourceProperties(data: _emptyCollection));
+      'route',
+      GeojsonSourceProperties(data: _emptyCollection),
+    );
     await map.addLineLayer(
       'route',
       'lyr-route-casing',
       const LineLayerProperties(
-          lineColor: '#ffffff', lineWidth: 8.0, lineCap: 'round', lineJoin: 'round'),
+        lineColor: '#ffffff',
+        lineWidth: 8.0,
+        lineCap: 'round',
+        lineJoin: 'round',
+      ),
       enableInteraction: false,
     );
     await map.addLineLayer(
       'route',
       'lyr-route',
       LineLayerProperties(
-          lineColor: [
-            'coalesce',
-            ['get', 'color'],
-            '#1565C0',
-          ],
-          lineWidth: 5.0,
-          lineCap: 'round',
-          lineJoin: 'round'),
+        lineColor: [
+          'coalesce',
+          ['get', 'color'],
+          '#1565C0',
+        ],
+        lineWidth: 5.0,
+        lineCap: 'round',
+        lineJoin: 'round',
+      ),
       enableInteraction: false,
     );
 
@@ -216,7 +249,9 @@ class _MapScreenState extends State<MapScreen> {
     // red), so "how hard is this trip" is visible on the map itself and not
     // only in the elevation graph.
     await map.addSource(
-        'route-hills', GeojsonSourceProperties(data: _emptyCollection));
+      'route-hills',
+      GeojsonSourceProperties(data: _emptyCollection),
+    );
     await map.addLineLayer(
       'route-hills',
       'lyr-route-hills',
@@ -238,7 +273,9 @@ class _MapScreenState extends State<MapScreen> {
     // no sidewalk (walk/roll) or no bike lane (bike). The route still goes
     // there — this is the disclosure, not a detour.
     await map.addSource(
-        'route-warn', GeojsonSourceProperties(data: _emptyCollection));
+      'route-warn',
+      GeojsonSourceProperties(data: _emptyCollection),
+    );
     await map.addLineLayer(
       'route-warn',
       'lyr-route-warn',
@@ -259,7 +296,9 @@ class _MapScreenState extends State<MapScreen> {
       await renderTurnMarker(color: brandDark, devicePixelRatio: ratio),
     );
     await map.addSource(
-        'route-steps', GeojsonSourceProperties(data: _emptyCollection));
+      'route-steps',
+      GeojsonSourceProperties(data: _emptyCollection),
+    );
     await map.addSymbolLayer(
       'route-steps',
       'lyr-route-steps',
@@ -299,7 +338,9 @@ class _MapScreenState extends State<MapScreen> {
     // Settings) rotated to the heading, above everything else. The native
     // blue dot is hidden while this is on screen.
     await map.addSource(
-        'puck', GeojsonSourceProperties(data: _emptyCollection));
+      'puck',
+      GeojsonSourceProperties(data: _emptyCollection),
+    );
     await map.addSymbolLayer(
       'puck',
       'lyr-puck',
@@ -364,12 +405,13 @@ class _MapScreenState extends State<MapScreen> {
         // since the swap clears images anyway.
         final geojson = await api.layerGeoJson(def.path);
         if (!mounted) return;
-        final darkBase = context.read<AppState>().mapBase ==
-                MapBase.satellite ||
+        final darkBase =
+            context.read<AppState>().mapBase == MapBase.satellite ||
             Theme.of(context).brightness == Brightness.dark;
-        final dpr = MediaQuery.of(context).devicePixelRatio;
-        final features =
-            List<Map<String, dynamic>>.from(geojson['features'] ?? []);
+        final dpr = _imageDpr;
+        final features = List<Map<String, dynamic>>.from(
+          geojson['features'] ?? [],
+        );
         for (final f in features) {
           final props = Map<String, dynamic>.from(f['properties'] ?? {});
           final name = (props['name'] ?? '').toString();
@@ -380,11 +422,13 @@ class _MapScreenState extends State<MapScreen> {
           await map.addImage(
             key,
             await renderLabel(
-                text: name, devicePixelRatio: dpr, darkBase: darkBase),
+              text: name,
+              devicePixelRatio: dpr,
+              darkBase: darkBase,
+            ),
           );
         }
-        await map.addSource(
-            def.id, GeojsonSourceProperties(data: geojson));
+        await map.addSource(def.id, GeojsonSourceProperties(data: geojson));
         await map.addSymbolLayer(
           def.id,
           'lyr-${def.id}',
@@ -407,8 +451,8 @@ class _MapScreenState extends State<MapScreen> {
           await renderPin(
             icon: def.icon,
             color: hexColor(def.color),
-            devicePixelRatio: MediaQuery.of(context).devicePixelRatio,
-            scale: def.pinScale,
+            devicePixelRatio: _imageDpr,
+            scale: 1.0,
           ),
         );
         await map.addSymbolLayer(
@@ -444,30 +488,62 @@ class _MapScreenState extends State<MapScreen> {
           HeatmapLayerProperties(
             heatmapWeight: [
               'case',
-              ['>', ['coalesce', ['get', 'killed'], 0], 0],
+              [
+                '>',
+                [
+                  'coalesce',
+                  ['get', 'killed'],
+                  0,
+                ],
+                0,
+              ],
               1.0,
-              ['>', ['coalesce', ['get', 'injured'], 0], 0],
+              [
+                '>',
+                [
+                  'coalesce',
+                  ['get', 'injured'],
+                  0,
+                ],
+                0,
+              ],
               0.35,
               0.15,
             ],
             heatmapRadius: [
-              'interpolate', ['linear'], ['zoom'],
-              10.0, 10.0,
-              13.0, 18.0,
-              16.0, 32.0,
+              'interpolate',
+              ['linear'],
+              ['zoom'],
+              10.0,
+              10.0,
+              13.0,
+              18.0,
+              16.0,
+              32.0,
             ],
             heatmapIntensity: [
-              'interpolate', ['linear'], ['zoom'],
-              10.0, 1.0,
-              16.0, 2.5,
+              'interpolate',
+              ['linear'],
+              ['zoom'],
+              10.0,
+              1.0,
+              16.0,
+              2.5,
             ],
             heatmapColor: [
-              'interpolate', ['linear'], ['heatmap-density'],
-              0.0, 'rgba(0,0,0,0)',
-              0.25, 'rgba(255,235,59,0.35)',
-              0.5, 'rgba(255,152,0,0.55)',
-              0.75, 'rgba(244,67,54,0.7)',
-              1.0, 'rgba(183,28,28,0.85)',
+              'interpolate',
+              ['linear'],
+              ['heatmap-density'],
+              0.0,
+              'rgba(0,0,0,0)',
+              0.25,
+              'rgba(255,235,59,0.35)',
+              0.5,
+              'rgba(255,152,0,0.55)',
+              0.75,
+              'rgba(244,67,54,0.7)',
+              1.0,
+              'rgba(183,28,28,0.85)',
             ],
             heatmapOpacity: 0.8,
           ),
@@ -476,7 +552,8 @@ class _MapScreenState extends State<MapScreen> {
       } else if (def.isCircle) {
         // Some dot colors are tuned for a dark base (streetlight amber) and
         // vanish on the light map — swap to the layer's light-base color.
-        final darkBase = (mounted &&
+        final darkBase =
+            (mounted &&
                 context.read<AppState>().mapBase == MapBase.satellite) ||
             (mounted && Theme.of(context).brightness == Brightness.dark);
         await map.addCircleLayer(
@@ -485,9 +562,13 @@ class _MapScreenState extends State<MapScreen> {
           CircleLayerProperties(
             circleColor: (!darkBase ? def.lightBaseColor : null) ?? def.color,
             circleRadius: [
-              'interpolate', ['linear'], ['zoom'],
-              12.0, 1.5,
-              16.0, 4.0,
+              'interpolate',
+              ['linear'],
+              ['zoom'],
+              12.0,
+              1.5,
+              16.0,
+              4.0,
             ],
             circleOpacity: 0.7,
             circleStrokeWidth: 0.0,
@@ -590,8 +671,9 @@ class _MapScreenState extends State<MapScreen> {
   Future<void> _restyleLineLayers() async {
     final map = _map;
     if (map == null) return;
-    for (final def in layerDefs
-        .where((d) => !d.isPoint && !d.isFill && !d.isHeatmap && !d.isCircle)) {
+    for (final def in layerDefs.where(
+      (d) => !d.isPoint && !d.isFill && !d.isHeatmap && !d.isCircle,
+    )) {
       if (!_addedLayers.contains(def.id)) continue;
       try {
         await map.removeLayer('lyr-${def.id}');
@@ -616,41 +698,161 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
+  bool _featureQueryPending = false;
+  Future<void> _openGeometryEditor(
+    LatLng at, {
+    bool polygon = false,
+    Map<String, dynamic>? geometry,
+    Map<String, dynamic>? properties,
+  }) async {
+    _dismissSearch();
+    final interaction = _interactionSeq;
+    final revision = properties?['id'];
+    if (revision != null) {
+      // Rendered features may be clipped to map tiles. Edit the complete,
+      // authoritative revision instead of replacing it with a visible fragment.
+      try {
+        final collection = await api.layerGeoJson(
+          '/map-layers/community.geojson',
+        );
+        Map<String, dynamic>? original;
+        for (final item in (collection['features'] as List? ?? [])) {
+          if ((item['properties'] as Map?)?['id'] == revision) {
+            original = Map<String, dynamic>.from(item as Map);
+            break;
+          }
+        }
+        if (original == null) {
+          throw ApiError(
+            'This contribution changed. Refresh the map before editing.',
+          );
+        }
+        geometry = Map<String, dynamic>.from(original['geometry'] as Map);
+        properties = Map<String, dynamic>.from(original['properties'] as Map);
+        polygon = geometry['type'] == 'Polygon';
+      } catch (e) {
+        if (mounted) toast(context, e.toString());
+        return;
+      }
+    }
+    if (!mounted ||
+        interaction != _interactionSeq ||
+        ModalRoute.of(context)?.isCurrent != true) {
+      return;
+    }
+    final saved = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => GeometryEditorScreen(
+          center: at,
+          style: _activeStyle ?? basemapStyleUrl,
+          polygon: polygon,
+          geometry: geometry,
+          name: properties?['name']?.toString(),
+          comment: properties?['comment']?.toString(),
+          category: properties?['category']?.toString(),
+          replaces: properties?['id']?.toString(),
+        ),
+      ),
+    );
+    if (saved == true && mounted) {
+      await _refreshCommunity();
+      if (mounted) {
+        toast(context, 'Published. Community history includes rollback.');
+      }
+    }
+  }
+
+  Future<void> _refreshCommunity() async {
+    final data = await api.layerGeoJson('/map-layers/community.geojson');
+    for (final def in layerDefs.where((d) => d.id.startsWith('community'))) {
+      if (mounted) context.read<AppState>().toggleLayer(def.id, true);
+      await _ensureLayer(def);
+      await _map?.setGeoJsonSource(def.id, data);
+    }
+  }
+
+  int _interactionSeq = 0;
+  DateTime _lastMapTap = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _mapCanInteract() {
+    final now = DateTime.now();
+    if (now.difference(_lastMapTap).inMilliseconds < 250) return false;
+    _lastMapTap = now;
+    ++_interactionSeq;
+    if (!mounted || _navigating) return false;
+    if (_searchFocus.hasFocus || _results.isNotEmpty) {
+      _dismissSearch();
+      return false;
+    }
+    // HTML platform-view events may arrive through Flutter's modal barrier.
+    // That click dismisses the open sheet; it must never open another one.
+    if (ModalRoute.of(context)?.isCurrent != true) {
+      Navigator.of(context).maybePop();
+      return false;
+    }
+    return true;
+  }
+
   // ------------------------------------------------------------ interactions
 
   /// Taps on interactive layers arrive here (this maplibre_gl fork suppresses
   /// onMapClick for feature taps); we query the tapped layer for the feature's
   /// properties.
-  Future<void> _onFeatureTap(math.Point<double> point, LatLng latLng,
-      String id, String layerId, Annotation? annotation) async {
-    HapticFeedback.selectionClick();
-    final map = _map!;
-    var features = await map.queryRenderedFeaturesInRect(
+  Future<void> _onFeatureTap(
+    math.Point<double> point,
+    LatLng latLng,
+    String id,
+    String layerId,
+    Annotation? annotation,
+  ) async {
+    if (!_mapCanInteract()) return;
+    final interaction = _interactionSeq;
+    _featureQueryPending = true;
+    try {
+      HapticFeedback.selectionClick();
+      final map = _map!;
+      var features = await map.queryRenderedFeaturesInRect(
         Rect.fromCenter(
-            center: Offset(point.x, point.y), width: 24, height: 24),
+          center: Offset(point.x, point.y),
+          width: 24,
+          height: 24,
+        ),
         [layerId],
-        null);
-    if (features.isEmpty && mounted) {
-      // Some platforms expect device pixels here.
-      final ratio = MediaQuery.of(context).devicePixelRatio;
-      features = await map.queryRenderedFeaturesInRect(
+        null,
+      );
+      if (features.isEmpty && mounted) {
+        // Some platforms expect device pixels here.
+        final ratio = MediaQuery.of(context).devicePixelRatio;
+        features = await map.queryRenderedFeaturesInRect(
           Rect.fromCenter(
-              center: Offset(point.x * ratio, point.y * ratio),
-              width: 24 * ratio,
-              height: 24 * ratio),
+            center: Offset(point.x * ratio, point.y * ratio),
+            width: 24 * ratio,
+            height: 24 * ratio,
+          ),
           [layerId],
-          null);
+          null,
+        );
+      }
+      if (!mounted || interaction != _interactionSeq || features.isEmpty) {
+        return;
+      }
+      final f = Map<String, dynamic>.from(features.first as Map);
+      f['layer'] = {'id': layerId};
+      await _setHighlight(f, latLng);
+      if (mounted &&
+          interaction == _interactionSeq &&
+          ModalRoute.of(context)?.isCurrent == true) {
+        _showFeatureSheet(f, latLng);
+      }
+    } finally {
+      if (interaction == _interactionSeq) _featureQueryPending = false;
     }
-    if (!mounted || features.isEmpty) return;
-    final f = Map<String, dynamic>.from(features.first as Map);
-    f['layer'] = {'id': layerId};
-    await _setHighlight(f, latLng);
-    if (mounted) _showFeatureSheet(f, latLng);
   }
 
   /// Outlines the tapped feature so it's obvious the tap registered.
   Future<void> _setHighlight(Map<String, dynamic> feature, LatLng at) async {
-    final geometry = feature['geometry'] ??
+    final geometry =
+        feature['geometry'] ??
         {
           'type': 'Point',
           'coordinates': [at.longitude, at.latitude],
@@ -663,13 +865,19 @@ class _MapScreenState extends State<MapScreen> {
     });
   }
 
-  void _clearHighlight() => _map?.setGeoJsonSource('highlight', _emptyCollection);
+  void _clearHighlight() =>
+      _map?.setGeoJsonSource('highlight', _emptyCollection);
 
   /// Plain taps land here (feature taps go to [_onFeatureTap] instead).
   /// Tapping anywhere now drops a pin and offers the same actions long-press
   /// always did — nobody discovers long-press on their own.
   Future<void> _onMapClick(math.Point<double> point, LatLng latLng) async {
-    if (_navigating) return;
+    if (!_mapCanInteract()) return;
+    if (_featureQueryPending) {
+      _featureQueryPending = false;
+      _clearHighlight();
+      return; // This tap cancels a pending feature lookup.
+    }
     // First tap with the keyboard up just dismisses it.
     if (_searchFocus.hasFocus) {
       _searchFocus.unfocus();
@@ -702,7 +910,7 @@ class _MapScreenState extends State<MapScreen> {
         : route.steps[p.stepIndex.clamp(0, route.steps.length - 1)];
     final name = step?.name ?? 'Unnamed path';
     final notes = route.segmentNotes(p.traveledM);
-    showModalBottomSheet(
+    showAppSheet(
       context: context,
       showDragHandle: true,
       builder: (ctx) => SafeArea(
@@ -711,27 +919,35 @@ class _MapScreenState extends State<MapScreen> {
           children: [
             ListTile(
               leading: Icon(Icons.route, color: brandOnSurface(ctx)),
-              title: Text(name,
-                  style: const TextStyle(fontWeight: FontWeight.w600)),
+              title: Text(
+                name,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
               subtitle: step == null
                   ? null
                   : Text(
                       '${formatDistance(step.distanceM)} of this route'
-                      '${step.warn != null ? ' · has gaps (dashed red)' : ''}'),
+                      '${step.warn != null ? ' · has gaps (dashed red)' : ''}',
+                    ),
             ),
             for (final note in notes)
               ListTile(
                 dense: true,
-                leading: Icon(Icons.warning_amber_rounded,
-                    size: 20, color: warnAccent(ctx)),
+                leading: Icon(
+                  Icons.warning_amber_rounded,
+                  size: 20,
+                  color: warnAccent(ctx),
+                ),
                 title: Text(note, style: const TextStyle(fontSize: 13.5)),
               ),
             if (step != null && step.instruction.isNotEmpty)
               ListTile(
                 dense: true,
                 leading: const Icon(Icons.turn_right, size: 20),
-                title: Text(step.instruction,
-                    style: const TextStyle(fontSize: 13.5)),
+                title: Text(
+                  step.instruction,
+                  style: const TextStyle(fontSize: 13.5),
+                ),
               ),
             ListTile(
               leading: const Icon(Icons.badge_outlined),
@@ -748,20 +964,41 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  Future<void> _onMapLongClick(math.Point<double> point, LatLng latLng) =>
-      _showPlaceActions(latLng);
+  Future<void> _onMapLongClick(math.Point<double> point, LatLng latLng) async {
+    if (_mapCanInteract()) await _showPlaceActions(latLng);
+  }
 
   Future<void> _showPlaceActions(LatLng latLng) async {
+    final interaction = _interactionSeq;
     await _setPin(latLng);
-    if (!mounted) return;
+    if (!mounted ||
+        interaction != _interactionSeq ||
+        ModalRoute.of(context)?.isCurrent != true) {
+      return;
+    }
     final state = context.read<AppState>();
-    showModalBottomSheet(
+    showAppSheet(
       context: context,
       showDragHandle: true,
       builder: (ctx) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            ListTile(
+              leading: const Icon(Icons.history),
+              title: const Text('Community history & rollback'),
+              subtitle: const Text(
+                'Published contributions are not endorsed by BWG',
+              ),
+              onTap: () async {
+                Navigator.pop(ctx);
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const CommunityScreen()),
+                );
+                if (mounted) await _refreshCommunity();
+              },
+            ),
             ListTile(
               leading: Icon(state.iconFor(state.mode), color: brandGreen),
               title: Text(state.directionsVerb),
@@ -783,7 +1020,10 @@ class _MapScreenState extends State<MapScreen> {
               },
             ),
             ListTile(
-              leading: const Icon(Icons.report_problem, color: Color(0xFFF9A825)),
+              leading: const Icon(
+                Icons.report_problem,
+                color: Color(0xFFF9A825),
+              ),
               title: const Text('Report an issue here'),
               subtitle: const Text('Sidewalks, crossings, bike lanes…'),
               onTap: () {
@@ -793,11 +1033,35 @@ class _MapScreenState extends State<MapScreen> {
             ),
             ListTile(
               leading: const Icon(Icons.add_location_alt, color: brandGreen),
-              title: const Text('Add a missing place here'),
-              subtitle: const Text('Bike parking, repair station, fountain…'),
+              title: const Text('Edit the community map here'),
+              subtitle: const Text(
+                'Add places, corrections, access or crossing notes',
+              ),
               onTap: () {
                 Navigator.pop(ctx);
                 _openAddPointSheet(latLng);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.draw_outlined, color: brandGreen),
+              title: const Text('Draw a route or shortcut'),
+              subtitle: const Text(
+                'Vertices, curves, freehand pen, and eraser',
+              ),
+              onTap: () {
+                Navigator.pop(ctx);
+                _openGeometryEditor(latLng);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.block, color: Color(0xFFC62828)),
+              title: const Text('Draw a no-entry area'),
+              subtitle: const Text(
+                'Private property, closures, or hazards to avoid',
+              ),
+              onTap: () {
+                Navigator.pop(ctx);
+                _openGeometryEditor(latLng, polygon: true);
               },
             ),
             ListTile(
@@ -825,7 +1089,7 @@ class _MapScreenState extends State<MapScreen> {
             'coordinates': [latLng.longitude, latLng.latitude],
           },
           'properties': {},
-        }
+        },
       ],
     });
   }
@@ -839,10 +1103,9 @@ class _MapScreenState extends State<MapScreen> {
     }
     final r = _place;
     if (r != null) {
-      _setPin(LatLng(
-        (r['lat'] as num).toDouble(),
-        (r['lon'] as num).toDouble(),
-      ));
+      _setPin(
+        LatLng((r['lat'] as num).toDouble(), (r['lon'] as num).toDouble()),
+      );
       return;
     }
     _map?.setGeoJsonSource('pin', _emptyCollection);
@@ -860,15 +1123,16 @@ class _MapScreenState extends State<MapScreen> {
         .cast<LayerDef?>()
         .firstWhere((_) => true, orElse: () => null);
 
-    String title = (props['name'] ??
-            props['label'] ??
-            props['street_name'] ??
-            props['full_name'] ??
-            props['NAME'] ??
-            props['STREET_NAM'] ??
-            def?.label ??
-            'Feature')
-        .toString();
+    String title =
+        (props['name'] ??
+                props['label'] ??
+                props['street_name'] ??
+                props['full_name'] ??
+                props['NAME'] ??
+                props['STREET_NAM'] ??
+                def?.label ??
+                'Feature')
+            .toString();
     if (def?.id == 'bike-stress') {
       final lvl = stressLabels[props['stress_level']] ?? '';
       if (lvl.isNotEmpty) title = '$title — $lvl';
@@ -880,17 +1144,25 @@ class _MapScreenState extends State<MapScreen> {
       'name', 'label', 'street_name', 'geojson', 'color', 'id',
       // BCycle internals: the availability line already says it better.
       if (isBcycle) ...{
-        'short_id', 'rental_uri', 'bikes', 'ebikes', 'docks',
-        'is_renting', 'is_returning', 'last_reported',
+        'short_id',
+        'rental_uri',
+        'bikes',
+        'ebikes',
+        'docks',
+        'is_renting',
+        'is_returning',
+        'last_reported',
       },
       // Garage internals: the availability line already says it better.
       if (isGarage) ...{'capacity', 'occupied', 'percent_occupied', 'as_of'},
     };
     final rows = props.entries
-        .where((e) =>
-            !skip.contains(e.key) &&
-            e.value != null &&
-            e.value.toString().trim().isNotEmpty)
+        .where(
+          (e) =>
+              !skip.contains(e.key) &&
+              e.value != null &&
+              e.value.toString().trim().isNotEmpty,
+        )
         .take(8)
         .toList();
 
@@ -904,7 +1176,7 @@ class _MapScreenState extends State<MapScreen> {
     }
     final state = context.read<AppState>();
 
-    showModalBottomSheet(
+    showAppSheet(
       context: context,
       builder: (ctx) => SafeArea(
         child: Padding(
@@ -913,14 +1185,60 @@ class _MapScreenState extends State<MapScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(children: [
-                Icon(def?.icon ?? Icons.place,
-                    color: isBcycle ? hexColor(bcycleRed) : brandGreen),
-                const SizedBox(width: 8),
-                Expanded(
-                    child: Text(title,
-                        style: Theme.of(ctx).textTheme.titleMedium)),
-              ]),
+              Row(
+                children: [
+                  Icon(
+                    def?.icon ?? Icons.place,
+                    color: isBcycle ? hexColor(bcycleRed) : brandGreen,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: Theme.of(ctx).textTheme.titleMedium,
+                    ),
+                  ),
+                ],
+              ),
+              TextButton.icon(
+                icon: const Icon(Icons.edit_location_alt_outlined),
+                label: const Text('Edit community information'),
+                onPressed: () async {
+                  Navigator.pop(ctx);
+                  final community = def?.id.startsWith('community') == true;
+                  final geometry = feature['geometry'];
+                  if (community &&
+                      geometry is Map &&
+                      const [
+                        'LineString',
+                        'Polygon',
+                      ].contains(geometry['type'])) {
+                    await _openGeometryEditor(
+                      target,
+                      polygon: geometry['type'] == 'Polygon',
+                      geometry: Map<String, dynamic>.from(geometry),
+                      properties: Map<String, dynamic>.from(props),
+                    );
+                    return;
+                  }
+                  final updated = await showAppSheet<bool>(
+                    context: context,
+                    isScrollControlled: true,
+                    builder: (_) => AddPointSheet(
+                      latLng: target,
+                      initialCategory: community
+                          ? props['category']?.toString()
+                          : 'map-correction',
+                      initialName: title,
+                      initialComment: community
+                          ? props['comment']?.toString()
+                          : 'Correction to $title: ',
+                      replaces: community ? props['id']?.toString() : null,
+                    ),
+                  );
+                  if (updated == true && mounted) await _refreshCommunity();
+                },
+              ),
               const SizedBox(height: 8),
               if (isBcycle) _bcycleAvailability(ctx, props),
               for (final e in rows)
@@ -939,38 +1257,42 @@ class _MapScreenState extends State<MapScreen> {
                         _openBcycleApp(props['rental_uri']?.toString()),
                   ),
                 ),
-              Row(children: [
-                FilledButton.icon(
-                  style: FilledButton.styleFrom(
-                    backgroundColor: brandGreen,
-                    foregroundColor: Colors.white,
+              Row(
+                children: [
+                  FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: brandGreen,
+                      foregroundColor: Colors.white,
+                    ),
+                    icon: Icon(state.iconFor(state.mode), size: 18),
+                    label: const Text('Directions'),
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _routeTo(target, label: title);
+                    },
                   ),
-                  icon: Icon(state.iconFor(state.mode), size: 18),
-                  label: const Text('Directions'),
-                  onPressed: () {
-                    Navigator.pop(ctx);
-                    _routeTo(target, label: title);
-                  },
-                ),
-                const Spacer(),
-                IconButton(
-                  tooltip: 'Who owns this road?',
-                  icon: const Icon(Icons.badge_outlined),
-                  onPressed: () {
-                    Navigator.pop(ctx);
-                    _showRoadInfo(latLng);
-                  },
-                ),
-                TextButton.icon(
-                  icon: const Icon(Icons.report_problem_outlined),
-                  label: const Text('Report'),
-                  onPressed: () {
-                    Navigator.pop(ctx);
-                    _openReportSheet(latLng,
-                        spotName: def?.id == 'bike-parking' ? title : null);
-                  },
-                ),
-              ]),
+                  const Spacer(),
+                  IconButton(
+                    tooltip: 'Who owns this road?',
+                    icon: const Icon(Icons.badge_outlined),
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _showRoadInfo(latLng);
+                    },
+                  ),
+                  TextButton.icon(
+                    icon: const Icon(Icons.report_problem_outlined),
+                    label: const Text('Report'),
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _openReportSheet(
+                        latLng,
+                        spotName: def?.id == 'bike-parking' ? title : null,
+                      );
+                    },
+                  ),
+                ],
+              ),
             ],
           ),
         ),
@@ -990,9 +1312,10 @@ class _MapScreenState extends State<MapScreen> {
     if (bikes == null && docks == null) {
       return Padding(
         padding: const EdgeInsets.only(bottom: 8),
-        child: Text('Live availability unavailable right now.',
-            style:
-                TextStyle(color: Theme.of(ctx).colorScheme.onSurfaceVariant)),
+        child: Text(
+          'Live availability unavailable right now.',
+          style: TextStyle(color: Theme.of(ctx).colorScheme.onSurfaceVariant),
+        ),
       );
     }
     final color = !renting || (bikes ?? 0) == 0 ? warnRed : brandGreen;
@@ -1007,8 +1330,8 @@ class _MapScreenState extends State<MapScreen> {
               !renting
                   ? 'Not renting right now'
                   : '${bikes ?? 0} bike${bikes == 1 ? '' : 's'} available'
-                      '${ebikes > 0 ? ' ($ebikes electric)' : ''}'
-                      '${docks != null ? ' · $docks open dock${docks == 1 ? '' : 's'}' : ''}',
+                        '${ebikes > 0 ? ' ($ebikes electric)' : ''}'
+                        '${docks != null ? ' · $docks open dock${docks == 1 ? '' : 's'}' : ''}',
               style: TextStyle(color: color, fontWeight: FontWeight.w600),
             ),
           ),
@@ -1032,8 +1355,10 @@ class _MapScreenState extends State<MapScreen> {
     ];
     for (final uri in candidates) {
       try {
-        if (await launchUrlString(uri,
-            mode: LaunchMode.externalNonBrowserApplication)) {
+        if (await launchUrlString(
+          uri,
+          mode: LaunchMode.externalNonBrowserApplication,
+        )) {
           return;
         }
       } catch (_) {
@@ -1055,7 +1380,7 @@ class _MapScreenState extends State<MapScreen> {
     try {
       final info = await api.roadInfo(latLng.latitude, latLng.longitude);
       if (!mounted) return;
-      showModalBottomSheet(
+      showAppSheet(
         context: context,
         builder: (ctx) => RoadInfoSheet(info: info),
       );
@@ -1069,8 +1394,8 @@ class _MapScreenState extends State<MapScreen> {
   /// One-tap "directions to here": keeps whatever start is currently set
   /// (your location unless the planner says otherwise).
   Future<void> _routeTo(LatLng dest, {String? label}) => _planTrip(
-        to: TripEndpoint(label: label ?? 'Dropped pin', latLng: dest),
-      );
+    to: TripEndpoint(label: label ?? 'Dropped pin', latLng: dest),
+  );
 
   /// Route between the two trip endpoints with the rider's selected modes.
   ///
@@ -1088,6 +1413,7 @@ class _MapScreenState extends State<MapScreen> {
     final endPoint = to ?? _to;
     if (endPoint == null) return;
 
+    final seq = ++_planSeq;
     final origin = startPoint.isMyLocation
         ? await _bestOrigin()
         : startPoint.latLng;
@@ -1098,7 +1424,7 @@ class _MapScreenState extends State<MapScreen> {
       }
       return;
     }
-    final seq = ++_planSeq;
+    if (!mounted || seq != _planSeq) return;
     if (!silent) {
       setState(() {
         _routing = true;
@@ -1124,7 +1450,7 @@ class _MapScreenState extends State<MapScreen> {
         trail: _tripTrail ?? state.preferTrail,
       );
       // A newer plan superseded this one while it was in flight.
-      if (seq != _planSeq) return;
+      if (!mounted || seq != _planSeq) return;
       final route = NavRoute.fromFeature(feature);
       // Per-leg colors: a multi-modal itinerary draws each leg in its mode's
       // color (bus legs in the official Greenlink route color).
@@ -1133,7 +1459,7 @@ class _MapScreenState extends State<MapScreen> {
       await _map?.setGeoJsonSource('route-warn', route.warnCollection());
       await _map?.setGeoJsonSource('route-steps', route.stepCollection());
       await _setPin(dest);
-      if (!mounted) return;
+      if (!mounted || seq != _planSeq) return;
       setState(() {
         _routing = true;
         _navRoute = route;
@@ -1146,8 +1472,11 @@ class _MapScreenState extends State<MapScreen> {
       // The rider asked for a different route and there isn't one — say so
       // rather than silently redrawing the same line.
       if (mounted && alt > 0 && !route.altDistinct) {
-        toast(context, 'No genuinely different route found — '
-            'this is the practical way.');
+        toast(
+          context,
+          'No genuinely different route found — '
+          'this is the practical way.',
+        );
       }
     } on Exception catch (e) {
       if (!mounted || seq != _planSeq) return;
@@ -1180,7 +1509,7 @@ class _MapScreenState extends State<MapScreen> {
             ),
           );
     final state = context.read<AppState>();
-    final result = await showModalBottomSheet<DirectionsResult>(
+    final result = await showAppSheet<DirectionsResult>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -1258,6 +1587,7 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   Future<void> _clearRoute() async {
+    ++_planSeq; // Discard any in-flight route response.
     await _stopNav();
     await _map?.setGeoJsonSource('route', _emptyCollection);
     await _map?.setGeoJsonSource('route-hills', _emptyCollection);
@@ -1285,6 +1615,7 @@ class _MapScreenState extends State<MapScreen> {
   Future<void> _startNav() async {
     final route = _navRoute;
     if (route == null || route.isEmpty) return;
+    if (!await confirmRouteSafety(context) || !mounted) return;
     final pos = await _currentPosition();
     if (pos == null) {
       if (mounted) toast(context, 'Location is required to navigate.');
@@ -1320,8 +1651,7 @@ class _MapScreenState extends State<MapScreen> {
       // Repaint so the trip bar's GPS line can go stale visibly even when no
       // fix arrives to trigger a rebuild.
       if (mounted) setState(() {});
-      if (DateTime.now().difference(_lastFixAt) <
-          const Duration(seconds: 10)) {
+      if (DateTime.now().difference(_lastFixAt) < const Duration(seconds: 10)) {
         return;
       }
       if (!_gpsDryToastShown && mounted) {
@@ -1345,19 +1675,20 @@ class _MapScreenState extends State<MapScreen> {
     // sent, which is what the generic LocationSettings does) — a fix every
     // 5 s reads as "navigation is frozen" on a bike. The follow camera's
     // ~1.1 s glide is tuned for 1 Hz fixes.
-    _posSub = Geolocator.getPositionStream(
-      locationSettings: AndroidSettings(
-        accuracy: LocationAccuracy.bestForNavigation,
-        distanceFilter: 0,
-        intervalDuration: const Duration(seconds: 1),
-      ),
-    ).listen(
-      _onNavPosition,
-      // Never let an error tear the stream down silently mid-ride; the
-      // watchdog resubscribes once fixes go quiet.
-      onError: (_) {},
-      cancelOnError: false,
-    );
+    _posSub =
+        Geolocator.getPositionStream(
+          locationSettings: AndroidSettings(
+            accuracy: LocationAccuracy.bestForNavigation,
+            distanceFilter: 0,
+            intervalDuration: const Duration(seconds: 1),
+          ),
+        ).listen(
+          _onNavPosition,
+          // Never let an error tear the stream down silently mid-ride; the
+          // watchdog resubscribes once fixes go quiet.
+          onError: (_) {},
+          cancelOnError: false,
+        );
   }
 
   /// Register the rider marker bitmap the current settings call for; the puck
@@ -1374,7 +1705,7 @@ class _MapScreenState extends State<MapScreen> {
         _puckImage,
         await renderPuck(
           color: byMode ? brandGreen : const Color(0xFF1A73E8),
-          devicePixelRatio: MediaQuery.of(context).devicePixelRatio,
+          devicePixelRatio: _imageDpr,
           icon: byMode ? state.iconFor(state.mode) : null,
         ),
       );
@@ -1395,12 +1726,13 @@ class _MapScreenState extends State<MapScreen> {
             'coordinates': [at.longitude, at.latitude],
           },
           'properties': {'icon': _puckImage, 'bearing': bearing},
-        }
+        },
       ],
     });
   }
 
   Future<void> _stopNav({bool arrived = false}) async {
+    ++_planSeq;
     _navWatchdog?.cancel();
     _navWatchdog = null;
     await _posSub?.cancel();
@@ -1418,9 +1750,11 @@ class _MapScreenState extends State<MapScreen> {
     _applyVisibility();
     final here = _map?.cameraPosition?.target;
     if (here != null) {
-      await _map?.animateCamera(CameraUpdate.newCameraPosition(
-        CameraPosition(target: here, zoom: 15.0, bearing: 0, tilt: 0),
-      ));
+      await _map?.animateCamera(
+        CameraUpdate.newCameraPosition(
+          CameraPosition(target: here, zoom: 15.0, bearing: 0, tilt: 0),
+        ),
+      );
     }
     if (arrived && mounted) toast(context, 'You have arrived.');
   }
@@ -1470,7 +1804,16 @@ class _MapScreenState extends State<MapScreen> {
       _moveNavCamera(here, _lastNavBearing!);
     }
 
-    if (progress.remainingM < 25) {
+    if (progress.remainingM < 25 &&
+        progress.offRouteM < 25 &&
+        _destination != null &&
+        Geolocator.distanceBetween(
+              here.latitude,
+              here.longitude,
+              _destination!.latitude,
+              _destination!.longitude,
+            ) <
+            35) {
       await _speak('You have arrived.');
       await _stopNav(arrived: true);
       await _clearRoute();
@@ -1478,7 +1821,9 @@ class _MapScreenState extends State<MapScreen> {
     }
 
     _updateNavNotification(route, progress, advanced);
-    _announce(route, progress);
+    if (progress.offRouteM <= RerouteGovernor.offRouteM && !_rerouting) {
+      _announce(route, progress);
+    }
     await _maybeReroute(progress);
   }
 
@@ -1489,12 +1834,14 @@ class _MapScreenState extends State<MapScreen> {
   void _moveNavCamera(LatLng target, double bearing) {
     _lastCamAt = DateTime.now();
     _map?.animateCamera(
-      CameraUpdate.newCameraPosition(CameraPosition(
-        target: target,
-        zoom: 17.5,
-        bearing: bearing,
-        tilt: 60.0,
-      )),
+      CameraUpdate.newCameraPosition(
+        CameraPosition(
+          target: target,
+          zoom: 17.5,
+          bearing: bearing,
+          tilt: 60.0,
+        ),
+      ),
       // Slightly longer than the ~1 s between GPS fixes, so consecutive
       // animations blend into one continuous glide.
       duration: const Duration(milliseconds: 1100),
@@ -1547,10 +1894,12 @@ class _MapScreenState extends State<MapScreen> {
 
   /// The upcoming turn, pinned in the notification shade.
   void _updateNavNotification(
-      NavRoute route, NavProgress progress, bool advanced) {
+    NavRoute route,
+    NavProgress progress,
+    bool advanced,
+  ) {
     if (route.steps.isEmpty) return;
-    final nextIndex =
-        math.min(progress.stepIndex + 1, route.steps.length - 1);
+    final nextIndex = math.min(progress.stepIndex + 1, route.steps.length - 1);
     final now = DateTime.now();
     if (!advanced &&
         nextIndex == _notifiedStep &&
@@ -1588,42 +1937,45 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  /// Off-route handling is delegated to [RerouteGovernor]: it holds off while
-  /// the rider is heading back, backs off exponentially when they keep
-  /// ignoring recalculations (a shortcut the graph doesn't know — the
-  /// Springer St tunnel), and only lets the FIRST reroute of a spell make
-  /// noise.
+  /// Always route from the actual fix, preserving destination and itinerary.
   Future<void> _maybeReroute(NavProgress p) async {
-    if (_rerouting || _destination == null) return;
+    final here = _lastNavPos;
+    if (_rerouting || !_navigating || _destination == null || here == null) {
+      return;
+    }
+    // An inaccurate fix must not send a rider onto a parallel street.
+    if ((_lastNavFix?.accuracy ?? 0) > RerouteGovernor.offRouteM) return;
     final decision = _rerouteGovernor.onFix(p.offRouteM, DateTime.now());
     if (decision == RerouteDecision.none) return;
     _rerouting = true;
-    if (decision == RerouteDecision.announce) {
-      // No tone: even the soft ToneGenerator ack read as an alarm on the
-      // road. A calm sentence carries the same information.
-      await _speak('Finding a new route.');
-      if (mounted) toast(context, 'Off route — recalculating…');
-    } else if (decision == RerouteDecision.quietNotice) {
-      // Third recalculation in one spell: the rider clearly knows a way the
-      // map doesn't. Say so once, then stay quiet.
-      await _speak(
-          'Looks like you know a shortcut. I\'ll keep the route updated quietly.');
-      if (mounted) {
-        toast(context,
-            'Still off the mapped route — updating quietly from here.');
+    final previous = _navRoute;
+    try {
+      unawaited(_speak('Updating the route from your current location.'));
+      if (mounted) setState(() {});
+      await _planTrip(
+        from: TripEndpoint(label: 'Current position', latLng: here),
+        to: _to ?? TripEndpoint(label: 'Destination', latLng: _destination!),
+        plan: previous?.plan,
+        silent: true,
+      );
+      if (!_navigating || !mounted) return;
+      if (!identical(previous, _navRoute)) {
+        _spokenStep = -1;
+        _spokenImminent = false;
+        _notifiedStep = -1;
+        final updated = NavProgress.of(_navRoute!, _lastNavPos ?? here);
+        if (updated != null) {
+          setState(() => _progress = updated);
+          _updateNavNotification(_navRoute!, updated, true);
+          _announce(_navRoute!, updated);
+        }
+      } else {
+        unawaited(_speak('Unable to update the route yet. I will try again.'));
       }
+    } finally {
+      _rerouting = false;
+      if (mounted) setState(() {});
     }
-    // Recompute from where the rider actually is, keeping the same itinerary
-    // (no silent switch from "bike + bus" to "walk" mid-trip).
-    await _planTrip(
-      from: TripEndpoint(label: 'Current position', latLng: p.snapped),
-      to: TripEndpoint(label: 'Destination', latLng: _destination!),
-      plan: _navRoute?.plan,
-      silent: true,
-    );
-    _spokenStep = -1;
-    _spokenImminent = false;
-    _rerouting = false;
   }
 
   Future<void> _initTts() async {
@@ -1641,16 +1993,15 @@ class _MapScreenState extends State<MapScreen> {
         final names = <String>[
           for (final v in voices)
             if (v is Map &&
-                (v['locale']?.toString().toLowerCase() ?? '')
-                    .startsWith('en-us'))
+                (v['locale']?.toString().toLowerCase() ?? '').startsWith(
+                  'en-us',
+                ))
               v['name']?.toString() ?? '',
         ];
         final pick = names.firstWhere(
           (n) => n.contains('network'),
-          orElse: () => names.firstWhere(
-            (n) => n.contains('en-us-x'),
-            orElse: () => '',
-          ),
+          orElse: () =>
+              names.firstWhere((n) => n.contains('en-us-x'), orElse: () => ''),
         );
         if (pick.isNotEmpty) {
           await tts.setVoice({'name': pick, 'locale': 'en-US'});
@@ -1690,8 +2041,10 @@ class _MapScreenState extends State<MapScreen> {
       }
       if (!_locationEnabled && mounted) setState(() => _locationEnabled = true);
       return await Geolocator.getCurrentPosition(
-          locationSettings:
-              const LocationSettings(accuracy: LocationAccuracy.high));
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
+      );
     } catch (_) {
       return null;
     }
@@ -1704,13 +2057,23 @@ class _MapScreenState extends State<MapScreen> {
       return;
     }
     _map?.animateCamera(
-        CameraUpdate.newLatLngZoom(LatLng(pos.latitude, pos.longitude), 15.5));
+      CameraUpdate.newLatLngZoom(LatLng(pos.latitude, pos.longitude), 15.5),
+    );
   }
 
   // ----------------------------------------------------------------- search
 
+  void _dismissSearch({bool clearText = false}) {
+    ++_searchSeq;
+    _searchDebounce?.cancel();
+    _searchFocus.unfocus();
+    if (clearText) _searchCtl.clear();
+    setState(() => _results = []);
+  }
+
   void _onSearchChanged(String q) {
     _searchDebounce?.cancel();
+    final seq = ++_searchSeq;
     if (q.trim().length < 2) {
       setState(() => _results = []);
       return;
@@ -1718,13 +2081,15 @@ class _MapScreenState extends State<MapScreen> {
     _searchDebounce = Timer(const Duration(milliseconds: 400), () async {
       try {
         final results = await api.search(q.trim());
-        if (mounted) setState(() => _results = results);
+        if (mounted && seq == _searchSeq && _searchFocus.hasFocus) {
+          setState(() => _results = results);
+        }
       } catch (_) {}
     });
   }
 
   Future<void> _selectResult(Map<String, dynamic> r) async {
-    FocusScope.of(context).unfocus();
+    _dismissSearch();
     final lat = (r['lat'] as num?)?.toDouble();
     final lon = (r['lon'] as num?)?.toDouble();
     // Searching somewhere new retires the old trip — otherwise the previous
@@ -1759,77 +2124,83 @@ class _MapScreenState extends State<MapScreen> {
     final label = (r['label'] ?? 'Destination').toString();
     final sublabel = (r['sublabel'] ?? '').toString();
     return Material(
-        elevation: 6,
-        borderRadius: BorderRadius.circular(18),
-        color: brandGreen,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 8, 14),
-          child: Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
+      elevation: 6,
+      borderRadius: BorderRadius.circular(18),
+      color: brandGreen,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 8, 14),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  if (sublabel.isNotEmpty)
                     Text(
-                      label,
-                      maxLines: 2,
+                      sublabel,
+                      maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 17,
-                        fontWeight: FontWeight.w600,
+                        color: Colors.white70,
+                        fontSize: 13,
                       ),
                     ),
-                    if (sublabel.isNotEmpty)
-                      Text(
-                        sublabel,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            color: Colors.white70, fontSize: 13),
-                      ),
-                  ],
+                ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            // Tap the label to route straight away; the ⋮ opens the planner
+            // when the trip doesn't start where you're standing.
+            FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.white,
+                foregroundColor: brandDark,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
                 ),
               ),
-              const SizedBox(width: 10),
-              // Tap the label to route straight away; the ⋮ opens the planner
-              // when the trip doesn't start where you're standing.
-              FilledButton.icon(
-                style: FilledButton.styleFrom(
-                  backgroundColor: Colors.white,
-                  foregroundColor: brandDark,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                ),
-                icon: Icon(state.iconFor(state.mode), size: 20),
-                label: Text(
-                  state.directionsVerb,
-                  style: const TextStyle(
-                      fontSize: 15, fontWeight: FontWeight.w600),
-                ),
-                onPressed: () => _routeTo(target, label: label),
-              ),
-              IconButton(
-                tooltip: 'Change start point or modes',
-                icon: const Icon(Icons.tune, color: Colors.white70),
-                onPressed: () => _openDirections(
-                  to: TripEndpoint(label: label, latLng: target),
+              icon: Icon(state.iconFor(state.mode), size: 20),
+              label: Text(
+                state.directionsVerb,
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
-              IconButton(
-                icon: const Icon(Icons.close, color: Colors.white70),
-                onPressed: _clearPlace,
+              onPressed: () => _routeTo(target, label: label),
+            ),
+            IconButton(
+              tooltip: 'Change start point or modes',
+              icon: const Icon(Icons.tune, color: Colors.white70),
+              onPressed: () => _openDirections(
+                to: TripEndpoint(label: label, latLng: target),
               ),
-            ],
-          ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.close, color: Colors.white70),
+              onPressed: _clearPlace,
+            ),
+          ],
         ),
+      ),
     );
   }
 
   // ---------------------------------------------------------------- reports
 
   Future<void> _openReportSheet(LatLng latLng, {String? spotName}) async {
-    final submitted = await showModalBottomSheet<Map<String, dynamic>>(
+    final submitted = await showAppSheet<Map<String, dynamic>>(
       context: context,
       isScrollControlled: true,
       builder: (_) => ReportSheet(latLng: latLng, spotName: spotName),
@@ -1864,14 +2235,17 @@ class _MapScreenState extends State<MapScreen> {
 
   /// "This exists on the ground but not on the map."
   Future<void> _openAddPointSheet(LatLng latLng) async {
-    final submitted = await showModalBottomSheet<bool>(
+    final submitted = await showAppSheet<bool>(
       context: context,
       isScrollControlled: true,
       builder: (_) => AddPointSheet(latLng: latLng),
     );
     if (submitted == true && mounted) {
-      toast(context,
-          'Thanks! We\'ll review it and add it to the map.');
+      toast(
+        context,
+        'Published to the community map. Changes can be rolled back.',
+      );
+      await _refreshCommunity();
     }
     _clearPinIfIdle();
   }
@@ -1880,8 +2254,10 @@ class _MapScreenState extends State<MapScreen> {
     final pos = await _currentPosition();
     if (!mounted) return;
     if (pos == null) {
-      toast(context,
-          'Location unavailable — long-press the map to report a spot.');
+      toast(
+        context,
+        'Location unavailable — long-press the map to report a spot.',
+      );
       return;
     }
     _openReportSheet(LatLng(pos.latitude, pos.longitude));
@@ -1898,9 +2274,10 @@ class _MapScreenState extends State<MapScreen> {
       MapBase.light => basemapStyleUrl,
       MapBase.dark => basemapStyleDarkUrl,
       MapBase.satellite => satelliteStyleJson,
-      MapBase.auto => Theme.of(context).brightness == Brightness.dark
-          ? basemapStyleDarkUrl
-          : basemapStyleUrl,
+      MapBase.auto =>
+        Theme.of(context).brightness == Brightness.dark
+            ? basemapStyleDarkUrl
+            : basemapStyleUrl,
     };
     if (_activeStyle != null && _activeStyle != styleUrl) {
       // The style reload wipes our sources/layers/images; forget them so
@@ -1952,180 +2329,143 @@ class _MapScreenState extends State<MapScreen> {
             // Lift the (i) clear of the system navigation bar (3-button nav
             // phones put ~48 dp of buttons at the bottom edge).
             attributionButtonMargins: math.Point(
-                8, MediaQuery.of(context).padding.bottom + 8),
+              8,
+              MediaQuery.of(context).padding.bottom + 8,
+            ),
           ),
 
           // Top chrome: search + mode switch (hidden while navigating).
           if (!_navigating)
             SafeArea(
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-                  child: Material(
-                    elevation: 3,
-                    borderRadius: BorderRadius.circular(28),
-                    child: TextField(
-                      controller: _searchCtl,
-                      focusNode: _searchFocus,
-                      onChanged: (q) {
-                        setState(() {}); // clear button visibility
-                        _onSearchChanged(q);
+              child: PointerInterceptor(
+                intercepting: kIsWeb,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                      child: Material(
+                        elevation: 3,
+                        borderRadius: BorderRadius.circular(28),
+                        child: TextField(
+                          controller: _searchCtl,
+                          focusNode: _searchFocus,
+                          onChanged: (q) {
+                            setState(() {}); // clear button visibility
+                            _onSearchChanged(q);
+                          },
+                          decoration: InputDecoration(
+                            hintText: 'Search streets, stops, bike parking…',
+                            prefixIcon: Padding(
+                              padding: const EdgeInsets.only(left: 8),
+                              child: Image.asset('assets/logo.png', width: 28),
+                            ),
+                            suffixIcon: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (_searchCtl.text.isNotEmpty ||
+                                    _searchFocus.hasFocus ||
+                                    _results.isNotEmpty)
+                                  IconButton(
+                                    icon: const Icon(Icons.clear),
+                                    tooltip: 'Clear search',
+                                    onPressed: () {
+                                      _dismissSearch(clearText: true);
+                                      _clearPlace();
+                                    },
+                                  ),
+                                IconButton(
+                                  icon: const Icon(Icons.directions),
+                                  tooltip: 'Plan a trip',
+                                  color: brandGreen,
+                                  onPressed: () => _openDirections(),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.menu),
+                                  tooltip: 'Dashboards & more',
+                                  onPressed: () => Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => const ToolsScreen(),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            border: InputBorder.none,
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 14,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    if (_searchFocus.hasFocus && _results.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: Material(
+                          elevation: 3,
+                          borderRadius: BorderRadius.circular(12),
+                          child: Column(
+                            children: [
+                              for (final r in _results.take(6))
+                                ListTile(
+                                  dense: true,
+                                  leading: const Icon(Icons.place_outlined),
+                                  title: Text(r['label']?.toString() ?? ''),
+                                  subtitle: Text(
+                                    r['sublabel']?.toString() ?? '',
+                                  ),
+                                  onTap: () => _selectResult(
+                                    Map<String, dynamic>.from(r as Map),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      )
+                    // Places picked before, one tap from the still-focused field —
+                    // the "bring my route back" path after clearing navigation.
+                    else if (_searchFocus.hasFocus &&
+                        state.recentSearches.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: Material(
+                          elevation: 3,
+                          borderRadius: BorderRadius.circular(12),
+                          child: Column(
+                            children: [
+                              for (final r in state.recentSearches.take(5))
+                                ListTile(
+                                  dense: true,
+                                  leading: const Icon(Icons.history),
+                                  title: Text(r['label']?.toString() ?? ''),
+                                  subtitle:
+                                      (r['sublabel']?.toString() ?? '').isEmpty
+                                      ? null
+                                      : Text(r['sublabel'].toString()),
+                                  onTap: () => _selectResult(
+                                    Map<String, dynamic>.from(r),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    const SizedBox(height: 8),
+                    TravelModes(
+                      onChanged: () {
+                        if (_navRoute != null && !_navigating && _to != null) {
+                          _planTrip();
+                        }
                       },
-                      decoration: InputDecoration(
-                        hintText: 'Search streets, stops, bike parking…',
-                        prefixIcon: Padding(
-                          padding: const EdgeInsets.only(left: 8),
-                          child: Image.asset('assets/logo.png', width: 28),
-                        ),
-                        suffixIcon: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (_searchCtl.text.isNotEmpty)
-                              IconButton(
-                                icon: const Icon(Icons.clear),
-                                tooltip: 'Clear search',
-                                onPressed: () {
-                                  _searchCtl.clear();
-                                  // Unfocus too: with focus kept, the recents
-                                  // list re-appeared under the cleared field
-                                  // (reported when hopping between searches
-                                  // and trip plans). X means "done here".
-                                  _searchFocus.unfocus();
-                                  setState(() => _results = []);
-                                  _clearPlace();
-                                },
-                              ),
-                            IconButton(
-                              icon: const Icon(Icons.directions),
-                              tooltip: 'Plan a trip',
-                              color: brandGreen,
-                              onPressed: () => _openDirections(),
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.menu),
-                              tooltip: 'Dashboards & more',
-                              onPressed: () => Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                    builder: (_) => const ToolsScreen()),
-                              ),
-                            ),
-                          ],
-                        ),
-                        border: InputBorder.none,
-                        contentPadding:
-                            const EdgeInsets.symmetric(horizontal: 8, vertical: 14),
-                      ),
                     ),
-                  ),
-                ),
-                if (_results.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: Material(
-                      elevation: 3,
-                      borderRadius: BorderRadius.circular(12),
-                      child: Column(
-                        children: [
-                          for (final r in _results.take(6))
-                            ListTile(
-                              dense: true,
-                              leading: const Icon(Icons.place_outlined),
-                              title: Text(r['label']?.toString() ?? ''),
-                              subtitle: Text(r['sublabel']?.toString() ?? ''),
-                              onTap: () => _selectResult(
-                                  Map<String, dynamic>.from(r as Map)),
-                            ),
-                        ],
-                      ),
-                    ),
-                  )
-                // Places picked before, one tap from the still-focused field —
-                // the "bring my route back" path after clearing navigation.
-                else if (_searchFocus.hasFocus &&
-                    state.recentSearches.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: Material(
-                      elevation: 3,
-                      borderRadius: BorderRadius.circular(12),
-                      child: Column(
-                        children: [
-                          for (final r in state.recentSearches.take(5))
-                            ListTile(
-                              dense: true,
-                              leading: const Icon(Icons.history),
-                              title: Text(r['label']?.toString() ?? ''),
-                              subtitle: (r['sublabel']?.toString() ?? '')
-                                      .isEmpty
-                                  ? null
-                                  : Text(r['sublabel'].toString()),
-                              onTap: () => _selectResult(
-                                  Map<String, dynamic>.from(r)),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ),
-                const SizedBox(height: 8),
-                // Multi-select on purpose: bike AND bus means "cost me a
-                // bike-to-the-bus trip", not "pick one". Tapping a selected
-                // pill cycles its variant (Bike → E-bike, Walk → Roll) before
-                // it deselects — see AppState.cyclePill.
-                SegmentedButton<TravelMode>(
-                  multiSelectionEnabled: true,
-                  // The empty selection is never applied — it's how the
-                  // widget reports "the last selected pill was tapped", which
-                  // cyclePill turns into a variant cycle instead.
-                  emptySelectionAllowed: true,
-                  showSelectedIcon: false,
-                  segments: [
-                    for (final m in TravelMode.values)
-                      ButtonSegment(
-                        value: m,
-                        icon: Icon(state.iconFor(m)),
-                        label: Text(state.labelFor(m)),
-                      ),
+                    if (_pickField != null) _pickBanner(),
                   ],
-                  selected: state.modes,
-                  onSelectionChanged: (s) {
-                    // The widget hands back the would-be selection; the pill
-                    // the user actually touched is the symmetric difference.
-                    final tapped = {
-                      ...state.modes.difference(s),
-                      ...s.difference(state.modes),
-                    };
-                    if (tapped.length != 1) {
-                      state.setModes(s);
-                    } else {
-                      state.cyclePill(tapped.first);
-                    }
-                    // A drawn route follows the mode switch.
-                    if (_navRoute != null && !_navigating && _to != null) {
-                      _planTrip();
-                    }
-                  },
-                  style: ButtonStyle(
-                    backgroundColor: WidgetStateProperty.resolveWith(
-                      (states) => states.contains(WidgetState.selected)
-                          ? brandGreen.withValues(alpha: 0.9)
-                          : Theme.of(context)
-                              .colorScheme
-                              .surface
-                              .withValues(alpha: 0.92),
-                    ),
-                    foregroundColor: WidgetStateProperty.resolveWith(
-                      (states) => states.contains(WidgetState.selected)
-                          ? Colors.white
-                          : Theme.of(context).colorScheme.onSurface,
-                    ),
-                  ),
                 ),
-                if (_pickField != null) _pickBanner(),
-              ],
+              ),
             ),
-          ),
 
           if (_navigating) _navChrome(),
 
@@ -2138,45 +2478,48 @@ class _MapScreenState extends State<MapScreen> {
           Positioned(
             left: 12,
             right: 12,
-            bottom: MediaQuery.of(context).padding.bottom + 12,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                _controlRail(),
-                if (!_navigating && _navRoute == null) ...[
-                  const SizedBox(height: 10),
-                  _reportFab(),
-                ],
-                if (_navigating && !_followNav) ...[
-                  const SizedBox(height: 10),
-                  Align(
-                    alignment: Alignment.center,
-                    child: FloatingActionButton.extended(
-                      heroTag: 'recenter',
-                      backgroundColor: brandGreen,
-                      foregroundColor: Colors.white,
-                      icon: const Icon(Icons.navigation),
-                      label: const Text('Re-center'),
-                      onPressed: _recenterNav,
+            bottom: MediaQuery.of(context).padding.bottom + (kIsWeb ? 52 : 36),
+            child: PointerInterceptor(
+              intercepting: kIsWeb,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  _controlRail(),
+                  if (!_navigating && _navRoute == null) ...[
+                    const SizedBox(height: 10),
+                    _reportFab(),
+                  ],
+                  if (_navigating && !_followNav) ...[
+                    const SizedBox(height: 10),
+                    Align(
+                      alignment: Alignment.center,
+                      child: FloatingActionButton.extended(
+                        heroTag: 'recenter',
+                        backgroundColor: brandGreen,
+                        foregroundColor: Colors.white,
+                        icon: const Icon(Icons.navigation),
+                        label: const Text('Re-center'),
+                        onPressed: _recenterNav,
+                      ),
                     ),
-                  ),
+                  ],
+                  if (_planning && !_navigating) ...[
+                    const SizedBox(height: 10),
+                    _planningChip(),
+                  ],
+                  if (_navigating && _navRoute != null) ...[
+                    const SizedBox(height: 10),
+                    _navTripBar(),
+                  ] else if (_navRoute != null && !_planning) ...[
+                    const SizedBox(height: 10),
+                    _routePreview(),
+                  ] else if (_place != null && !_planning) ...[
+                    const SizedBox(height: 10),
+                    _placeCard(),
+                  ],
                 ],
-                if (_planning && !_navigating) ...[
-                  const SizedBox(height: 10),
-                  _planningChip(),
-                ],
-                if (_navigating && _navRoute != null) ...[
-                  const SizedBox(height: 10),
-                  _navTripBar(),
-                ] else if (_navRoute != null && !_planning) ...[
-                  const SizedBox(height: 10),
-                  _routePreview(),
-                ] else if (_place != null && !_planning) ...[
-                  const SizedBox(height: 10),
-                  _placeCard(),
-                ],
-              ],
+              ),
             ),
           ),
         ],
@@ -2226,8 +2569,10 @@ class _MapScreenState extends State<MapScreen> {
                 label: Text('${hazards.length}'),
                 backgroundColor: warnAccent(context),
                 textColor: warnBg(context),
-                child: Icon(Icons.warning_amber_rounded,
-                    color: warnAccent(context)),
+                child: Icon(
+                  Icons.warning_amber_rounded,
+                  color: warnAccent(context),
+                ),
               ),
             ),
           _railButton(
@@ -2244,81 +2589,86 @@ class _MapScreenState extends State<MapScreen> {
     required Widget icon,
     required String tooltip,
     required VoidCallback onTap,
-  }) =>
-      IconButton(
-        icon: icon,
-        tooltip: tooltip,
-        onPressed: onTap,
-        visualDensity: VisualDensity.compact,
-      );
+  }) => IconButton(
+    icon: icon,
+    tooltip: tooltip,
+    onPressed: onTap,
+    visualDensity: VisualDensity.compact,
+  );
 
   /// The one prominent action on an otherwise empty map. Only offered when no
   /// route is drawn — with a trip on screen the bottom belongs to the trip.
   Widget _reportFab() => FloatingActionButton.extended(
-        heroTag: 'report',
-        backgroundColor: brandGreen,
-        foregroundColor: Colors.white,
-        icon: const Icon(Icons.add_location_alt_outlined),
-        label: const Text('Report'),
-        onPressed: _reportAtMyLocation,
-      );
+    heroTag: 'report',
+    backgroundColor: brandGreen,
+    foregroundColor: Colors.white,
+    icon: const Icon(Icons.add_location_alt_outlined),
+    label: const Text('Report'),
+    onPressed: _reportAtMyLocation,
+  );
 
   /// Immediate feedback that the router is working on it ("Bike here" used to
   /// do nothing visible for a second or two).
   Widget _planningChip() => Align(
-        alignment: Alignment.center,
-        child: Material(
-          elevation: 4,
-          borderRadius: BorderRadius.circular(24),
-          color: Theme.of(context).colorScheme.surface,
-          child: const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2.5, color: brandGreen),
-                ),
-                SizedBox(width: 12),
-                Text('Finding your route…',
-                    style: TextStyle(fontWeight: FontWeight.w600)),
-              ],
+    alignment: Alignment.center,
+    child: Material(
+      elevation: 4,
+      borderRadius: BorderRadius.circular(24),
+      color: Theme.of(context).colorScheme.surface,
+      child: const Padding(
+        padding: EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(
+                strokeWidth: 2.5,
+                color: brandGreen,
+              ),
             ),
-          ),
+            SizedBox(width: 12),
+            Text(
+              'Finding your route…',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ],
         ),
-      );
+      ),
+    ),
+  );
 
   /// "Tap the map" banner while a trip endpoint is being picked.
   Widget _pickBanner() => Padding(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-        child: Material(
-          elevation: 3,
-          borderRadius: BorderRadius.circular(14),
-          color: brandDark,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(14, 10, 6, 10),
-            child: Row(children: [
-              const Icon(Icons.touch_app, color: Colors.white, size: 20),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  _pickField == 'from'
-                      ? 'Tap the map to set your start point'
-                      : 'Tap the map to set your destination',
-                  style: const TextStyle(color: Colors.white),
-                ),
+    padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+    child: Material(
+      elevation: 3,
+      borderRadius: BorderRadius.circular(14),
+      color: brandDark,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 10, 6, 10),
+        child: Row(
+          children: [
+            const Icon(Icons.touch_app, color: Colors.white, size: 20),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                _pickField == 'from'
+                    ? 'Tap the map to set your start point'
+                    : 'Tap the map to set your destination',
+                style: const TextStyle(color: Colors.white),
               ),
-              IconButton(
-                icon: const Icon(Icons.close, color: Colors.white70, size: 20),
-                onPressed: () => setState(() => _pickField = null),
-              ),
-            ]),
-          ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.close, color: Colors.white70, size: 20),
+              onPressed: () => setState(() => _pickField = null),
+            ),
+          ],
         ),
-      );
+      ),
+    ),
+  );
 
   /// Route summary before the trip starts: distance, time, the trip's caveats,
   /// the other itineraries, upcoming turns, Start.
@@ -2327,88 +2677,97 @@ class _MapScreenState extends State<MapScreen> {
     final color = route.isTransit
         ? const Color(0xFF7B1FA2)
         : (route.plan == 'bcycle'
-            ? hexColor(bcycleRed)
-            : const Color(0xFF1565C0));
+              ? hexColor(bcycleRed)
+              : const Color(0xFF1565C0));
     final base = route.isTransit && route.transitRoute != null
         ? 'Greenlink Route ${route.transitRoute}'
-            '${route.boardStop != null ? ' · board at ${route.boardStop}' : ''}'
+              '${route.boardStop != null ? ' · board at ${route.boardStop}' : ''}'
         : (route.plan == 'bcycle' && route.rentStation != null
-            ? 'BCycle from ${route.rentStation}'
-            : (route.planDisplayLabel.isNotEmpty
-                ? route.planDisplayLabel
-                : 'Route'));
-    final subtitle =
-        route.alt > 0 ? '$base · alternate route ${route.alt}' : base;
+              ? 'BCycle from ${route.rentStation}'
+              : (route.planDisplayLabel.isNotEmpty
+                    ? route.planDisplayLabel
+                    : 'Route'));
+    final subtitle = route.alt > 0
+        ? '$base · alternate route ${route.alt}'
+        : base;
     final icon = route.planIcon;
     // The caveats, the hills and the elevation graph used to stack here as
     // three more cards; they live behind the rail's hazards button now. What
     // stays is what you decide with: the alternatives and the trip itself.
     return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (route.alternatives.isNotEmpty || _canAlt(route))
-            _alternativesRow(route),
-          if (!route.isTransit && route.plan != 'bcycle') _tripPrefsRow(),
-          Material(
-            elevation: 4,
-            borderRadius: BorderRadius.circular(16),
-            color: color,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(14, 8, 6, 8),
-              child: Row(
-                children: [
-                  Icon(icon, color: Colors.white, size: 20),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          // Distance and ETA only — the climb lives in the
-                          // hazards sheet with the elevation graph.
-                          '${formatDistance(route.distanceM)} · '
-                          '${formatDuration(route.durationMin)}',
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w600,
-                              fontSize: 16),
-                        ),
-                        Text(subtitle,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                color: Colors.white70, fontSize: 12)),
-                      ],
-                    ),
-                  ),
-                  if (route.steps.isNotEmpty)
-                    IconButton(
-                      tooltip: 'Upcoming turns',
-                      icon: const Icon(Icons.list_alt, color: Colors.white),
-                      onPressed: _openStepsSheet,
-                    ),
-                  if (route.steps.isNotEmpty)
-                    FilledButton.icon(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: Colors.white,
-                        foregroundColor: color,
-                        visualDensity: VisualDensity.compact,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (route.alternatives.isNotEmpty || _canAlt(route))
+          _alternativesRow(route),
+        if (!route.isTransit && route.plan != 'bcycle') _tripPrefsRow(),
+        Material(
+          elevation: 4,
+          borderRadius: BorderRadius.circular(16),
+          color: color,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 8, 6, 8),
+            child: Row(
+              children: [
+                Icon(icon, color: Colors.white, size: 20),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Suggested route · use at your own risk',
+                        style: TextStyle(color: Colors.white, fontSize: 11),
                       ),
-                      icon: const Icon(Icons.navigation, size: 18),
-                      label: const Text('Start'),
-                      onPressed: _startNav,
-                    ),
-                  IconButton(
-                    icon:
-                        const Icon(Icons.close, color: Colors.white, size: 20),
-                    onPressed: _clearRoute,
+                      Text(
+                        // Distance and ETA only — the climb lives in the
+                        // hazards sheet with the elevation graph.
+                        '${formatDistance(route.distanceM)} · '
+                        '${formatDuration(route.durationMin)}',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 16,
+                        ),
+                      ),
+                      Text(
+                        subtitle,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                ),
+                if (route.steps.isNotEmpty)
+                  IconButton(
+                    tooltip: 'Upcoming turns',
+                    icon: const Icon(Icons.list_alt, color: Colors.white),
+                    onPressed: _openStepsSheet,
+                  ),
+                if (route.steps.isNotEmpty)
+                  FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: color,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    icon: const Icon(Icons.navigation, size: 18),
+                    label: const Text('Start'),
+                    onPressed: _startNav,
+                  ),
+                IconButton(
+                  icon: const Icon(Icons.close, color: Colors.white, size: 20),
+                  onPressed: _clearRoute,
+                ),
+              ],
             ),
           ),
-        ],
+        ),
+      ],
     );
   }
 
@@ -2435,14 +2794,11 @@ class _MapScreenState extends State<MapScreen> {
                     label: Text(bikeStressLabels[level]!),
                     selected: state.stress == level,
                     showCheckmark: false,
-                    avatar: Icon(
-                      switch (level) {
-                        BikeStress.quiet => Icons.self_improvement,
-                        BikeStress.balanced => Icons.balance,
-                        BikeStress.direct => Icons.straighten,
-                      },
-                      size: 18,
-                    ),
+                    avatar: Icon(switch (level) {
+                      BikeStress.quiet => Icons.self_improvement,
+                      BikeStress.balanced => Icons.balance,
+                      BikeStress.direct => Icons.straighten,
+                    }, size: 18),
                     onSelected: (_) {
                       state.setStress(level);
                       _planTrip(silent: true);
@@ -2464,13 +2820,12 @@ class _MapScreenState extends State<MapScreen> {
   /// why it looks like this. Empty means the trip has nothing worth bracing
   /// for — and then the hazards button never appears at all.
   List<({IconData icon, String text})> _hazards(NavRoute route) => [
-        if (route.fallbackNote != null)
-          (icon: Icons.info_outline, text: route.fallbackNote!),
-        for (final w in route.visibleWarnings())
-          (icon: w.icon, text: w.message),
-        if (route.hillSummary() case final hill?)
-          (icon: Icons.trending_up, text: hill),
-      ];
+    if (route.fallbackNote != null)
+      (icon: Icons.info_outline, text: route.fallbackNote!),
+    for (final w in route.visibleWarnings()) (icon: w.icon, text: w.message),
+    if (route.hillSummary() case final hill?)
+      (icon: Icons.trending_up, text: hill),
+  ];
 
   /// The hazards view: everything the old banner shouted from the map, plus
   /// the elevation graph, opened deliberately instead of occupying the
@@ -2480,7 +2835,7 @@ class _MapScreenState extends State<MapScreen> {
     if (route == null) return;
     final hazards = _hazards(route);
     final hasGaps = route.visibleWarnings().isNotEmpty;
-    showModalBottomSheet(
+    showAppSheet(
       context: context,
       showDragHandle: true,
       builder: (ctx) => SafeArea(
@@ -2488,13 +2843,19 @@ class _MapScreenState extends State<MapScreen> {
           shrinkWrap: true,
           children: [
             ListTile(
-              leading: Icon(Icons.warning_amber_rounded,
-                  color: warnAccent(ctx)),
-              title: const Text('What to expect on this route',
-                  style: TextStyle(fontWeight: FontWeight.w600)),
-              subtitle: Text('${formatDistance(route.distanceM)} · '
-                  '${formatDuration(route.durationMin)}'
-                  '${route.climbFt >= 50 ? ' · ↑ ${route.climbFt} ft' : ''}'),
+              leading: Icon(
+                Icons.warning_amber_rounded,
+                color: warnAccent(ctx),
+              ),
+              title: const Text(
+                'What to expect on this route',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+              subtitle: Text(
+                '${formatDistance(route.distanceM)} · '
+                '${formatDuration(route.durationMin)}'
+                '${route.climbFt >= 50 ? ' · ↑ ${route.climbFt} ft' : ''}',
+              ),
             ),
             for (final h in hazards)
               ListTile(
@@ -2508,9 +2869,10 @@ class _MapScreenState extends State<MapScreen> {
                 child: Text(
                   'Those stretches are dashed red on the map.',
                   style: TextStyle(
-                      fontSize: 12,
-                      color: Theme.of(ctx).colorScheme.onSurfaceVariant,
-                      fontStyle: FontStyle.italic),
+                    fontSize: 12,
+                    color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                    fontStyle: FontStyle.italic,
+                  ),
                 ),
               ),
             // The terrain, at a glance: where the trip climbs and where it
@@ -2549,60 +2911,65 @@ class _MapScreenState extends State<MapScreen> {
   Widget _alternativesRow(NavRoute route) {
     final ebike = context.read<AppState>().useEbike;
     return Padding(
-        padding: const EdgeInsets.only(bottom: 6),
-        child: SizedBox(
-          height: 38,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            children: [
+      padding: const EdgeInsets.only(bottom: 6),
+      child: SizedBox(
+        height: 38,
+        child: ListView(
+          scrollDirection: Axis.horizontal,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: ActionChip(
+                avatar: Icon(route.planIcon, size: 18, color: Colors.white),
+                label: Text(
+                  '${route.planDisplayLabel.isNotEmpty ? route.planDisplayLabel : 'Route'}'
+                  ' · ${formatDuration(route.durationMin)}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                backgroundColor: brandGreen,
+                onPressed: _openStepsSheet,
+              ),
+            ),
+            for (final alt in route.alternatives)
               Padding(
                 padding: const EdgeInsets.only(right: 8),
                 child: ActionChip(
-                  avatar: Icon(route.planIcon, size: 18, color: Colors.white),
-                  label: Text(
-                    '${route.planDisplayLabel.isNotEmpty ? route.planDisplayLabel : 'Route'}'
-                    ' · ${formatDuration(route.durationMin)}',
-                    style: const TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.w600),
+                  // The alt was costed with the rider's e-bike too; the
+                  // server's label stays plain "Bike" on purpose.
+                  avatar: Icon(
+                    ebike && alt.plan == 'bike'
+                        ? legModeIcons['ebike']!
+                        : (planIcons[alt.plan] ?? Icons.directions),
+                    size: 18,
                   ),
-                  backgroundColor: brandGreen,
-                  onPressed: _openStepsSheet,
+                  label: Text(
+                    '${ebike && alt.plan == 'bike' ? 'E-bike' : alt.label}'
+                    ' · ${formatDuration(alt.durationMin)}',
+                  ),
+                  backgroundColor: Theme.of(context).colorScheme.surface,
+                  onPressed: () => _planTrip(plan: alt.plan),
                 ),
               ),
-              for (final alt in route.alternatives)
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: ActionChip(
-                    // The alt was costed with the rider's e-bike too; the
-                    // server's label stays plain "Bike" on purpose.
-                    avatar: Icon(
-                        ebike && alt.plan == 'bike'
-                            ? legModeIcons['ebike']!
-                            : (planIcons[alt.plan] ?? Icons.directions),
-                        size: 18),
-                    label: Text(
-                        '${ebike && alt.plan == 'bike' ? 'E-bike' : alt.label}'
-                        ' · ${formatDuration(alt.durationMin)}'),
-                    backgroundColor: Theme.of(context).colorScheme.surface,
-                    onPressed: () => _planTrip(plan: alt.plan),
-                  ),
+            if (_canAlt(route))
+              ActionChip(
+                avatar: const Icon(Icons.alt_route, size: 18),
+                label: Text(
+                  route.alt > 0 ? 'Another route' : 'Different route',
                 ),
-              if (_canAlt(route))
-                ActionChip(
-                  avatar: const Icon(Icons.alt_route, size: 18),
-                  label: Text(
-                      route.alt > 0 ? 'Another route' : 'Different route'),
-                  backgroundColor: Theme.of(context).colorScheme.surface,
-                  // Cycle through up to 3 alternates, then back to the base.
-                  onPressed: () => _planTrip(
-                    plan: route.plan,
-                    alt: route.alt >= 3 ? 0 : route.alt + 1,
-                  ),
+                backgroundColor: Theme.of(context).colorScheme.surface,
+                // Cycle through up to 3 alternates, then back to the base.
+                onPressed: () => _planTrip(
+                  plan: route.plan,
+                  alt: route.alt >= 3 ? 0 : route.alt + 1,
                 ),
-            ],
-          ),
+              ),
+          ],
         ),
-      );
+      ),
+    );
   }
 
   /// Turn-by-turn top chrome: maneuver card + the upcoming-turns strip.
@@ -2611,8 +2978,10 @@ class _MapScreenState extends State<MapScreen> {
     final route = _navRoute;
     final progress = _progress;
     if (route == null || route.steps.isEmpty) return const SizedBox.shrink();
-    final nextIndex =
-        math.min((progress?.stepIndex ?? -1) + 1, route.steps.length - 1);
+    final nextIndex = math.min(
+      (progress?.stepIndex ?? -1) + 1,
+      route.steps.length - 1,
+    );
     final step = route.steps[nextIndex];
     final after = nextIndex + 1 < route.steps.length
         ? route.steps[nextIndex + 1]
@@ -2620,138 +2989,157 @@ class _MapScreenState extends State<MapScreen> {
     final toManeuver = progress?.distanceToManeuverM ?? step.distanceM;
 
     return SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(10, 8, 10, 0),
-          child: Material(
-            elevation: 6,
-            borderRadius: BorderRadius.circular(18),
-            color: const Color(0xFF13322A),
-            // Tapping the card lists every upcoming turn.
-            child: InkWell(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 8, 10, 0),
+            child: Material(
+              elevation: 6,
               borderRadius: BorderRadius.circular(18),
-              onTap: _openStepsSheet,
-              child: Padding(
-              padding: const EdgeInsets.fromLTRB(14, 12, 6, 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+              color: const Color(0xFF13322A),
+              // Tapping the card lists every upcoming turn.
+              child: InkWell(
+                borderRadius: BorderRadius.circular(18),
+                onTap: _openStepsSheet,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 12, 6, 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Sized to be read at arm's length from a handlebar
-                      // mount in sunlight — glanceable, not squintable.
-                      Icon(step.icon, color: Colors.white, size: 56),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              formatDistance(toManeuver),
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 34,
-                                fontWeight: FontWeight.w800,
-                                height: 1.1,
+                      Row(
+                        children: [
+                          // Sized to be read at arm's length from a handlebar
+                          // mount in sunlight — glanceable, not squintable.
+                          Icon(step.icon, color: Colors.white, size: 56),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  formatDistance(toManeuver),
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 34,
+                                    fontWeight: FontWeight.w800,
+                                    height: 1.1,
+                                  ),
+                                ),
+                                Text(
+                                  step.instruction,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w600,
+                                    height: 1.15,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: _voice ? 'Mute voice' : 'Unmute voice',
+                            icon: Icon(
+                              _voice ? Icons.volume_up : Icons.volume_off,
+                              color: Colors.white70,
+                            ),
+                            onPressed: () {
+                              setState(() => _voice = !_voice);
+                              if (!_voice) _tts?.stop();
+                            },
+                          ),
+                        ],
+                      ),
+                      if (step.warn != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6, left: 2),
+                          child: Row(
+                            children: [
+                              const Icon(
+                                Icons.warning_amber_rounded,
+                                color: Color(0xFFFFB74D),
+                                size: 18,
                               ),
-                            ),
-                            Text(
-                              step.instruction,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.w600,
-                                  height: 1.15),
-                            ),
-                          ],
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  warnStepSentence(step.warn),
+                                  style: const TextStyle(
+                                    color: Color(0xFFFFB74D),
+                                    fontSize: 14,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      else if (step.isSteepClimb)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6, left: 2),
+                          child: Row(
+                            children: [
+                              const Icon(
+                                Icons.trending_up,
+                                color: Color(0xFFFFB74D),
+                                size: 18,
+                              ),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  'Steep climb ahead — ${step.climbFt} ft up',
+                                  style: const TextStyle(
+                                    color: Color(0xFFFFB74D),
+                                    fontSize: 14,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
-                      IconButton(
-                        tooltip: _voice ? 'Mute voice' : 'Unmute voice',
-                        icon: Icon(_voice ? Icons.volume_up : Icons.volume_off,
-                            color: Colors.white70),
-                        onPressed: () {
-                          setState(() => _voice = !_voice);
-                          if (!_voice) _tts?.stop();
-                        },
-                      ),
+                      if (after != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6, left: 4),
+                          child: Row(
+                            children: [
+                              // white70, 15px: the "then" preview has to survive
+                              // sunlight too, just visibly quieter than the turn.
+                              const Text(
+                                'then ',
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 15,
+                                ),
+                              ),
+                              Icon(after.icon, color: Colors.white70, size: 22),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  after.instruction,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 15,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                     ],
                   ),
-                  if (step.warn != null)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 6, left: 2),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.warning_amber_rounded,
-                              color: Color(0xFFFFB74D), size: 18),
-                          const SizedBox(width: 6),
-                          Expanded(
-                            child: Text(
-                              warnStepSentence(step.warn),
-                              style: const TextStyle(
-                                  color: Color(0xFFFFB74D), fontSize: 14),
-                            ),
-                          ),
-                        ],
-                      ),
-                    )
-                  else if (step.isSteepClimb)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 6, left: 2),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.trending_up,
-                              color: Color(0xFFFFB74D), size: 18),
-                          const SizedBox(width: 6),
-                          Expanded(
-                            child: Text(
-                              'Steep climb ahead — ${step.climbFt} ft up',
-                              style: const TextStyle(
-                                  color: Color(0xFFFFB74D), fontSize: 14),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  if (after != null)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 6, left: 4),
-                      child: Row(
-                        children: [
-                          // white70, 15px: the "then" preview has to survive
-                          // sunlight too, just visibly quieter than the turn.
-                          const Text('then ',
-                              style: TextStyle(
-                                  color: Colors.white70, fontSize: 15)),
-                          Icon(after.icon, color: Colors.white70, size: 22),
-                          const SizedBox(width: 6),
-                          Expanded(
-                            child: Text(
-                              after.instruction,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                  color: Colors.white70, fontSize: 15),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                ],
-              ),
+                ),
               ),
             ),
           ),
-        ),
-        // Everything still to come, in order — the "upcoming turns" list Google
-        // keeps a swipe away, here always on screen.
-        _upcomingStrip(route, nextIndex),
-          ],
-        ),
-      );
+          // Everything still to come, in order — the "upcoming turns" list Google
+          // keeps a swipe away, here always on screen.
+          _upcomingStrip(route, nextIndex),
+        ],
+      ),
+    );
   }
 
   /// ETA + distance left + Steps/End, rendered inside the bottom overlay so it
@@ -2777,12 +3165,17 @@ class _MapScreenState extends State<MapScreen> {
                 Text(
                   formatDuration(etaMin),
                   style: const TextStyle(
-                      fontSize: 24, fontWeight: FontWeight.w800),
+                    fontSize: 24,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
-                Text('${formatDistance(remaining)} left',
-                    style: TextStyle(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        fontSize: 15)),
+                Text(
+                  '${formatDistance(remaining)} left',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontSize: 15,
+                  ),
+                ),
                 _gpsStatusLine(),
               ],
             ),
@@ -2795,8 +3188,9 @@ class _MapScreenState extends State<MapScreen> {
             const SizedBox(width: 4),
             FilledButton.icon(
               style: FilledButton.styleFrom(
-                  backgroundColor: Colors.red.shade700,
-                  foregroundColor: Colors.white),
+                backgroundColor: Colors.red.shade700,
+                foregroundColor: Colors.white,
+              ),
               icon: const Icon(Icons.close),
               label: const Text('End'),
               onPressed: () => _stopNav(),
@@ -2812,12 +3206,16 @@ class _MapScreenState extends State<MapScreen> {
   /// feedback that tells a rider the screen is navigating, not frozen.
   Widget _gpsStatusLine() {
     final style = TextStyle(
-        color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 12);
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
+      fontSize: 12,
+    );
     final fix = _lastNavFix;
     final age = DateTime.now().difference(_lastFixAt);
     if (fix == null || age > const Duration(seconds: 8)) {
-      return const Text('GPS lost — searching…',
-          style: TextStyle(color: Colors.red, fontSize: 12));
+      return const Text(
+        'GPS lost — searching…',
+        style: TextStyle(color: Colors.red, fontSize: 12),
+      );
     }
     final mph = fix.speed * 2.23694;
     final accFt = fix.accuracy * 3.28084;
@@ -2850,12 +3248,15 @@ class _MapScreenState extends State<MapScreen> {
                     padding: const EdgeInsets.symmetric(horizontal: 12),
                     child: Row(
                       children: [
-                        Icon(route.steps[i].icon,
-                            size: 22,
-                            color: route.steps[i].warn != null ||
-                                    route.steps[i].isSteepClimb
-                                ? warnRed
-                                : brandOnSurface(context)),
+                        Icon(
+                          route.steps[i].icon,
+                          size: 22,
+                          color:
+                              route.steps[i].warn != null ||
+                                  route.steps[i].isSteepClimb
+                              ? warnRed
+                              : brandOnSurface(context),
+                        ),
                         const SizedBox(width: 5),
                         Text(
                           route.steps[i].name ??
@@ -2863,19 +3264,21 @@ class _MapScreenState extends State<MapScreen> {
                                   ? 'Arrive'
                                   : 'Continue'),
                           style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                              color: Theme.of(context).colorScheme.onSurface),
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: Theme.of(context).colorScheme.onSurface,
+                          ),
                         ),
                         if (route.steps[i].distanceM > 0) ...[
                           const SizedBox(width: 6),
                           Text(
                             formatDistance(route.steps[i].distanceM),
                             style: TextStyle(
-                                fontSize: 13,
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .onSurfaceVariant),
+                              fontSize: 13,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onSurfaceVariant,
+                            ),
                           ),
                         ],
                       ],
@@ -2893,7 +3296,7 @@ class _MapScreenState extends State<MapScreen> {
     final route = _navRoute;
     if (route == null) return;
     final current = _progress?.stepIndex ?? 0;
-    showModalBottomSheet(
+    showAppSheet(
       context: context,
       showDragHandle: true,
       builder: (ctx) => SafeArea(
@@ -2925,11 +3328,14 @@ class _MapScreenState extends State<MapScreen> {
             for (final (i, stepMode) in route.stepModes().indexed)
               ListTile(
                 dense: true,
-                leading: Icon(route.steps[i].icon,
-                    color: i < current
-                        ? Theme.of(ctx).disabledColor
-                        : hexColor(routeLegColors[stepMode] ??
-                            routeLegColors['bike']!)),
+                leading: Icon(
+                  route.steps[i].icon,
+                  color: i < current
+                      ? Theme.of(ctx).disabledColor
+                      : hexColor(
+                          routeLegColors[stepMode] ?? routeLegColors['bike']!,
+                        ),
+                ),
                 title: Text(
                   route.steps[i].instruction,
                   style: TextStyle(
@@ -2974,12 +3380,14 @@ class _MapScreenState extends State<MapScreen> {
     if (lines.isEmpty) return null;
     if (lines.length == 1) return lines.first;
     return Column(
-        crossAxisAlignment: CrossAxisAlignment.start, children: lines);
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: lines,
+    );
   }
 
   void _openLayersSheet() {
     final zoom = _map?.cameraPosition?.zoom ?? homeZoom;
-    showModalBottomSheet(
+    showAppSheet(
       context: context,
       builder: (ctx) => Consumer<AppState>(
         builder: (ctx, state, _) => SafeArea(
@@ -2989,9 +3397,10 @@ class _MapScreenState extends State<MapScreen> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
                 child: Text(
-                    'Map layers — '
-                    '${TravelMode.values.where(state.modes.contains).map(state.labelFor).join(' + ')}',
-                    style: Theme.of(ctx).textTheme.titleMedium),
+                  'Map layers — '
+                  '${TravelMode.values.where(state.modes.contains).map(state.labelFor).join(' + ')}',
+                  style: Theme.of(ctx).textTheme.titleMedium,
+                ),
               ),
               // Base map: Standard follows the app theme (Settings →
               // Appearance is the ONLY light/dark switch — a dark basemap
@@ -3002,18 +3411,20 @@ class _MapScreenState extends State<MapScreen> {
                 child: SegmentedButton<MapBase>(
                   segments: const [
                     ButtonSegment(
-                        value: MapBase.auto,
-                        label: Text('Standard'),
-                        icon: Icon(Icons.map_outlined)),
+                      value: MapBase.auto,
+                      label: Text('Standard'),
+                      icon: Icon(Icons.map_outlined),
+                    ),
                     ButtonSegment(
-                        value: MapBase.satellite,
-                        label: Text('Satellite'),
-                        icon: Icon(Icons.satellite_alt)),
+                      value: MapBase.satellite,
+                      label: Text('Satellite'),
+                      icon: Icon(Icons.satellite_alt),
+                    ),
                   ],
                   selected: {
                     state.mapBase == MapBase.satellite
                         ? MapBase.satellite
-                        : MapBase.auto
+                        : MapBase.auto,
                   },
                   showSelectedIcon: false,
                   onSelectionChanged: (s) => state.setMapBase(s.first),
@@ -3054,17 +3465,23 @@ class _MapScreenState extends State<MapScreen> {
         runSpacing: 4,
         children: [
           for (final e in stressLabels.entries)
-            Row(mainAxisSize: MainAxisSize.min, children: [
-              Container(
-                width: 14,
-                height: 4,
-                color: Color(int.parse(
-                    'ff${stressColors[e.key]!.substring(1)}',
-                    radix: 16)),
-              ),
-              const SizedBox(width: 4),
-              Text(e.value, style: const TextStyle(fontSize: 12)),
-            ]),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 14,
+                  height: 4,
+                  color: Color(
+                    int.parse(
+                      'ff${stressColors[e.key]!.substring(1)}',
+                      radix: 16,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Text(e.value, style: const TextStyle(fontSize: 12)),
+              ],
+            ),
         ],
       ),
     );
@@ -3086,21 +3503,34 @@ class RoadInfoSheet extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('${info['name'] ?? 'Road'} · ${info['type'] ?? ''}',
-                style: Theme.of(context).textTheme.titleMedium),
+            Text(
+              '${info['name'] ?? 'Road'} · ${info['type'] ?? ''}',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
             const SizedBox(height: 4),
-            Text('Maintained by $owner',
-                style: Theme.of(context).textTheme.bodyLarge),
+            Text(
+              'Maintained by $owner',
+              style: Theme.of(context).textTheme.bodyLarge,
+            ),
             const SizedBox(height: 8),
             if (info['email'] != null)
-              ContactRow(icon: Icons.email_outlined, value: info['email'],
-                  uri: 'mailto:${info['email']}'),
+              ContactRow(
+                icon: Icons.email_outlined,
+                value: info['email'],
+                uri: 'mailto:${info['email']}',
+              ),
             if (info['phone'] != null)
-              ContactRow(icon: Icons.phone_outlined, value: info['phone'],
-                  uri: 'tel:${info['phone']}'),
+              ContactRow(
+                icon: Icons.phone_outlined,
+                value: info['phone'],
+                uri: 'tel:${info['phone']}',
+              ),
             if (info['online_form'] != null)
-              ContactRow(icon: Icons.open_in_new, value: 'Report an issue online',
-                  uri: info['online_form']),
+              ContactRow(
+                icon: Icons.open_in_new,
+                value: 'Report an issue online',
+                uri: info['online_form'],
+              ),
             if (info['email'] == null && info['online_form'] != null)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
@@ -3108,8 +3538,9 @@ class RoadInfoSheet extends StatelessWidget {
                   'This office has no public email — use the online form above '
                   'to contact them directly.',
                   style: TextStyle(
-                      fontSize: 12,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant),
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
                 ),
               ),
           ],
@@ -3123,8 +3554,12 @@ class ContactRow extends StatelessWidget {
   final IconData icon;
   final dynamic value;
   final String uri;
-  const ContactRow(
-      {super.key, required this.icon, required this.value, required this.uri});
+  const ContactRow({
+    super.key,
+    required this.icon,
+    required this.value,
+    required this.uri,
+  });
 
   @override
   Widget build(BuildContext context) {

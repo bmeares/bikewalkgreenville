@@ -31,9 +31,17 @@
   <link rel="icon" type="image/png" href="favicon.png"/>
 
   <!-- maplibre_gl_web 0.26.x requires the maplibre-gl JS/CSS on the page. -->
-  <script src='https://unpkg.com/maplibre-gl@^5.24.0/dist/maplibre-gl.js'></script>
-  <link href='https://unpkg.com/maplibre-gl@^5.24.0/dist/maplibre-gl.css' rel='stylesheet'/>
+  <script src='https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js'></script>
+  <link href='https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css' rel='stylesheet'/>
 
+  <style>
+    /* Keep provider credits readable in their own reserved footer strip. */
+    .maplibregl-ctrl-attrib { max-width: calc(100vw - 24px); max-height: 36px;
+      overflow-y: auto; font-size: 10px; line-height: 14px; }
+    /* The app's locate button owns this action; retain the location source. */
+    .maplibregl-ctrl-geolocate { display: none !important; }
+    .maplibregl-ctrl-group:has(> .maplibregl-ctrl-geolocate:only-child) { display: none; }
+  </style>
   <title>BikeWalk Greenville</title>
   <link rel="manifest" href="manifest.json">
 </head>

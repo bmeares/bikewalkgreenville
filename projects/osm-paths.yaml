@@ -27,6 +27,8 @@ pipes:
       name: "string"
       highway: "string"
       street: "bool"
+      tags_json: "string"
+      tunnel: "bool"
       geometry: "geometry[LINESTRING, 4326]"
     indices:
       geometry: "geometry"

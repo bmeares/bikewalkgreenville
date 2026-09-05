@@ -7,42 +7,42 @@ import 'package:bwg_app_native/theme.dart';
 
 /// A ~440 m dogleg: east along one block, then north along the next.
 Map<String, dynamic> _feature() => {
-      'type': 'Feature',
-      'geometry': {
-        'type': 'LineString',
-        'coordinates': [
-          [-82.4000, 34.8500],
-          [-82.3980, 34.8500],
-          [-82.3980, 34.8520],
-        ],
+  'type': 'Feature',
+  'geometry': {
+    'type': 'LineString',
+    'coordinates': [
+      [-82.4000, 34.8500],
+      [-82.3980, 34.8500],
+      [-82.3980, 34.8520],
+    ],
+  },
+  'properties': {
+    'distance_m': 405.0,
+    'duration_min': 3.0,
+    'steps': [
+      {
+        'maneuver': 'depart',
+        'instruction': 'Head east on Main St',
+        'name': 'Main St',
+        'distance_m': 183.0,
+        'start_index': 0,
       },
-      'properties': {
-        'distance_m': 405.0,
-        'duration_min': 3.0,
-        'steps': [
-          {
-            'maneuver': 'depart',
-            'instruction': 'Head east on Main St',
-            'name': 'Main St',
-            'distance_m': 183.0,
-            'start_index': 0,
-          },
-          {
-            'maneuver': 'left',
-            'instruction': 'Turn left onto Elm St',
-            'name': 'Elm St',
-            'distance_m': 222.0,
-            'start_index': 1,
-          },
-          {
-            'maneuver': 'arrive',
-            'instruction': 'Arrive at your destination',
-            'distance_m': 0.0,
-            'start_index': 2,
-          },
-        ],
+      {
+        'maneuver': 'left',
+        'instruction': 'Turn left onto Elm St',
+        'name': 'Elm St',
+        'distance_m': 222.0,
+        'start_index': 1,
       },
-    };
+      {
+        'maneuver': 'arrive',
+        'instruction': 'Arrive at your destination',
+        'distance_m': 0.0,
+        'start_index': 2,
+      },
+    ],
+  },
+};
 
 void main() {
   test('route parses geometry and steps', () {
@@ -95,11 +95,11 @@ void main() {
     expect(route.routeColor, '#7B1FA2');
 
     RouteStep step(String maneuver) => RouteStep.fromJson({
-          'maneuver': maneuver,
-          'instruction': 'x',
-          'distance_m': 0.0,
-          'start_index': 0,
-        });
+      'maneuver': maneuver,
+      'instruction': 'x',
+      'distance_m': 0.0,
+      'start_index': 0,
+    });
     expect(step('board').icon, Icons.departure_board);
     expect(step('ride').icon, Icons.directions_bus);
     expect(step('alight').icon, Icons.pin_drop);
@@ -217,11 +217,11 @@ void main() {
     expect(step.warnM, 180.0);
 
     RouteStep m(String maneuver) => RouteStep.fromJson({
-          'maneuver': maneuver,
-          'instruction': 'x',
-          'distance_m': 0.0,
-          'start_index': 0,
-        });
+      'maneuver': maneuver,
+      'instruction': 'x',
+      'distance_m': 0.0,
+      'start_index': 0,
+    });
     expect(m('rent').icon, Icons.pedal_bike);
     expect(m('dock').icon, Icons.lock_outline);
     expect(m('straight').warn, isNull);
@@ -258,8 +258,11 @@ void main() {
     expect(route.elevationProfile!.length, 3);
     expect(route.elevationProfile![1][0], 500.5);
     expect(route.steps.first.climbFt, 40);
-    expect(route.steps.first.isSteepClimb, isTrue,
-        reason: '40 ft over 100 m is a 12% grade');
+    expect(
+      route.steps.first.isSteepClimb,
+      isTrue,
+      reason: '40 ft over 100 m is a 12% grade',
+    );
   });
 
   test('no elevation profile stays null and flat steps are not steep', () {
@@ -361,8 +364,18 @@ void main() {
       final f = _feature();
       final props = f['properties'] as Map<String, dynamic>;
       props['warnings'] = [
-        {'kind': 'no_bike_lane', 'distance_m': 30.0, 'label': '', 'message': 'tiny'},
-        {'kind': 'no_bike_lane', 'distance_m': 300.0, 'label': '', 'message': 'real'},
+        {
+          'kind': 'no_bike_lane',
+          'distance_m': 30.0,
+          'label': '',
+          'message': 'tiny',
+        },
+        {
+          'kind': 'no_bike_lane',
+          'distance_m': 300.0,
+          'label': '',
+          'message': 'real',
+        },
         {'kind': 'steep', 'distance_m': 10.0, 'label': '', 'message': 'steep'},
       ];
       final route = NavRoute.fromFeature(f);
@@ -377,13 +390,25 @@ void main() {
       final props = f['properties'] as Map<String, dynamic>;
       props['warnings'] = [
         // 300 m ≈ 984 ft: just under the bar, so it stays quiet.
-        {'kind': 'no_bike_lane', 'distance_m': 300.0, 'label': '', 'message': 'short'},
-        {'kind': 'no_bike_lane', 'distance_m': 400.0, 'label': '', 'message': 'long'},
+        {
+          'kind': 'no_bike_lane',
+          'distance_m': 300.0,
+          'label': '',
+          'message': 'short',
+        },
+        {
+          'kind': 'no_bike_lane',
+          'distance_m': 400.0,
+          'label': '',
+          'message': 'long',
+        },
         {'kind': 'steep', 'distance_m': 10.0, 'label': '', 'message': 'steep'},
       ];
       expect(warnMinFt, 1000.0);
-      expect(NavRoute.fromFeature(f).visibleWarnings().map((w) => w.message),
-          ['long', 'steep']);
+      expect(NavRoute.fromFeature(f).visibleWarnings().map((w) => w.message), [
+        'long',
+        'steep',
+      ]);
     });
   });
 
@@ -401,24 +426,28 @@ void main() {
       props['mode'] = 'transit';
       props['access_mode'] = 'bike';
       props['route_color'] = '#AB47BC';
-      props['steps'] = <dynamic>[...props['steps'] as List]..insertAll(1, [
-        {
-          'maneuver': 'board',
-          'instruction': 'Board Greenlink Route 503',
-          'distance_m': 0.0,
-          'start_index': 1,
-        },
-        {
-          'maneuver': 'alight',
-          'instruction': 'Get off',
-          'distance_m': 0.0,
-          'start_index': 2,
-        },
-      ]);
+      props['steps'] = <dynamic>[...props['steps'] as List]
+        ..insertAll(1, [
+          {
+            'maneuver': 'board',
+            'instruction': 'Board Greenlink Route 503',
+            'distance_m': 0.0,
+            'start_index': 1,
+          },
+          {
+            'maneuver': 'alight',
+            'instruction': 'Get off',
+            'distance_m': 0.0,
+            'start_index': 2,
+          },
+        ]);
       final route = NavRoute.fromFeature(f);
       final features = route.routeCollection()['features'] as List;
-      expect(features.length, 2,
-          reason: 'alight at the last coordinate leaves no third leg');
+      expect(
+        features.length,
+        2,
+        reason: 'alight at the last coordinate leaves no third leg',
+      );
       expect(features[0]['properties']['color'], routeLegColors['bike']);
       expect(features[1]['properties']['color'], '#AB47BC');
     });
@@ -427,20 +456,21 @@ void main() {
       final f = _feature();
       final props = f['properties'] as Map<String, dynamic>;
       props['plan'] = 'bcycle';
-      props['steps'] = <dynamic>[...props['steps'] as List]..insertAll(1, [
-        {
-          'maneuver': 'rent',
-          'instruction': 'Unlock a BCycle',
-          'distance_m': 0.0,
-          'start_index': 1,
-        },
-        {
-          'maneuver': 'dock',
-          'instruction': 'Dock the bike',
-          'distance_m': 0.0,
-          'start_index': 2,
-        },
-      ]);
+      props['steps'] = <dynamic>[...props['steps'] as List]
+        ..insertAll(1, [
+          {
+            'maneuver': 'rent',
+            'instruction': 'Unlock a BCycle',
+            'distance_m': 0.0,
+            'start_index': 1,
+          },
+          {
+            'maneuver': 'dock',
+            'instruction': 'Dock the bike',
+            'distance_m': 0.0,
+            'start_index': 2,
+          },
+        ]);
       final route = NavRoute.fromFeature(f);
       final features = route.routeCollection()['features'] as List;
       expect(features.length, 2);
@@ -460,16 +490,23 @@ void main() {
       final props = f['properties'] as Map<String, dynamic>;
       props['mode'] = 'transit';
       props['access_mode'] = 'bike';
-      props['steps'] = <dynamic>[...props['steps'] as List]..insertAll(1, [
-        {'maneuver': 'board', 'instruction': 'Board', 'start_index': 1},
-        {'maneuver': 'ride', 'instruction': 'Ride', 'start_index': 1},
-        {'maneuver': 'alight', 'instruction': 'Get off', 'start_index': 2},
-      ]);
+      props['steps'] = <dynamic>[...props['steps'] as List]
+        ..insertAll(1, [
+          {'maneuver': 'board', 'instruction': 'Board', 'start_index': 1},
+          {'maneuver': 'ride', 'instruction': 'Ride', 'start_index': 1},
+          {'maneuver': 'alight', 'instruction': 'Get off', 'start_index': 2},
+        ]);
       final route = NavRoute.fromFeature(f);
       // depart(bike) board(transit) ride(transit) alight(transit) then back
       // on the bike for the last turn and the arrival.
-      expect(route.stepModes(),
-          ['bike', 'transit', 'transit', 'transit', 'bike', 'bike']);
+      expect(route.stepModes(), [
+        'bike',
+        'transit',
+        'transit',
+        'transit',
+        'bike',
+        'bike',
+      ]);
     });
 
     test('a composite access profile still colors as a bike', () {
@@ -486,13 +523,13 @@ void main() {
       final f = _feature();
       final props = f['properties'] as Map<String, dynamic>;
       props['plan'] = 'bcycle';
-      props['steps'] = <dynamic>[...props['steps'] as List]..insertAll(1, [
-        {'maneuver': 'rent', 'instruction': 'Unlock', 'start_index': 1},
-        {'maneuver': 'dock', 'instruction': 'Dock', 'start_index': 2},
-      ]);
+      props['steps'] = <dynamic>[...props['steps'] as List]
+        ..insertAll(1, [
+          {'maneuver': 'rent', 'instruction': 'Unlock', 'start_index': 1},
+          {'maneuver': 'dock', 'instruction': 'Dock', 'start_index': 2},
+        ]);
       final route = NavRoute.fromFeature(f);
-      expect(route.stepModes(),
-          ['walk', 'bcycle', 'bcycle', 'walk', 'walk']);
+      expect(route.stepModes(), ['walk', 'bcycle', 'bcycle', 'walk', 'walk']);
     });
 
     test('every step mode has a route-leg color', () {
@@ -599,28 +636,37 @@ void main() {
       final g = RerouteGovernor();
       // Off-route but closing distance every fix: the rider is rejoining.
       for (final (i, d) in const [90.0, 80.0, 70.0, 60.0, 55.0].indexed) {
-        expect(g.onFix(d, at(i)), RerouteDecision.none,
-            reason: 'fix $i at $d m, approaching');
+        expect(
+          g.onFix(d, at(i)),
+          RerouteDecision.none,
+          reason: 'fix $i at $d m, approaching',
+        );
       }
     });
 
-    test('a repeat reroute in the same spell is silent and backed off', () {
-      final g = RerouteGovernor();
-      var s = 0;
-      expect(g.onFix(60, at(s++)), RerouteDecision.none);
-      expect(g.onFix(60, at(s++)), RerouteDecision.none);
-      expect(g.onFix(60, at(s++)), RerouteDecision.announce);
-      // Still off-route (the Springer St tunnel): within the 15 s cooldown
-      // nothing happens no matter how many fixes accumulate.
-      for (; s < 17; s++) {
-        expect(g.onFix(60, at(s)), RerouteDecision.none,
-            reason: 'fix at ${s}s is inside the first cooldown');
-      }
-      // Past the cooldown: recalculate, but silently.
-      expect(g.onFix(60, at(19)), RerouteDecision.silent);
-    });
+    test(
+      'a repeat reroute in the same spell stays announced with debounce',
+      () {
+        final g = RerouteGovernor();
+        var s = 0;
+        expect(g.onFix(60, at(s++)), RerouteDecision.none);
+        expect(g.onFix(60, at(s++)), RerouteDecision.none);
+        expect(g.onFix(60, at(s++)), RerouteDecision.announce);
+        // Still off-route (the Springer St tunnel): within the 15 s cooldown
+        // nothing happens no matter how many fixes accumulate.
+        for (; s < 17; s++) {
+          expect(
+            g.onFix(60, at(s)),
+            RerouteDecision.none,
+            reason: 'fix at ${s}s is inside the first cooldown',
+          );
+        }
+        // Past the cooldown: recalculate with spoken feedback.
+        expect(g.onFix(60, at(19)), RerouteDecision.announce);
+      },
+    );
 
-    test('the third reroute of a spell says it will stay quiet', () {
+    test('every reroute remains announced during a sustained detour', () {
       final g = RerouteGovernor();
       var t = 0;
       RerouteDecision drive() {
@@ -633,9 +679,9 @@ void main() {
       }
 
       expect(drive(), RerouteDecision.announce);
-      expect(drive(), RerouteDecision.silent);
-      expect(drive(), RerouteDecision.quietNotice);
-      expect(drive(), RerouteDecision.silent);
+      expect(drive(), RerouteDecision.announce);
+      expect(drive(), RerouteDecision.announce);
+      expect(drive(), RerouteDecision.announce);
     });
 
     test('a short on-route blip does not reset the backoff', () {
@@ -649,12 +695,12 @@ void main() {
       for (var i = 0; i < 5; i++) {
         expect(g.onFix(5, at(t++)), RerouteDecision.none);
       }
-      // …then they diverge again: still the same spell, so still silent.
+      // Diverging again still gets spoken feedback.
       RerouteDecision d = RerouteDecision.none;
       for (var i = 0; i < 60 && d == RerouteDecision.none; i++) {
         d = g.onFix(60, at(t++));
       }
-      expect(d, RerouteDecision.silent);
+      expect(d, RerouteDecision.announce);
     });
 
     test('a sustained return to the route ends the spell', () {
@@ -675,65 +721,97 @@ void main() {
       expect(d, RerouteDecision.announce);
     });
 
-    test('cooldowns escalate and cap', () {
+    test('cooldowns stay responsive throughout a long detour', () {
       expect(RerouteGovernor.cooldownSeconds(1), 15);
-      expect(RerouteGovernor.cooldownSeconds(2), 30);
-      expect(RerouteGovernor.cooldownSeconds(3), 60);
-      expect(RerouteGovernor.cooldownSeconds(4), 120);
-      expect(RerouteGovernor.cooldownSeconds(8), 120);
+      expect(RerouteGovernor.cooldownSeconds(2), 15);
+      expect(RerouteGovernor.cooldownSeconds(3), 15);
+      expect(RerouteGovernor.cooldownSeconds(4), 15);
+      expect(RerouteGovernor.cooldownSeconds(8), 15);
     });
   });
 
   group('spokenText (what the voice says)', () {
     test('cardinal prefixes expand', () {
-      expect(spokenText('Turn left onto E Washington St'),
-          'Turn left onto East Washington Street');
-      expect(spokenText('Continue on N Main St'),
-          'Continue on North Main Street');
-      expect(spokenText('Turn right onto SW Court St'),
-          'Turn right onto Southwest Court Street');
+      expect(
+        spokenText('Turn left onto E Washington St'),
+        'Turn left onto East Washington Street',
+      );
+      expect(
+        spokenText('Continue on N Main St'),
+        'Continue on North Main Street',
+      );
+      expect(
+        spokenText('Turn right onto SW Court St'),
+        'Turn right onto Southwest Court Street',
+      );
       // Titleized two-letter combos ("Ne" from the server's .title()).
-      expect(spokenText('Head east on Ne Main St'),
-          'Head east on Northeast Main Street');
+      expect(
+        spokenText('Head east on Ne Main St'),
+        'Head east on Northeast Main Street',
+      );
     });
 
     test('street-type suffixes expand', () {
-      expect(spokenText('Turn left onto Pete Hollis Blvd'),
-          'Turn left onto Pete Hollis Boulevard');
-      expect(spokenText('Bear right onto W Faris Rd'),
-          'Bear right onto West Faris Road');
-      expect(spokenText('Continue onto Cedar Lane Rd'),
-          'Continue onto Cedar Lane Road');
-      expect(spokenText('Turn right onto Laurens Hwy'),
-          'Turn right onto Laurens Highway');
+      expect(
+        spokenText('Turn left onto Pete Hollis Blvd'),
+        'Turn left onto Pete Hollis Boulevard',
+      );
+      expect(
+        spokenText('Bear right onto W Faris Rd'),
+        'Bear right onto West Faris Road',
+      );
+      expect(
+        spokenText('Continue onto Cedar Lane Rd'),
+        'Continue onto Cedar Lane Road',
+      );
+      expect(
+        spokenText('Turn right onto Laurens Hwy'),
+        'Turn right onto Laurens Highway',
+      );
     });
 
     test('St means Saint before a name, Street otherwise', () {
-      expect(spokenText('Turn left onto St Francis Dr'),
-          'Turn left onto Saint Francis Drive');
+      expect(
+        spokenText('Turn left onto St Francis Dr'),
+        'Turn left onto Saint Francis Drive',
+      );
       // Followed by a lowercase word: still Street.
-      expect(spokenText('Bear left onto Springer St tunnel path'),
-          'Bear left onto Springer Street tunnel path');
+      expect(
+        spokenText('Bear left onto Springer St tunnel path'),
+        'Bear left onto Springer Street tunnel path',
+      );
       // Followed by another suffix abbreviation: still Street.
-      expect(spokenText('Continue on E North St Ext'),
-          'Continue on East North Street Extension');
+      expect(
+        spokenText('Continue on E North St Ext'),
+        'Continue on East North Street Extension',
+      );
       // Trailing punctuation ends the name.
-      expect(spokenText('Turn left onto E Washington St, then turn right'),
-          'Turn left onto East Washington Street, then turn right');
+      expect(
+        spokenText('Turn left onto E Washington St, then turn right'),
+        'Turn left onto East Washington Street, then turn right',
+      );
     });
 
     test('distance units expand', () {
-      expect(spokenText('In 400 ft, turn left onto E Stone Ave'),
-          'In 400 feet, turn left onto East Stone Avenue');
-      expect(spokenText('In 0.6 mi, make a U-turn onto Dunbar St'),
-          'In 0.6 miles, make a U-turn onto Dunbar Street');
+      expect(
+        spokenText('In 400 ft, turn left onto E Stone Ave'),
+        'In 400 feet, turn left onto East Stone Avenue',
+      );
+      expect(
+        spokenText('In 0.6 mi, make a U-turn onto Dunbar St'),
+        'In 0.6 miles, make a U-turn onto Dunbar Street',
+      );
     });
 
     test('ordinary words are left alone', () {
-      expect(spokenText('Arrive at your destination'),
-          'Arrive at your destination');
-      expect(spokenText('Head northeast on Swamp Rabbit Trail'),
-          'Head northeast on Swamp Rabbit Trail');
+      expect(
+        spokenText('Arrive at your destination'),
+        'Arrive at your destination',
+      );
+      expect(
+        spokenText('Head northeast on Swamp Rabbit Trail'),
+        'Head northeast on Swamp Rabbit Trail',
+      );
       expect(spokenText('You have arrived.'), 'You have arrived.');
     });
   });

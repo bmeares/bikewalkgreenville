@@ -26,7 +26,8 @@ double bearingBetween(LatLng a, LatLng b) {
   final lat2 = b.latitude * math.pi / 180.0;
   final dLon = (b.longitude - a.longitude) * math.pi / 180.0;
   final y = math.sin(dLon) * math.cos(lat2);
-  final x = math.cos(lat1) * math.sin(lat2) -
+  final x =
+      math.cos(lat1) * math.sin(lat2) -
       math.sin(lat1) * math.cos(lat2) * math.cos(dLon);
   return (math.atan2(y, x) * 180.0 / math.pi + 360.0) % 360.0;
 }
@@ -61,22 +62,20 @@ class RouteStep {
   });
 
   factory RouteStep.fromJson(Map<String, dynamic> j) => RouteStep(
-        maneuver: (j['maneuver'] ?? 'straight').toString(),
-        instruction: (j['instruction'] ?? 'Continue').toString(),
-        name: j['name']?.toString(),
-        distanceM: (j['distance_m'] as num?)?.toDouble() ?? 0.0,
-        startIndex: (j['start_index'] as num?)?.toInt() ?? 0,
-        warn: j['warn']?.toString(),
-        warnM: (j['warn_m'] as num?)?.toDouble() ?? 0.0,
-        climbFt: (j['climb_ft'] as num?)?.round() ?? 0,
-      );
+    maneuver: (j['maneuver'] ?? 'straight').toString(),
+    instruction: (j['instruction'] ?? 'Continue').toString(),
+    name: j['name']?.toString(),
+    distanceM: (j['distance_m'] as num?)?.toDouble() ?? 0.0,
+    startIndex: (j['start_index'] as num?)?.toInt() ?? 0,
+    warn: j['warn']?.toString(),
+    warnM: (j['warn_m'] as num?)?.toDouble() ?? 0.0,
+    climbFt: (j['climb_ft'] as num?)?.round() ?? 0,
+  );
 
   /// A climb worth flagging on this step: steeper than ~8% (ADA's 1:12) over
   /// more than sampling noise (8 ft — mirrors the server's noise gate).
   bool get isSteepClimb =>
-      climbFt >= 8 &&
-      distanceM > 0 &&
-      (climbFt / 3.28084) / distanceM > 0.08;
+      climbFt >= 8 && distanceM > 0 && (climbFt / 3.28084) / distanceM > 0.08;
 
   IconData get icon {
     switch (maneuver) {
@@ -130,11 +129,11 @@ class WarnRange {
   });
 
   factory WarnRange.fromJson(Map<String, dynamic> j) => WarnRange(
-        kind: (j['kind'] ?? 'unknown').toString(),
-        start: (j['start'] as num?)?.toInt() ?? 0,
-        end: (j['end'] as num?)?.toInt() ?? 0,
-        distanceM: (j['distance_m'] as num?)?.toDouble() ?? 0.0,
-      );
+    kind: (j['kind'] ?? 'unknown').toString(),
+    start: (j['start'] as num?)?.toInt() ?? 0,
+    end: (j['end'] as num?)?.toInt() ?? 0,
+    distanceM: (j['distance_m'] as num?)?.toDouble() ?? 0.0,
+  );
 }
 
 /// Shortest infrastructure gap worth telling a rider about, in feet. A block
@@ -156,11 +155,11 @@ class RouteWarning {
   });
 
   factory RouteWarning.fromJson(Map<String, dynamic> j) => RouteWarning(
-        kind: (j['kind'] ?? 'unknown').toString(),
-        distanceM: (j['distance_m'] as num?)?.toDouble() ?? 0.0,
-        label: (j['label'] ?? '').toString(),
-        message: (j['message'] ?? '').toString(),
-      );
+    kind: (j['kind'] ?? 'unknown').toString(),
+    distanceM: (j['distance_m'] as num?)?.toDouble() ?? 0.0,
+    label: (j['label'] ?? '').toString(),
+    message: (j['message'] ?? '').toString(),
+  );
 
   IconData get icon => warnIcons[kind] ?? Icons.warning_amber_rounded;
 }
@@ -173,6 +172,7 @@ const warnIcons = <String, IconData>{
   'no_sidewalk': Icons.no_transfer_outlined,
   'no_bike_lane': Icons.directions_bike_outlined,
   'steep': Icons.trending_up,
+  'busy_crossing': Icons.warning_amber_rounded,
 };
 
 /// Short phrase for a per-step warning; `{d}` worth of distance is prepended
@@ -181,6 +181,7 @@ const warnStepPhrases = <String, String>{
   'no_sidewalk': 'with no sidewalk',
   'no_bike_lane': 'with no bike lane',
   'steep': 'of steep grade',
+  'busy_crossing': 'near a busy road crossing',
 };
 
 /// Sentence for the maneuver card, mid-turn.
@@ -188,6 +189,7 @@ const warnStepSentences = <String, String>{
   'no_sidewalk': 'No sidewalk mapped on this stretch',
   'no_bike_lane': 'No bike lane on this stretch',
   'steep': 'Steep grade on this stretch',
+  'busy_crossing': 'Busy road crossing — check signals and traffic',
 };
 
 String warnStepPhrase(String? kind) =>
@@ -214,17 +216,16 @@ class RouteAlternative {
     required this.warnings,
   });
 
-  factory RouteAlternative.fromJson(Map<String, dynamic> j) =>
-      RouteAlternative(
-        plan: (j['plan'] ?? '').toString(),
-        label: (j['label'] ?? '').toString(),
-        iconMode: (j['icon_mode'] ?? '').toString(),
-        distanceM: (j['distance_m'] as num?)?.toDouble() ?? 0.0,
-        durationMin: (j['duration_min'] as num?)?.toDouble() ?? 0.0,
-        warnings: ((j['warnings'] as List?) ?? [])
-            .map((w) => RouteWarning.fromJson(Map<String, dynamic>.from(w)))
-            .toList(),
-      );
+  factory RouteAlternative.fromJson(Map<String, dynamic> j) => RouteAlternative(
+    plan: (j['plan'] ?? '').toString(),
+    label: (j['label'] ?? '').toString(),
+    iconMode: (j['icon_mode'] ?? '').toString(),
+    distanceM: (j['distance_m'] as num?)?.toDouble() ?? 0.0,
+    durationMin: (j['duration_min'] as num?)?.toDouble() ?? 0.0,
+    warnings: ((j['warnings'] as List?) ?? [])
+        .map((w) => RouteWarning.fromJson(Map<String, dynamic>.from(w)))
+        .toList(),
+  );
 }
 
 /// A computed route: the line, its steps and the cumulative distance table
@@ -235,12 +236,14 @@ class NavRoute {
   final List<double> cumulative; // meters from start to points[i]
   final double distanceM;
   final double durationMin;
+
   /// Total ascent over the trip, in feet. 0 when the router had no elevation.
   final int climbFt;
 
   /// [distance_from_start_m, elevation_ft] samples for the preview sparkline,
   /// or null when the router had no elevation for this trip.
   final List<List<double>>? elevationProfile;
+
   /// The rider said they are on an e-bike, so the pace and hill cost reflect it.
   final bool ebike;
   final String mode; // bike | walk | roll | transit | bcycle
@@ -309,10 +312,9 @@ class NavRoute {
 
   factory NavRoute.fromFeature(Map<String, dynamic> feature) {
     final coords = (feature['geometry']?['coordinates'] as List? ?? [])
-        .map<LatLng>((c) => LatLng(
-              (c[1] as num).toDouble(),
-              (c[0] as num).toDouble(),
-            ))
+        .map<LatLng>(
+          (c) => LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble()),
+        )
         .toList();
     final props = Map<String, dynamic>.from(feature['properties'] ?? {});
     final steps = (props['steps'] as List? ?? [])
@@ -320,18 +322,22 @@ class NavRoute {
         .toList();
     final cumulative = <double>[0.0];
     for (var i = 1; i < coords.length; i++) {
-      cumulative.add(cumulative[i - 1] + metersBetween(coords[i - 1], coords[i]));
+      cumulative.add(
+        cumulative[i - 1] + metersBetween(coords[i - 1], coords[i]),
+      );
     }
     final mode = (props['mode'] ?? 'bike').toString();
     return NavRoute._(
       points: coords,
       steps: steps,
       cumulative: cumulative,
-      distanceM: (props['distance_m'] as num?)?.toDouble() ??
+      distanceM:
+          (props['distance_m'] as num?)?.toDouble() ??
           (cumulative.isEmpty ? 0.0 : cumulative.last),
       durationMin: (props['duration_min'] as num?)?.toDouble() ?? 0.0,
       climbFt: (props['climb_ft'] as num?)?.round() ?? 0,
-      elevationProfile: (props['elevation_profile'] is List &&
+      elevationProfile:
+          (props['elevation_profile'] is List &&
               (props['elevation_profile'] as List).length >= 2)
           ? [
               for (final p in props['elevation_profile'] as List)
@@ -374,8 +380,7 @@ class NavRoute {
   /// "Bike" becomes "E-bike" when the rider's e-bike priced this plan — the
   /// server's plan key and label stay plain `bike` on purpose (they name the
   /// itinerary, not the rider's equipment).
-  String get planDisplayLabel =>
-      ebike && plan == 'bike' ? 'E-bike' : planLabel;
+  String get planDisplayLabel => ebike && plan == 'bike' ? 'E-bike' : planLabel;
 
   IconData get planIcon => ebike && plan == 'bike'
       ? legModeIcons['ebike']!
@@ -412,23 +417,23 @@ class NavRoute {
   /// dashed on top of the route so a rider can see before starting exactly
   /// which blocks have no sidewalk or no bike lane.
   Map<String, dynamic> warnCollection() => {
-        'type': 'FeatureCollection',
-        'features': [
-          for (final r in warnRanges)
-            if (r.end > r.start && r.start >= 0 && r.end < points.length)
-              {
-                'type': 'Feature',
-                'geometry': {
-                  'type': 'LineString',
-                  'coordinates': [
-                    for (final p in points.sublist(r.start, r.end + 1))
-                      [p.longitude, p.latitude],
-                  ],
-                },
-                'properties': {'kind': r.kind},
-              },
-        ],
-      };
+    'type': 'FeatureCollection',
+    'features': [
+      for (final r in warnRanges)
+        if (r.end > r.start && r.start >= 0 && r.end < points.length)
+          {
+            'type': 'Feature',
+            'geometry': {
+              'type': 'LineString',
+              'coordinates': [
+                for (final p in points.sublist(r.start, r.end + 1))
+                  [p.longitude, p.latitude],
+              ],
+            },
+            'properties': {'kind': r.kind},
+          },
+    ],
+  };
 
   /// GeoJSON for the route line itself. A single-mode trip is one feature in
   /// its mode's color; a composite itinerary (transit, bike share) splits at
@@ -508,15 +513,17 @@ class NavRoute {
       final severity = grade >= hillVerySteepGrade
           ? 'vsteep'
           : (grade >= hillSteepGrade ||
-                  (grade >= hillLongGrade && riseFt >= hillLongRiseFt))
-              ? 'steep'
-              : 'mod';
-      out.add(HillRange(
-        startM: prof[i - 1][0],
-        endM: prof[i][0],
-        grade: grade,
-        severity: severity,
-      ));
+                (grade >= hillLongGrade && riseFt >= hillLongRiseFt))
+          ? 'steep'
+          : 'mod';
+      out.add(
+        HillRange(
+          startM: prof[i - 1][0],
+          endM: prof[i][0],
+          grade: grade,
+          severity: severity,
+        ),
+      );
     }
     return out;
   }
@@ -538,12 +545,12 @@ class NavRoute {
   /// GeoJSON for the hill overlay, drawn on top of the route line and colored
   /// by severity ([hillColors]).
   Map<String, dynamic> hillCollection() => {
-        'type': 'FeatureCollection',
-        'features': [
-          for (final h in hillRanges())
-            if (_hillFeature(h) != null) _hillFeature(h)!,
-        ],
-      };
+    'type': 'FeatureCollection',
+    'features': [
+      for (final h in hillRanges())
+        if (_hillFeature(h) != null) _hillFeature(h)!,
+    ],
+  };
 
   Map<String, dynamic>? _hillFeature(HillRange h) {
     var si = _indexAtDistance(h.startM);
@@ -555,14 +562,10 @@ class NavRoute {
       'geometry': {
         'type': 'LineString',
         'coordinates': [
-          for (final p in points.sublist(si, ei + 1))
-            [p.longitude, p.latitude],
+          for (final p in points.sublist(si, ei + 1)) [p.longitude, p.latitude],
         ],
       },
-      'properties': {
-        'sev': h.severity,
-        'grade': (h.grade * 100).round(),
-      },
+      'properties': {'sev': h.severity, 'grade': (h.grade * 100).round()},
     };
   }
 
@@ -600,7 +603,7 @@ class NavRoute {
       for (final h in hillRanges())
         if (atM >= h.startM - slackM && atM <= h.endM + slackM)
           'Climbs at about ${(h.grade * 100).round()}% grade here — shaded '
-          '${sevWords[h.severity]} on the map.',
+              '${sevWords[h.severity]} on the map.',
       for (final r in warnRanges)
         if (r.start >= 0 &&
             r.end < cumulative.length &&
@@ -615,44 +618,44 @@ class NavRoute {
   /// Greenville almost every trip crosses a short unmarked block, so a low
   /// threshold cried wolf on routes that were fine. Steep warnings always show.
   List<RouteWarning> visibleWarnings([double minFt = warnMinFt]) => [
-        for (final w in warnings)
-          if (w.kind == 'steep' || w.distanceM * 3.28084 >= minFt) w,
-      ];
+    for (final w in warnings)
+      if (w.kind == 'steep' || w.distanceM * 3.28084 >= minFt) w,
+  ];
 
   /// GeoJSON for the maneuver markers: one rotated chevron per turn, so the
   /// upcoming turns are visible on the map itself and not only in the card.
   /// [fromStep] skips maneuvers already behind the rider.
   Map<String, dynamic> stepCollection({int fromStep = 0}) => {
-        'type': 'FeatureCollection',
-        'features': [
-          for (var i = fromStep; i < steps.length; i++)
-            if (_isTurn(steps[i]) && steps[i].startIndex < points.length)
-              {
-                'type': 'Feature',
-                'geometry': {
-                  'type': 'Point',
-                  'coordinates': [
-                    points[steps[i].startIndex].longitude,
-                    points[steps[i].startIndex].latitude,
-                  ],
-                },
-                'properties': {
-                  'bearing': _bearingAt(steps[i].startIndex),
-                  'first': i == fromStep,
-                },
-              },
-        ],
-      };
+    'type': 'FeatureCollection',
+    'features': [
+      for (var i = fromStep; i < steps.length; i++)
+        if (_isTurn(steps[i]) && steps[i].startIndex < points.length)
+          {
+            'type': 'Feature',
+            'geometry': {
+              'type': 'Point',
+              'coordinates': [
+                points[steps[i].startIndex].longitude,
+                points[steps[i].startIndex].latitude,
+              ],
+            },
+            'properties': {
+              'bearing': _bearingAt(steps[i].startIndex),
+              'first': i == fromStep,
+            },
+          },
+    ],
+  };
 
   static bool _isTurn(RouteStep s) => const {
-        'left',
-        'right',
-        'slight-left',
-        'slight-right',
-        'sharp-left',
-        'sharp-right',
-        'uturn',
-      }.contains(s.maneuver);
+    'left',
+    'right',
+    'slight-left',
+    'slight-right',
+    'sharp-left',
+    'sharp-right',
+    'uturn',
+  }.contains(s.maneuver);
 
   /// Heading of the route as it leaves [index] — the chevron's rotation.
   double _bearingAt(int index) {
@@ -721,8 +724,7 @@ class NavProgress {
       a.latitude + (b.latitude - a.latitude) * bestT,
       a.longitude + (b.longitude - a.longitude) * bestT,
     );
-    final traveled =
-        route.cumulative[bestIdx] + metersBetween(a, snapped);
+    final traveled = route.cumulative[bestIdx] + metersBetween(a, snapped);
 
     // The step in progress is the last one that started at or before us.
     var stepIndex = 0;
@@ -734,8 +736,10 @@ class NavProgress {
       }
     }
     final nextIndex = math.min(stepIndex + 1, route.steps.length - 1);
-    final maneuverAt = route.steps[nextIndex].startIndex
-        .clamp(0, route.cumulative.length - 1);
+    final maneuverAt = route.steps[nextIndex].startIndex.clamp(
+      0,
+      route.cumulative.length - 1,
+    );
 
     return NavProgress(
       segmentIndex: bestIdx,
@@ -744,8 +748,10 @@ class NavProgress {
       traveledM: traveled,
       remainingM: math.max(route.distanceM - traveled, 0.0),
       stepIndex: stepIndex,
-      distanceToManeuverM:
-          math.max(route.cumulative[maneuverAt] - traveled, 0.0),
+      distanceToManeuverM: math.max(
+        route.cumulative[maneuverAt] - traveled,
+        0.0,
+      ),
       courseBearing: bearingBetween(a, b),
     );
   }
@@ -762,36 +768,17 @@ class NavProgress {
     t = t.clamp(0.0, 1.0);
     final cx = ax + dx * t, cy = ay + dy * t;
     final dist = math.sqrt(
-          math.pow((px - cx) * _mPerDegLat, 2) +
-              math.pow((py - cy) * _mPerDegLat, 2),
-        );
+      math.pow((px - cx) * _mPerDegLat, 2) +
+          math.pow((py - cy) * _mPerDegLat, 2),
+    );
     return (t, dist);
   }
 }
 
-/// What a fix means for rerouting: nothing, a full announced reroute, a
-/// silent recalculation, or a silent recalculation with a one-time "I'll stay
-/// quiet now" notice.
-enum RerouteDecision { none, announce, silent, quietNotice }
+/// Recalculate with calm spoken feedback while honoring the rider's direction.
+enum RerouteDecision { none, announce }
 
-/// Decides when going off-route earns a recalculation and how loudly to say
-/// so.
-///
-/// The naive rule (3 fixes >45 m → beep + "Rerouting.") loops forever when a
-/// rider takes a real-world shortcut the graph doesn't know (the Springer St
-/// tunnel): every recalculation starts at the rider, the rider keeps not
-/// following it, and the app beeps at them the whole way. So:
-///
-///  * A rider heading back TOWARD the route is left alone — they're
-///    rejoining on their own.
-///  * Repeated reroutes in one off-route spell back off exponentially
-///    (15 s → 30 s → 60 s → 120 s between recalculations).
-///  * Only the FIRST reroute of a spell gets the tone + voice; the rest are
-///    silent, with a single spoken notice on the third so the rider knows
-///    the app is deliberately staying quiet, not dead.
-///  * The spell ends after ~[onRouteResetFixes] consecutive on-route fixes
-///    (long enough to mean "genuinely back", not "the new route momentarily
-///    passes through me").
+/// Debounce GPS scatter without progressively abandoning guidance.
 class RerouteGovernor {
   /// Farther than this from the route line counts as off-route.
   static const offRouteM = 45.0;
@@ -818,7 +805,7 @@ class RerouteGovernor {
   int get spellReroutes => _spellReroutes;
 
   /// Seconds to wait after the [n]th reroute of a spell before the next one.
-  static int cooldownSeconds(int n) => math.min(15 * (1 << (n - 1)), 120);
+  static int cooldownSeconds(int n) => 15;
 
   /// Call for every GPS fix with the current distance to the route line.
   RerouteDecision onFix(double offM, DateTime now) {
@@ -849,9 +836,7 @@ class RerouteGovernor {
     _offHits = 0;
     _lastRerouteAt = now;
     _spellReroutes++;
-    if (_spellReroutes == 1) return RerouteDecision.announce;
-    if (_spellReroutes == 3) return RerouteDecision.quietNotice;
-    return RerouteDecision.silent;
+    return RerouteDecision.announce;
   }
 
   /// A new navigation session starts clean.
@@ -911,11 +896,9 @@ const _spokenUnits = <String, String>{'ft': 'feet', 'mi': 'miles'};
 /// ("St Francis Dr") — unless that word is itself a suffix ("E North St Ext").
 String spokenText(String text) {
   final words = text.split(' ');
-  String coreOf(String w) =>
-      RegExp(r'[A-Za-z]+').firstMatch(w)?.group(0) ?? '';
-  String titled(String c) => c.length > 1
-      ? c[0].toUpperCase() + c.substring(1).toLowerCase()
-      : c;
+  String coreOf(String w) => RegExp(r'[A-Za-z]+').firstMatch(w)?.group(0) ?? '';
+  String titled(String c) =>
+      c.length > 1 ? c[0].toUpperCase() + c.substring(1).toLowerCase() : c;
   bool capitalized(String c) =>
       c.isNotEmpty && c[0] == c[0].toUpperCase() && c[0] != c[0].toLowerCase();
 
@@ -929,12 +912,14 @@ String spokenText(String text) {
     }
     final pre = m.group(1)!, core = m.group(2)!, post = m.group(3)!;
     final nextCore = i + 1 < words.length ? coreOf(words[i + 1]) : '';
-    final nextIsName = post.isEmpty &&
+    final nextIsName =
+        post.isEmpty &&
         capitalized(nextCore) &&
         !_spokenSuffixes.containsKey(titled(nextCore)) &&
         !_spokenDirections.containsKey(nextCore.toUpperCase());
     var replaced = core;
-    if (capitalized(core) && _spokenDirections.containsKey(core.toUpperCase())) {
+    if (capitalized(core) &&
+        _spokenDirections.containsKey(core.toUpperCase())) {
       replaced = _spokenDirections[core.toUpperCase()]!;
     } else if (_spokenSuffixes.containsKey(titled(core))) {
       if (titled(core) == 'St' && nextIsName) {
@@ -956,7 +941,9 @@ String spokenText(String text) {
 String formatDistance(double meters) {
   final feet = meters * 3.28084;
   if (feet < 1000) {
-    final rounded = feet < 100 ? (feet / 10).round() * 10 : (feet / 50).round() * 50;
+    final rounded = feet < 100
+        ? (feet / 10).round() * 10
+        : (feet / 50).round() * 50;
     return '$rounded ft';
   }
   final miles = meters / 1609.344;

@@ -16,6 +16,8 @@ import os
 import sys
 import unittest
 
+import pytest
+
 PLUGIN = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     'plugins', 'map-layers.py',
@@ -31,6 +33,12 @@ def _load_module():
 
 
 ml = _load_module()
+
+
+@pytest.fixture(autouse=True)
+def isolated_community(monkeypatch):
+    # Routing unit tests must not read the production community database.
+    monkeypatch.setattr(ml, '_community_rows', lambda: [])
 
 
 def _line(*points) -> list:
@@ -1239,3 +1247,160 @@ class TestNightLighting(RouteGraphTestCase):
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
+
+class TestAccessAndCrossingSafety(RouteGraphTestCase):
+    def test_access_overrides_preserve_mode_permissions(self):
+        self.assertEqual(ml._allowed_modes({'access': 'private'}), set())
+        self.assertEqual(ml._allowed_modes({'access': 'private', 'foot': 'yes'}), {'walk', 'roll'})
+        self.assertEqual(ml._allowed_modes({'barrier': 'gate'}), set())
+        self.assertEqual(ml._allowed_modes({'barrier': 'gate', 'bicycle': 'yes'}), {'bike'})
+        self.assertNotIn('roll', ml._allowed_modes({'highway': 'steps'}))
+        self.assertNotIn('bike', ml._allowed_modes({'bicycle:conditional': 'yes @ (sunrise-sunset)'}))
+
+    def test_private_geometry_cannot_be_reintroduced_by_a_public_copy(self):
+        coords = _line((34.85, -82.40), (34.85, -82.395))
+        public = _line((34.851, -82.40), (34.851, -82.395))
+        graph = self._graph([
+            (coords, 'L', 'Private duplicate', True),
+            (coords, 'private', 'Private original', True, 1.0, True, None, False, frozenset()),
+            (public, 'L', 'Public road', True),
+        ])
+        self.assertFalse(any(e[6] == 'Private duplicate' for es in graph['adj'].values() for e in es))
+        self.assertFalse(ml._access_link_allowed(graph, coords[0], public[0], 'bike'))
+
+    def test_gate_blocks_a_mapped_path(self):
+        coords = _line((34.85, -82.40), (34.85, -82.399))
+        gate = [[-82.3995, 34.85], [-82.39949999, 34.85]]
+        graph = self._graph([
+            (coords, 'path', 'Gated shortcut', True),
+            (gate, 'private', None, True, 1.0, True, None, False, frozenset(), {'barrier': 'gate'}),
+            (_line((34.852, -82.40), (34.852, -82.398)), 'L', 'Public road', True),
+        ])
+        self.assertFalse(any(e[6] == 'Gated shortcut' for es in graph['adj'].values() for e in es))
+
+    def test_uncontrolled_crossing_is_costed_even_between_quiet_edges(self):
+        # Two calm routes between endpoints: one crosses a busy junction.
+        nodes = {'s': (34.85, -82.40), 'x': (34.85, -82.399),
+                 'g': (34.85, -82.398), 'd': (34.851, -82.399)}
+        adj = {n: [] for n in nodes}
+        def edge(a, b, length):
+            adj[a].append((b, length, length, 'L', [], False, 'Quiet street', True))
+        edge('s', 'x', 100); edge('x', 'g', 100)
+        edge('s', 'd', 200); edge('d', 'g', 200)
+        graph = {'nodes': nodes, 'adj': adj, 'crossings': {'x': 'Arterial'}}
+        self.assertEqual([n for n, _ in ml._astar(graph, 's', 'g')], ['s', 'd', 'g'])
+        graph['controlled_crossings'] = {'x'}
+        self.assertEqual([n for n, _ in ml._astar(graph, 's', 'g')], ['s', 'x', 'g'])
+
+    def test_street_fallback_keeps_mode_access_constraints(self):
+        nodes = {'s': (34.85, -82.40), 'g': (34.85, -82.399)}
+        foot_only = ('g', 1, 100, 'path', [], False, 'Foot only', True,
+                     (1.0, True, None, frozenset(('walk', 'roll'))))
+        graph = {'nodes': nodes, 'adj': {'s': [foot_only], 'g': []}}
+        self.assertIsNone(ml._astar(graph, 's', 'g', mode='street', climb_mode='bike'))
+        self.assertIsNotNone(ml._astar(graph, 's', 'g', mode='walk'))
+
+
+def test_community_geometry_validation_and_immutable_rollback():
+    import json
+    good = {'type': 'LineString', 'coordinates': [[-82.4, 34.85], [-82.399, 34.85]]}
+    assert ml._validate_contribution_geometry(json.dumps(good), 34.85, -82.4) == good
+    for bad in ({'type': 'Polygon', 'coordinates': []},
+                {'type': 'Point', 'coordinates': [float('nan'), 34.85]},
+                {'type': 'LineString', 'coordinates': [[-82.4, 34.85]]},
+                {'type': 'Point', 'coordinates': [0, 0]}):
+        with __import__('pytest').raises(ValueError):
+            ml._validate_contribution_geometry(json.dumps(bad), 34.85, -82.4)
+    original = {'id': 'first', 'name': 'Local path', 'reverts': None}
+    rollback = {'id': 'second', 'reverts': 'first', 'comment': 'Gate closed'}
+    assert ml._active_community([original]) == [original]
+    assert ml._active_community([original, rollback]) == []
+    assert original['name'] == 'Local path'
+
+
+def test_transit_access_never_invents_a_straight_line_after_routing_failure():
+    from unittest.mock import patch
+    with patch.object(ml, '_route', side_effect=ValueError('Private gate')):
+        with __import__('pytest').raises(ValueError, match='Private gate'):
+            ml._walk_or_direct(34.85, -82.4, 34.851, -82.399)
+
+
+def _directed_graph(nodes, links):
+    adj = {n: [] for n in nodes}
+    for a, b, length in links:
+        coords = _line(nodes[a], nodes[b])
+        adj[a].append((b, length, length, 'L', coords, False, 'Street', True))
+    return {'nodes': nodes, 'adj': adj}
+
+
+def test_avoid_geometric_uturn_even_when_raw_distance_is_shorter():
+    nodes = {'s': (34.85,-82.402), 'a': (34.85,-82.4),
+             'u': (34.85001,-82.4005), 'r': (34.8495,-82.4), 'g': (34.8495,-82.4005)}
+    graph = _directed_graph(nodes, [('s','a',180),('a','u',45),('u','g',56),('a','r',56),('r','g',55)])
+    assert [n for n, _ in ml._astar(graph,'s','g')] == ['s','a','r','g']
+
+
+def test_unavoidable_reversal_still_returns_connected_route():
+    nodes = {'s': (34.85,-82.402), 'a': (34.85,-82.4), 'g': (34.85001,-82.4005)}
+    graph = _directed_graph(nodes, [('s','a',180),('a','g',45)])
+    assert [n for n, _ in ml._astar(graph,'s','g')] == ['s','a','g']
+
+
+def test_incoming_direction_is_part_of_search_state():
+    # The cheaper arrival at J faces away from G. Keeping only one distance
+    # per node discards the slightly longer arrival that avoids the U-turn.
+    nodes = {'s':(34.848,-82.401), 'a':(34.85,-82.401),
+             'b':(34.85,-82.399), 'j':(34.85,-82.4), 'g':(34.85,-82.4008)}
+    graph = _directed_graph(nodes,[('s','a',300),('a','j',90),('s','b',400),('b','j',90),('j','g',72)])
+    assert [n for n,_ in ml._astar(graph,'s','g')] == ['s','b','j','g']
+
+
+def test_parking_aisles_are_not_routable_but_curated_tunnel_is_retained():
+    case = RouteGraphTestCase()
+    public = frozenset(('bike','walk','roll'))
+    a,b,c = (34.85,-82.4),(34.85,-82.399),(34.851,-82.4)
+    parking = (_line(a,b),'path','Parking aisle',True,1.0,True,None,False,public,
+               {'highway':'service','service':'parking_aisle'})
+    graph = case._graph([parking,(_line(a,c),'L','Public street',True)])
+    assert all(e[6] != 'Parking aisle' for edges in graph['adj'].values() for e in edges)
+    assert not ml._automatic_parking_access((_line(a,b),'L','Tunnel',True,1,True,None,True,public,
+                                            {'highway':'service','tunnel':'yes'}))
+
+
+def test_no_entry_blocks_edges_and_first_last_meter_links():
+    import json
+    nodes = {'s':(34.85,-82.402),'g':(34.85,-82.398),'d':(34.852,-82.4)}
+    graph = _directed_graph(nodes,[('s','g',360),('s','d',280),('d','g',280)])
+    polygon = {'type':'Polygon','coordinates':[[[-82.4005,34.8495],[-82.3995,34.8495],[-82.3995,34.8505],[-82.4005,34.8505],[-82.4005,34.8495]]]}
+    graph['exclusions'] = ml._exclusion_index([{'category':'no-entry','geometry_json':json.dumps(polygon)}])
+    for mode in ('bike','walk','roll','street'):
+        assert [n for n,_ in ml._astar(graph,'s','g',mode=mode)] == ['s','d','g']
+    assert not ml._access_link_allowed(graph,[-82.4,34.85],[-82.398,34.85],'walk')
+    assert not ml._access_link_allowed(graph,[-82.4,34.85],[-82.4,34.85],'walk')
+    graph['exclusions'] = None
+    assert [n for n,_ in ml._astar(graph,'s','g')] == ['s','g']
+
+
+@pytest.mark.parametrize('raw', [float('nan'), None, '', '{broken', 'null'])
+def test_missing_imported_access_metadata_uses_access_aware_cache(monkeypatch, raw):
+    import pandas as pd
+    from types import SimpleNamespace
+    pipe = SimpleNamespace(exists=lambda **kw:True,parameters={},target='paths',
+                           instance_connector=SimpleNamespace(read=lambda *a,**kw:pd.DataFrame([{'tags_json':raw}])))
+    monkeypatch.setattr(ml,'OSM_PATHS_PIPE',pipe)
+    assert ml._osm_path_rows_from_pipe() is None
+
+
+def test_bus_ride_cannot_bypass_community_exclusion(monkeypatch):
+    import json
+    polygon = {'type':'Polygon','coordinates':[[[-82.4005,34.8495],[-82.3995,34.8495],[-82.3995,34.8505],[-82.4005,34.8505],[-82.4005,34.8495]]]}
+    monkeypatch.setattr(ml,'_active_community',lambda:[{'category':'no-entry','geometry_json':json.dumps(polygon)}])
+    def candidate(key,*a,**kw):
+        return {'type':'Feature','geometry':{'type':'LineString','coordinates':
+            [[-82.402,34.85],[-82.398,34.85]] if key.endswith('transit') else [[-82.402,34.85],[-82.4,34.852],[-82.398,34.85]]},
+            'properties':{'plan':key,'distance_m':500,'duration_min':1 if key.endswith('transit') else 10}}
+    monkeypatch.setattr(ml,'_compute_plan',candidate)
+    feature=ml._route_multimodal(34.85,-82.402,34.85,-82.398,{'walk','transit'})
+    assert feature['properties']['plan'] == 'walk'
+    assert feature['properties']['alternatives'] == []
+    assert 'no-entry' in feature['properties']['unavailable'][0]['reason']

@@ -12,16 +12,16 @@ const basemapStyleUrl = 'https://tiles.openfreemap.org/styles/liberty';
 /// blue. Black gives the colored line work maximum contrast.
 const basemapStyleDarkUrl = 'https://tiles.openfreemap.org/styles/dark';
 
-/// Esri World Imagery as an inline MapLibre style: keyless raster satellite.
-/// No glyphs/sprites needed — every symbol layer the app adds uses its own
-/// rendered bitmap icons, never text.
-const satelliteStyleJson = '{'
-    '"version":8,"name":"Satellite",'
-    '"sources":{"esri":{"type":"raster",'
-    '"tiles":["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],'
-    '"tileSize":256,"maxzoom":19,'
-    '"attribution":"Esri, Maxar, Earthstar Geographics, GIS User Community"}},'
-    '"layers":[{"id":"esri","type":"raster","source":"esri"}]}';
+/// Public imagery through the same cache used by trail-counter.
+/// SC RFA imagery overlays the USGS floor; maxzoom enables overzooming.
+const satelliteStyleJson =
+    '{"version":8,"name":"South Carolina imagery","sources":{'
+    '"usgs":{"type":"raster","tiles":["https://api.swamprabbitanalytics.com/tiles/usgs/{z}/{y}/{x}"],'
+    '"tileSize":256,"maxzoom":16,"attribution":"Imagery: SC RFA, USGS"},'
+    '"sc":{"type":"raster","tiles":["https://api.swamprabbitanalytics.com/tiles/sc/{z}/{y}/{x}"],'
+    '"tileSize":256,"maxzoom":20}},'
+    '"layers":[{"id":"usgs","type":"raster","source":"usgs"},'
+    '{"id":"sc","type":"raster","source":"sc"}]}';
 
 /// What the map itself is drawn on. `auto` ("Standard") follows the app
 /// theme; satellite is imagery whatever the theme says. `light`/`dark` are
@@ -250,6 +250,47 @@ class LayerDef {
 // greens drawn under it.
 const layerDefs = <LayerDef>[
   LayerDef(
+    id: 'community',
+    label: 'Community paths & corrections',
+    path: '/map-layers/community.geojson',
+    color: '#7B1FA2',
+    width: 5,
+    modes: {TravelMode.cyclist, TravelMode.pedestrian, TravelMode.transit},
+    icon: Icons.people_outline,
+    live: true,
+  ),
+  LayerDef(
+    id: 'community-areas',
+    label: 'Community no-entry areas',
+    path: '/map-layers/community.geojson',
+    color: '#C62828',
+    isFill: true,
+    opacity: 0.3,
+    modes: {TravelMode.cyclist, TravelMode.pedestrian, TravelMode.transit},
+    icon: Icons.block,
+    live: true,
+    filter: [
+      '==',
+      ['geometry-type'],
+      'Polygon',
+    ],
+  ),
+  LayerDef(
+    id: 'community-points',
+    label: 'Community places & notes',
+    path: '/map-layers/community.geojson',
+    color: '#7B1FA2',
+    isPoint: true,
+    modes: {TravelMode.cyclist, TravelMode.pedestrian, TravelMode.transit},
+    icon: Icons.edit_location_alt,
+    live: true,
+    filter: [
+      '==',
+      ['geometry-type'],
+      'Point',
+    ],
+  ),
+  LayerDef(
     id: 'bike-stress',
     label: 'Bike stress',
     path: '/map-layers/bike-stress.geojson',
@@ -433,11 +474,7 @@ const layerDefs = <LayerDef>[
     color: '#8D6E63',
     isFill: true,
     matchProp: 'kind',
-    matchColors: {
-      'roadway': '#66BB6A',
-      'lot': '#F57C00',
-      'garage': '#FBC02D',
-    },
+    matchColors: {'roadway': '#66BB6A', 'lot': '#F57C00', 'garage': '#FBC02D'},
     modes: {TravelMode.cyclist, TravelMode.pedestrian, TravelMode.transit},
     defaultOn: false,
     icon: Icons.crop_square,
@@ -466,7 +503,15 @@ const layerDefs = <LayerDef>[
     color: '#EF6C00',
     isCircle: true,
     // Non-fatal crashes only; the fatalities layer marks the deaths.
-    filter: ['==', ['coalesce', ['get', 'killed'], 0], 0],
+    filter: [
+      '==',
+      [
+        'coalesce',
+        ['get', 'killed'],
+        0,
+      ],
+      0,
+    ],
     modes: {TravelMode.cyclist, TravelMode.pedestrian, TravelMode.transit},
     defaultOn: false,
     icon: Icons.warning_amber_rounded,
@@ -479,7 +524,15 @@ const layerDefs = <LayerDef>[
     path: '/map-layers/vulnerable-crashes.geojson',
     color: '#B71C1C',
     isPoint: true,
-    filter: ['>', ['coalesce', ['get', 'killed'], 0], 0],
+    filter: [
+      '>',
+      [
+        'coalesce',
+        ['get', 'killed'],
+        0,
+      ],
+      0,
+    ],
     modes: {TravelMode.cyclist, TravelMode.pedestrian, TravelMode.transit},
     defaultOn: false,
     icon: Icons.dangerous,
@@ -520,21 +573,19 @@ Color hexColor(String hex) =>
     Color(int.parse('ff${hex.replaceFirst('#', '')}', radix: 16));
 
 ThemeData buildTheme({bool highContrast = false}) => ThemeData(
-      colorScheme: ColorScheme.fromSeed(seedColor: brandGreen).copyWith(
-        // High contrast: ink-black text and true-white cards instead of the
-        // seeded scheme's soft greys.
-        onSurface: highContrast ? Colors.black : null,
-        onSurfaceVariant: highContrast ? const Color(0xFF1F2937) : null,
-        surface: highContrast ? Colors.white : null,
-        outline: highContrast ? const Color(0xFF4B5563) : null,
-      ),
-      useMaterial3: true,
-      // Floating, so toasts ride above the system navigation bar instead of
-      // hiding behind 3-button nav.
-      snackBarTheme: const SnackBarThemeData(
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
+  colorScheme: ColorScheme.fromSeed(seedColor: brandGreen).copyWith(
+    // High contrast: ink-black text and true-white cards instead of the
+    // seeded scheme's soft greys.
+    onSurface: highContrast ? Colors.black : null,
+    onSurfaceVariant: highContrast ? const Color(0xFF1F2937) : null,
+    surface: highContrast ? Colors.white : null,
+    outline: highContrast ? const Color(0xFF4B5563) : null,
+  ),
+  useMaterial3: true,
+  // Floating, so toasts ride above the system navigation bar instead of
+  // hiding behind 3-button nav.
+  snackBarTheme: const SnackBarThemeData(behavior: SnackBarBehavior.floating),
+);
 
 // Dark theme: the M3 seeded near-black surfaces, as before the navy
 // experiment (v1.13–1.15) — navy swallowed the thematic greens. High
@@ -567,9 +618,7 @@ ThemeData buildDarkTheme({bool highContrast = false}) {
     colorScheme: scheme,
     scaffoldBackgroundColor: scheme.surface,
     useMaterial3: true,
-    snackBarTheme: const SnackBarThemeData(
-      behavior: SnackBarBehavior.floating,
-    ),
+    snackBarTheme: const SnackBarThemeData(behavior: SnackBarBehavior.floating),
   );
 }
 

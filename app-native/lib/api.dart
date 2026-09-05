@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+import 'dart:convert';
 
 import 'package:dio/dio.dart';
 
@@ -16,11 +17,13 @@ class Api {
   String base = bases.first;
   bool _pinned = false;
 
-  final _dio = Dio(BaseOptions(
-    connectTimeout: const Duration(seconds: 10),
-    receiveTimeout: const Duration(seconds: 60),
-    validateStatus: (_) => true,
-  ));
+  final _dio = Dio(
+    BaseOptions(
+      connectTimeout: const Duration(seconds: 10),
+      receiveTimeout: const Duration(seconds: 60),
+      validateStatus: (_) => true,
+    ),
+  );
 
   Future<void> _pin() async {
     if (_pinned) return;
@@ -40,7 +43,9 @@ class Api {
     await _pin();
     final r = await _dio.get('$base$path', queryParameters: query);
     if ((r.statusCode ?? 500) >= 400) {
-      final detail = (r.data is Map) ? (r.data['error'] ?? r.data['detail']) : null;
+      final detail = (r.data is Map)
+          ? (r.data['error'] ?? r.data['detail'])
+          : null;
       throw ApiError(detail?.toString() ?? 'Request failed (${r.statusCode}).');
     }
     return r.data;
@@ -58,7 +63,8 @@ class Api {
 
   Future<Map<String, dynamic>> roadInfo(double lat, double lon) async =>
       Map<String, dynamic>.from(
-          await _get('/map-layers/road-info', {'lat': lat, 'lon': lon}));
+        await _get('/map-layers/road-info', {'lat': lat, 'lon': lon}),
+      );
 
   Future<List<dynamic>> search(String q, {int limit = 8}) async {
     final data = await _get('/map-layers/search', {'q': q, 'limit': limit});
@@ -90,21 +96,22 @@ class Api {
     String? stress,
     int alt = 0,
     bool trail = true,
-  }) async =>
-      Map<String, dynamic>.from(await _get('/map-layers/route', {
-        'from': '$fromLat,$fromLon',
-        'to': '$toLat,$toLon',
-        'modes': (modes.isEmpty ? {'bike'} : modes).join(','),
-        if (roll) 'roll': '1',
-        if (bcycle) 'bcycle': '1',
-        if (ebike) 'ebike': '1',
-        if (alt > 0) 'alt': '$alt',
-        // Default on: the trail bias is the app's personality. Off prices the
-        // Swamp Rabbit Trail like any calm street.
-        if (!trail) 'trail': '0',
-        'stress': ?stress,
-        'plan': ?plan,
-      }));
+  }) async => Map<String, dynamic>.from(
+    await _get('/map-layers/route', {
+      'from': '$fromLat,$fromLon',
+      'to': '$toLat,$toLon',
+      'modes': (modes.isEmpty ? {'bike'} : modes).join(','),
+      if (roll) 'roll': '1',
+      if (bcycle) 'bcycle': '1',
+      if (ebike) 'ebike': '1',
+      if (alt > 0) 'alt': '$alt',
+      // Default on: the trail bias is the app's personality. Off prices the
+      // Swamp Rabbit Trail like any calm street.
+      if (!trail) 'trail': '0',
+      'stress': ?stress,
+      'plan': ?plan,
+    }),
+  );
 
   /// Bike-share system metadata — the links that hand off to the BCycle app.
   Future<Map<String, dynamic>> bcycleSystem() async =>
@@ -130,18 +137,22 @@ class Api {
       'lat': lat,
       'lon': lon,
       if (photoBytes != null)
-        'photo': MultipartFile.fromBytes(photoBytes,
-            filename: photoName ?? 'photo.jpg'),
+        'photo': MultipartFile.fromBytes(
+          photoBytes,
+          filename: photoName ?? 'photo.jpg',
+        ),
     });
     final r = await _dio.post('$base/walk-audit/submit', data: form);
-    if ((r.statusCode ?? 500) >= 400 || r.data is! Map || r.data['ok'] != true) {
+    if ((r.statusCode ?? 500) >= 400 ||
+        r.data is! Map ||
+        r.data['ok'] != true) {
       throw ApiError('Could not submit the report. Please try again.');
     }
     return Map<String, dynamic>.from(r.data);
   }
 
   /// A missing point on the map (bike rack, repair station, fountain…).
-  /// Anonymous; the server moderates before anything is published.
+  /// Published with immutable history and community rollback.
   Future<void> submitPoint({
     required String category,
     required String name,
@@ -150,23 +161,49 @@ class Api {
     required double lon,
     Uint8List? photoBytes,
     String? photoName,
+    Map<String, dynamic>? geometry,
+    String? replaces,
   }) async {
     await _pin();
     final form = FormData.fromMap({
       'category': category,
+      'replaces': ?replaces,
+      if (geometry != null) 'geometry': jsonEncode(geometry),
       'name': name,
       'comment': comment,
       'lat': lat,
       'lon': lon,
       if (photoBytes != null)
-        'photo': MultipartFile.fromBytes(photoBytes,
-            filename: photoName ?? 'photo.jpg'),
+        'photo': MultipartFile.fromBytes(
+          photoBytes,
+          filename: photoName ?? 'photo.jpg',
+        ),
     });
     final r = await _dio.post('$base/map-layers/submit-point', data: form);
-    if ((r.statusCode ?? 500) >= 400 || r.data is! Map || r.data['ok'] != true) {
+    if ((r.statusCode ?? 500) >= 400 ||
+        r.data is! Map ||
+        r.data['ok'] != true) {
       final detail = (r.data is Map) ? r.data['error'] : null;
       throw ApiError(
-          detail?.toString() ?? 'Could not submit the place. Please try again.');
+        detail?.toString() ?? 'Could not submit the place. Please try again.',
+      );
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> communityHistory() async {
+    await _pin();
+    final response = await _dio.get('$base/map-layers/community/history');
+    return List<Map<String, dynamic>>.from(response.data['revisions']);
+  }
+
+  Future<void> rollbackContribution(String id, String reason) async {
+    await _pin();
+    final response = await _dio.post(
+      '$base/map-layers/community/rollback',
+      data: {'id': id, 'reason': reason},
+    );
+    if (response.data is! Map || response.data['ok'] != true) {
+      throw ApiError('Rollback was not saved. Please try again.');
     }
   }
 
@@ -185,11 +222,15 @@ class Api {
       'lon': lon,
       'feedback': feedback,
       if (photoBytes != null)
-        'photo': MultipartFile.fromBytes(photoBytes,
-            filename: photoName ?? 'photo.jpg'),
+        'photo': MultipartFile.fromBytes(
+          photoBytes,
+          filename: photoName ?? 'photo.jpg',
+        ),
     });
     final r = await _dio.post('$base/bike-parking/submit', data: form);
-    if ((r.statusCode ?? 500) >= 400 || r.data is! Map || r.data['ok'] != true) {
+    if ((r.statusCode ?? 500) >= 400 ||
+        r.data is! Map ||
+        r.data['ok'] != true) {
       throw ApiError('Could not submit the report. Please try again.');
     }
   }

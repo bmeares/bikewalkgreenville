@@ -3,6 +3,7 @@ import 'package:url_launcher/url_launcher_string.dart';
 
 import '../theme.dart';
 import 'settings_screen.dart';
+import 'community_screen.dart';
 
 class _Link {
   final String title;
@@ -93,6 +94,14 @@ class ToolsScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(8),
         children: [
+          Card(child: ListTile(
+            leading: const Icon(Icons.people_outline, color: brandGreen, size: 32),
+            title: const Text('Our community map'),
+            subtitle: const Text('Local knowledge, public history, and rollback'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(context,
+              MaterialPageRoute(builder: (_) => const CommunityScreen())),
+          )),
           Card(
             child: ListTile(
               leading: const Icon(Icons.settings, color: brandGreen, size: 32),

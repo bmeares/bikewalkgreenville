@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../app_state.dart';
 import '../theme.dart';
+import '../widgets/safety_notice.dart';
 
 /// User preferences: how routes are chosen, what earns a warning, and how the
 /// rider is drawn on the map. Everything persists via [AppState].
@@ -17,14 +18,18 @@ class SettingsScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.symmetric(vertical: 8),
         children: [
+          const SafetyNotice(),
+          const Divider(),
           _header(context, 'Riding'),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('How much traffic is OK on a bike?',
-                    style: Theme.of(context).textTheme.labelLarge),
+                Text(
+                  'How much traffic is OK on a bike?',
+                  style: Theme.of(context).textTheme.labelLarge,
+                ),
                 const SizedBox(height: 6),
                 SegmentedButton<BikeStress>(
                   segments: [
@@ -57,7 +62,8 @@ class SettingsScreen extends StatelessWidget {
             secondary: const Icon(Icons.accessible_forward),
             title: const Text('I use a wheelchair'),
             subtitle: const Text(
-                'Strongly prefers routes with sidewalks and flags the gaps'),
+              'Strongly prefers routes with sidewalks and flags the gaps',
+            ),
             value: state.roll,
             onChanged: state.setRoll,
           ),
@@ -65,7 +71,8 @@ class SettingsScreen extends StatelessWidget {
             secondary: Icon(Icons.pedal_bike, color: hexColor(bcycleRed)),
             title: const Text('Include BCycle bike share'),
             subtitle: const Text(
-                'Walk to a dock, ride a rental, dock it near the end'),
+              'Walk to a dock, ride a rental, dock it near the end',
+            ),
             value: state.useBcycle,
             onChanged: state.setUseBcycle,
           ),
@@ -73,8 +80,9 @@ class SettingsScreen extends StatelessWidget {
             secondary: const Icon(Icons.cruelty_free),
             title: const Text('Prefer the Prisma Health Swamp Rabbit Trail'),
             subtitle: const Text(
-                'Routes choose the trail even when a street way is shorter — '
-                'applies to Quiet, Balanced and Direct'),
+              'Routes choose the trail even when a street way is shorter — '
+              'applies to Quiet, Balanced and Direct',
+            ),
             value: state.preferTrail,
             onChanged: state.setPreferTrail,
           ),
@@ -84,7 +92,8 @@ class SettingsScreen extends StatelessWidget {
             secondary: const Icon(Icons.contrast),
             title: const Text('High contrast'),
             subtitle: const Text(
-                'Stronger colors and bolder map lines for low vision'),
+              'Stronger colors and bolder map lines for low vision',
+            ),
             value: state.highContrast,
             onChanged: state.setHighContrast,
           ),
@@ -150,15 +159,15 @@ class SettingsScreen extends StatelessWidget {
                   value: PuckStyle.arrow,
                   secondary: const Icon(Icons.navigation),
                   title: const Text('Arrow'),
-                  subtitle:
-                      const Text('A classic navigation arrow marks you'),
+                  subtitle: const Text('A classic navigation arrow marks you'),
                 ),
                 RadioListTile<PuckStyle>(
                   value: PuckStyle.mode,
                   secondary: Icon(state.iconFor(state.mode)),
                   title: const Text('Travel mode icon'),
                   subtitle: const Text(
-                      'A cyclist, walker or wheelchair user — whichever you are'),
+                    'A cyclist, walker or wheelchair user — whichever you are',
+                  ),
                 ),
               ],
             ),
@@ -169,13 +178,13 @@ class SettingsScreen extends StatelessWidget {
   }
 
   Widget _header(BuildContext context, String text) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-        child: Text(
-          text,
-          style: Theme.of(context)
-              .textTheme
-              .titleSmall
-              ?.copyWith(color: brandGreen, fontWeight: FontWeight.w700),
-        ),
-      );
+    padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+    child: Text(
+      text,
+      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+        color: brandGreen,
+        fontWeight: FontWeight.w700,
+      ),
+    ),
+  );
 }
