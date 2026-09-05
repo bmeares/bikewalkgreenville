@@ -35,7 +35,7 @@ from meerschaum.actions import make_action
 from meerschaum.plugins import api_plugin
 from meerschaum.utils.warnings import info, warn
 
-__version__ = '0.19.0'
+__version__ = '0.20.0'
 # Freeze at import: a deployment may replace this file while a refresh runs.
 _ROUTER_CODE_DIGEST = __import__('hashlib').sha256(
     __import__('pathlib').Path(__file__).read_bytes()
@@ -1295,6 +1295,53 @@ _TRAIL_PREF: _contextvars.ContextVar = _contextvars.ContextVar(
     'bwg_trail', default=True,
 )
 
+#: Per-request community preference (`?community=0` turns it off). On, edges
+#: drawn by riders (community shortcuts / route suggestions) price at
+#: COMMUNITY_PREF_FACTOR of their plain 'path' cost; off, they stay ordinary
+#: paths. Same contextvar + plan-cache-key pattern as the trail.
+_COMMUNITY_PREF: _contextvars.ContextVar = _contextvars.ContextVar(
+    'bwg_community', default=True,
+)
+COMMUNITY_PREF_FACTOR = 0.5
+
+#: Open rider reports (walk-audit reports + community access-issue/crossing
+#: points) make the street beside them REPORT_PENALTY_FACTOR x dearer for
+#: every mode, priced through the edge's danger multiplier at graph build.
+#: ponytail: walk-audit reports refresh at the next graph build (community
+#: edits or the 24 h TTL), not instantly — wire a rebuild into walk-audit
+#: submit if that lag ever matters.
+REPORT_PENALTY_FACTOR = 3.0
+REPORT_RADIUS_M = 25.0
+REPORT_CATEGORIES = frozenset((
+    'broken-sidewalk', 'missing-sidewalk', 'obstruction', 'dangerous-crossing',
+    'bike-lane-issue', 'signal-issue', 'access-issue', 'crossing',
+))
+
+
+def _open_report_points() -> list[tuple[float, float]]:
+    """(lat, lon) of every open report the router should steer around."""
+    points = []
+    try:
+        for r in _active_community():
+            if r.get('category') in REPORT_CATEGORIES and r.get('lat') is not None:
+                points.append((float(r['lat']), float(r['lon'])))
+    except Exception as e:
+        warn(f"Community reports unavailable for routing: {e}")
+    try:
+        conn = mrsm.get_connector('sql:bwg')
+        df = conn.read(
+            'SELECT r."lat", r."lon", r."category" FROM "WalkAudit"."reports" r '
+            'WHERE r."id" NOT IN (SELECT "report_id" FROM "WalkAudit"."report_edits" '
+            "WHERE \"action\" = 'dismiss')"
+        )
+        if df is not None:
+            for r in df.to_dict(orient='records'):
+                if r.get('category') in REPORT_CATEGORIES and r.get('lat') is not None:
+                    points.append((float(r['lat']), float(r['lon'])))
+    except Exception as e:
+        warn(f"Walk-audit reports unavailable for routing: {e}")
+    return points
+
 
 def _is_night(now=None) -> bool:
     """Is it dark in Greenville right now (or per the request override)?"""
@@ -2088,6 +2135,19 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
                 allowed = allowed.intersection(blocked_modes[i])
         return allowed
 
+    from shapely.geometry import Point
+    report_shapes = [
+        Point(lon * _COSLAT * M_PER_DEG_LAT, lat * M_PER_DEG_LAT).buffer(REPORT_RADIUS_M)
+        for lat, lon in _open_report_points()
+    ]
+    report_tree = STRtree(report_shapes) if report_shapes else None
+
+    def near_report(coords) -> bool:
+        if report_tree is None:
+            return False
+        line = LineString([(p[0] * _COSLAT * M_PER_DEG_LAT, p[1] * M_PER_DEG_LAT) for p in coords])
+        return any(line.intersects(report_shapes[i]) for i in report_tree.query(line))
+
     bike_factors = MODE_FACTORS['bike']
     for row in source_rows:
         # Rows may be legacy 4-tuples (tests, custom paths) or carry the
@@ -2113,11 +2173,16 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
         if tunnel and len(coords) >= 2:
             tunnel_portals.append((_node(*coords[0], tunnel=True), name))
             tunnel_portals.append((_node(*coords[-1], tunnel=True), name))
+        community = bool(len(row) > 9 and row[9].get('community', False))
         for chunk in _subdivide(coords):
-            chunk_allowed = allowed.intersection(permitted_along(chunk, connector=(len(row) > 9 and row[9].get('community', False))))
+            chunk_allowed = allowed.intersection(permitted_along(chunk, connector=community))
             if not chunk_allowed:
                 continue
-            chunk_extras = (*extras, chunk_allowed, crossing_cost(chunk, tunnel))
+            # extras[0] (danger) also carries the open-report penalty; extras[5]
+            # marks a rider-drawn edge, discounted at query time when the
+            # community preference is on.
+            chunk_danger = extras[0] * (REPORT_PENALTY_FACTOR if near_report(chunk) else 1.0)
+            chunk_extras = (chunk_danger, *extras[1:], chunk_allowed, crossing_cost(chunk, tunnel), community)
             length_m = sum(
                 _equirect_m(a[1], a[0], b[1], b[0])
                 for a, b in zip(chunk, chunk[1:])
@@ -2133,7 +2198,7 @@ def _build_route_graph(debug: bool = False) -> dict[str, Any]:
                     name_nodes.setdefault(base, set()).update((u, v))
             if u == v:
                 continue  # self-loop after snapping
-            weight = length_m * factor * extras[0]
+            weight = length_m * factor * chunk_danger
             # Keep the cheapest edge per node pair (bike lane painted on a
             # stressful street should win).
             existing = next(
@@ -2963,6 +3028,7 @@ def _astar(
     # street — still routable, just no longer magnetic.
     if not _TRAIL_PREF.get() and factors.get('srt'):
         factors = {**factors, 'srt': max(factors['srt'], 1.0)}
+    community_factor = COMMUNITY_PREF_FACTOR if _COMMUNITY_PREF.get() else 1.0
     default_factor = MODE_DEFAULT_FACTOR[mode]
     no_sidewalk_factor = NO_SIDEWALK_FACTOR.get(base, 1.0)
     # Hills are priced for whoever is actually travelling, which is not always
@@ -2975,7 +3041,7 @@ def _astar(
     # Connectors weigh 1.0, so the heuristic can never assume better than that.
     # The climb, danger and night terms only ADD cost (all multipliers >= 1),
     # so the heuristic stays admissible.
-    min_factor = min(list(factors.values()) + [1.0])
+    min_factor = min(list(factors.values()) + [1.0]) * community_factor
 
     def h(cell):
         lat, lon = _pos(cell)
@@ -3000,6 +3066,8 @@ def _astar(
                 weight *= night_factor
             if category == 'bike-lane' and len(extras) > 2 and extras[2]:
                 weight *= _lane_stress_multiplier(factors, extras[2])
+            if community_factor != 1.0 and len(extras) > 5 and extras[5]:
+                weight *= community_factor
         if no_sidewalk_factor != 1.0 and _edge_deficiency(edge, mode) == 'no_sidewalk':
             weight *= no_sidewalk_factor
         return weight
@@ -3390,6 +3458,26 @@ def _warn_ranges(legs: list[dict]) -> list[dict]:
     return ranges
 
 
+def _community_ranges(legs: list[dict]) -> list[dict]:
+    """Coordinate index ranges of rider-drawn stretches, one per contribution
+    name, so the app can badge the route and explain a tapped segment."""
+    ranges: list[dict] = []
+    for leg in legs:
+        if not leg.get('community'):
+            continue
+        name = _titleize(leg.get('name') or '') or 'Community path'
+        start = leg['start_index']
+        end = start + max(len(leg['coords']) - 1, 1)
+        if ranges and ranges[-1]['name'] == name and ranges[-1]['end'] >= start:
+            ranges[-1]['end'] = max(ranges[-1]['end'], end)
+            ranges[-1]['distance_m'] += leg['length_m']
+            continue
+        ranges.append({'name': name, 'start': start, 'end': end, 'distance_m': leg['length_m']})
+    for r in ranges:
+        r['distance_m'] = round(r['distance_m'], 1)
+    return ranges
+
+
 def _route_core(
     from_lat: float,
     from_lon: float,
@@ -3547,6 +3635,7 @@ def _route_core(
                 'start_index': start_index,
                 'warn': leg_warn,
                 'climb_m': rise_m,
+                'community': bool(len(edge) > 8 and len(edge[8]) > 5 and edge[8][5]),
             })
         coordinates.append([to_lon, to_lat])
 
@@ -3578,6 +3667,7 @@ def _route_core(
             'to_snap_m': round(goal_d, 1),
             'warn_ranges': ranges,
             'warnings': _summarize_warnings(ranges),
+            'community_ranges': _community_ranges(legs),
             'steps': _build_steps(
                 legs, coordinates, speed_m_s=speed,
                 climb_sec_per_m=CLIMB_SEC_PER_M.get(_mode_family(warn_mode), 0.0),
@@ -3863,6 +3953,7 @@ def _route_transit(
     coordinates: list = []
     steps: list[dict] = []
     ranges: list[dict] = []
+    community: list[dict] = []
 
     def _append_leg(feature, drop_arrive: bool):
         offset = max(len(coordinates) - 1, 0)
@@ -3886,6 +3977,8 @@ def _route_transit(
                 'start': r['start'] + offset,
                 'end': r['end'] + offset,
             })
+        for r in feature['properties'].get('community_ranges') or []:
+            community.append({**r, 'start': r['start'] + offset, 'end': r['end'] + offset})
 
     _append_leg(walk1, drop_arrive=True)
 
@@ -3992,6 +4085,7 @@ def _route_transit(
             'wait_min': TRANSIT_WAIT_MIN,
             'warn_ranges': ranges,
             'warnings': _summarize_warnings(ranges),
+            'community_ranges': community,
             'steps': steps,
         },
     }
@@ -4102,6 +4196,7 @@ def _route_bikeshare(
     coordinates: list = []
     steps: list[dict] = []
     ranges: list[dict] = []
+    community: list[dict] = []
 
     def _append(feature, drop_arrive: bool, drop_depart: bool = False):
         offset = max(len(coordinates) - 1, 0)
@@ -4124,6 +4219,8 @@ def _route_bikeshare(
             ranges.append({
                 **r, 'start': r['start'] + offset, 'end': r['end'] + offset,
             })
+        for r in feature['properties'].get('community_ranges') or []:
+            community.append({**r, 'start': r['start'] + offset, 'end': r['end'] + offset})
 
     _append(leg1, drop_arrive=True)
     bikes = rent.get('bikes')
@@ -4209,6 +4306,7 @@ def _route_bikeshare(
             'dock_station_uri': dock.get('rental_uri'),
             'warn_ranges': ranges,
             'warnings': _summarize_warnings(ranges),
+            'community_ranges': community,
             'steps': steps,
         },
     }
@@ -4284,7 +4382,7 @@ def _compute_plan(
     if plan.endswith('-transit') or plan == 'bcycle':
         alt = 0
     key = (
-        plan, bike_mode, alt, _is_night(), _TRAIL_PREF.get(),
+        plan, bike_mode, alt, _is_night(), _TRAIL_PREF.get(), _COMMUNITY_PREF.get(),
         _GRAPH.get('epoch', 0), _GRAPH_GENERATION,
         round(from_lat, 5), round(from_lon, 5),
         round(to_lat, 5), round(to_lon, 5),
@@ -4432,6 +4530,9 @@ def _route_multimodal(
             'icon_mode': PLAN_LABELS.get(k, (k.title(), k))[1],
             'distance_m': v['properties']['distance_m'],
             'duration_min': v['properties']['duration_min'],
+            # None (not 0) when the candidate had no climb figure: the app
+            # must not invent a flat alternative.
+            'climb_ft': v['properties'].get('climb_ft'),
             'warnings': v['properties'].get('warnings') or [],
         }
         for k, v in computed.items()
@@ -4479,7 +4580,10 @@ COMMUNITY_PIPE = mrsm.Pipe(
         'columns': {'datetime': 'ts', 'id': 'id'},
         'dtypes': {'id': 'string', 'ts': 'datetime', 'category': 'string',
                    'name': 'string', 'comment': 'string', 'geometry_json': 'string',
-                   'reverts': 'string', 'replaces': 'string', 'photo_filename': 'string', 'lat': 'float', 'lon': 'float'},
+                   'reverts': 'string', 'replaces': 'string', 'photo_filename': 'string', 'lat': 'float', 'lon': 'float',
+                   # 'confirm' rows: `confirms` = the contribution id, `voter` = an
+                   # opaque per-install token (never published; dedupes votes).
+                   'confirms': 'string', 'voter': 'string'},
     },
 )
 _COMMUNITY_CACHE = {'at': 0.0, 'rows': []}
@@ -4491,13 +4595,16 @@ def _community_rows():
         return _COMMUNITY_CACHE['rows']
     if not COMMUNITY_PIPE.exists():
         return []
+    # SELECT *: the confirm columns only exist once the first vote lands.
     df = COMMUNITY_PIPE.instance_connector.read(
-        'SELECT "id", "ts", "category", "name", "comment", "geometry_json", '
-        '"reverts", "replaces", "lat", "lon" FROM "MapLayers"."community_revisions" '
-        'ORDER BY "ts", "id"'
+        'SELECT * FROM "MapLayers"."community_revisions" ORDER BY "ts", "id"'
     )
     if df is None:
         raise RuntimeError('Community history could not be read.')
+    df = df.drop(columns=['photo_filename'], errors='ignore')
+    for col in ('confirms', 'voter'):
+        if col not in df.columns:
+            df[col] = None
     # astype(object) first: on a float/all-null column `where` keeps NaN, which
     # is not JSON — the history endpoint 500'd on an all-null 'replaces'.
     rows = df.astype(object).where(df.notna(), None).to_dict(orient='records')
@@ -4520,17 +4627,28 @@ def _fmt_et(ts) -> str:
 def _active_community(rows=None):
     rows = _community_rows() if rows is None else rows
     reverted = {r['reverts'] for r in rows if r.get('reverts')}
-    versions = [r for r in rows if not r.get('reverts') and r['id'] not in reverted]
+    versions = [r for r in rows if not r.get('reverts') and r['id'] not in reverted
+                and r.get('category') != 'confirm']
     replaced = {r['replaces'] for r in versions if r.get('replaces')}
     return [r for r in versions if r['id'] not in replaced]
 
 
+def _confirmation_counts(rows=None) -> dict[str, int]:
+    """Contribution id -> number of "I rode this, it exists" votes."""
+    from collections import Counter
+    rows = _community_rows() if rows is None else rows
+    return Counter(r['confirms'] for r in rows if r.get('category') == 'confirm' and r.get('confirms'))
+
+
 def _build_community_layer(debug=False):
     import json
+    rows = _community_rows()
+    counts = _confirmation_counts(rows)
     return json.dumps({'type': 'FeatureCollection', 'features': [
         {'type': 'Feature', 'geometry': json.loads(r['geometry_json']),
-         'properties': {k: r.get(k) for k in ('id', 'name', 'comment', 'category')}}
-        for r in _active_community()
+         'properties': {**{k: r.get(k) for k in ('id', 'name', 'comment', 'category')},
+                        'confirmations': counts.get(r['id'], 0)}}
+        for r in _active_community(rows)
     ]})
 
 
@@ -4969,11 +5087,48 @@ def init_app(app):
             {**{k: str(r[k]) if k == 'ts' else r.get(k)
                 for k in ('id', 'ts', 'category', 'name', 'comment', 'reverts', 'replaces')},
              'ts_display': _fmt_et(r['ts']),
-             'type': 'rollback' if r.get('reverts') else 'edit' if r.get('replaces') else 'add',
+             'type': 'confirm' if r.get('category') == 'confirm' else 'rollback' if r.get('reverts') else 'edit' if r.get('replaces') else 'add',
              'geometry': json.loads(r['geometry_json']) if r.get('geometry_json') else None,
              'active': r['id'] in active}
             for r in reversed(rows)
         ]}
+
+    @app.post('/map-layers/community/confirm')
+    async def community_confirm(request: Request):
+        """"I rode this, it exists" — one vote per install per contribution.
+        Public, append-only, shown as a count on the feature."""
+        import json
+        try:
+            body = await request.json()
+            target = str(body.get('id') or '')
+            voter = str(body.get('voter') or '')
+        except Exception:
+            return JSONResponse({'error': 'Expected JSON with id and voter.'}, status_code=400)
+        if not target or not (8 <= len(voter) <= 64) or not voter.isalnum():
+            return JSONResponse({'error': 'Expected JSON with id and voter.'}, status_code=400)
+        client = request.client
+        if _submit_rate_limited(client.host if client else None):
+            return JSONResponse({'error': 'Too many submissions — please try again later.'}, status_code=429)
+        with _COMMUNITY_LOCK:
+            _COMMUNITY_CACHE['at'] = 0.0
+            rows = _community_rows()
+            current = next((r for r in _active_community(rows) if r['id'] == target), None)
+            if current is None:
+                return JSONResponse({'error': 'This contribution is gone or was rolled back.'}, status_code=409)
+            if any(r.get('category') == 'confirm' and r.get('confirms') == target and r.get('voter') == voter for r in rows):
+                return JSONResponse({'error': 'You already confirmed this one.'}, status_code=409)
+            success, _ = COMMUNITY_PIPE.sync([{
+                'id': uuid.uuid4().hex, 'category': 'confirm',
+                'name': current.get('name'), 'comment': None, 'reverts': None, 'replaces': None,
+                'confirms': target, 'voter': voter,
+                'geometry_json': json.dumps({'type': 'Point', 'coordinates': [current['lon'], current['lat']]}),
+                'lat': current['lat'], 'lon': current['lon'],
+            }])
+        if not success:
+            return JSONResponse({'error': 'Vote was not saved. Please retry.'}, status_code=503)
+        _COMMUNITY_CACHE['at'] = 0.0
+        _CACHE.pop('community', None)
+        return {'ok': True, 'confirmations': _confirmation_counts().get(target, 0)}
 
     @app.post('/map-layers/community/rollback')
     async def community_rollback(request: Request):
@@ -5020,6 +5175,7 @@ def init_app(app):
         alt: int = 0,
         night: int = -1,
         trail: int = 1,
+        community: int = 1,
     ):
         """Multi-modal directions.
 
@@ -5043,6 +5199,10 @@ def init_app(app):
 
         `trail=0` turns off the Swamp Rabbit Trail bias: the trail prices
         like a plain calm street instead of the heavily-discounted backbone.
+
+        `community=0` turns off the community-routes bias: rider-drawn
+        shortcuts and route suggestions price like ordinary paths instead of
+        half price.
         """
         # Sync def on purpose: FastAPI runs it in the threadpool, so the
         # multi-second first-call graph build never blocks the event loop.
@@ -5088,6 +5248,7 @@ def init_app(app):
             None if night not in (0, 1) else bool(night)
         )
         trail_token = _TRAIL_PREF.set(bool(trail))
+        community_token = _COMMUNITY_PREF.set(bool(community))
         try:
             feature = _route_multimodal(
                 from_lat, from_lon, to_lat, to_lon,
@@ -5101,6 +5262,7 @@ def init_app(app):
             )
             feature['properties']['night'] = _is_night()
             feature['properties']['trail'] = bool(trail)
+            feature['properties']['community'] = bool(community)
         except ValueError as e:
             return JSONResponse({'error': str(e)}, status_code=422)
         except Exception as e:
@@ -5109,6 +5271,7 @@ def init_app(app):
         finally:
             _NIGHT_OVERRIDE.reset(night_token)
             _TRAIL_PREF.reset(trail_token)
+            _COMMUNITY_PREF.reset(community_token)
         return JSONResponse(feature)
 
     def _srt_gaps(graph, srt_adj):

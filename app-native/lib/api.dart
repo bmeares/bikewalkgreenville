@@ -96,6 +96,7 @@ class Api {
     String? stress,
     int alt = 0,
     bool trail = true,
+    bool community = true,
   }) async => Map<String, dynamic>.from(
     await _get('/map-layers/route', {
       'from': '$fromLat,$fromLon',
@@ -108,6 +109,7 @@ class Api {
       // Default on: the trail bias is the app's personality. Off prices the
       // Swamp Rabbit Trail like any calm street.
       if (!trail) 'trail': '0',
+      if (!community) 'community': '0',
       'stress': ?stress,
       'plan': ?plan,
     }),
@@ -194,6 +196,20 @@ class Api {
     await _pin();
     final response = await _dio.get('$base/map-layers/community/history');
     return List<Map<String, dynamic>>.from(response.data['revisions']);
+  }
+
+  /// "I rode this, it exists." Returns the new confirmation count.
+  Future<int> confirmContribution(String id, String voter) async {
+    await _pin();
+    final response = await _dio.post(
+      '$base/map-layers/community/confirm',
+      data: {'id': id, 'voter': voter},
+    );
+    if (response.data is! Map || response.data['ok'] != true) {
+      final detail = (response.data is Map) ? response.data['error'] : null;
+      throw ApiError(detail?.toString() ?? 'Vote was not saved. Please try again.');
+    }
+    return (response.data['confirmations'] as num?)?.toInt() ?? 0;
   }
 
   Future<void> rollbackContribution(String id, String reason) async {

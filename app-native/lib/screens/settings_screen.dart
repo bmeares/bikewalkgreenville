@@ -86,6 +86,15 @@ class SettingsScreen extends StatelessWidget {
             value: state.preferTrail,
             onChanged: state.setPreferTrail,
           ),
+          SwitchListTile(
+            secondary: const Icon(Icons.groups_outlined),
+            title: const Text('Prefer community routes'),
+            subtitle: const Text(
+              'Favor shortcuts and routes drawn by other riders',
+            ),
+            value: state.preferCommunity,
+            onChanged: state.setPreferCommunity,
+          ),
           const Divider(),
           _header(context, 'Accessibility'),
           SwitchListTile(

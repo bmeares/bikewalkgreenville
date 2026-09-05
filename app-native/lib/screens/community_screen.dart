@@ -27,6 +27,7 @@ const editKinds = <String, ({String label, IconData icon})>{
   'add': (label: 'Added', icon: Icons.add_location_alt_outlined),
   'edit': (label: 'Edited', icon: Icons.edit_outlined),
   'rollback': (label: 'Rolled back', icon: Icons.undo),
+  'confirm': (label: 'Confirmed it exists', icon: Icons.thumb_up_alt_outlined),
   'report': (label: 'Reported issue', icon: Icons.report_problem_outlined),
   'dismiss': (label: 'Dismissed report', icon: Icons.visibility_off_outlined),
 };

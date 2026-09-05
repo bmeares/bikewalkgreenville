@@ -205,6 +205,10 @@ class RouteAlternative {
   final String iconMode;
   final double distanceM;
   final double durationMin;
+
+  /// Feet of climb, or null when the server did not say (older backends,
+  /// plans without elevation) — unknown is never compared as zero.
+  final int? climbFt;
   final List<RouteWarning> warnings;
 
   const RouteAlternative({
@@ -213,8 +217,17 @@ class RouteAlternative {
     required this.iconMode,
     required this.distanceM,
     required this.durationMin,
+    this.climbFt,
     required this.warnings,
   });
+
+  /// Warnings worth a glyph: the same visibility threshold the selected
+  /// route's banner uses, so an alternative is never flagged for a gap the
+  /// selected route would have hidden.
+  List<RouteWarning> visibleWarnings([double minFt = warnMinFt]) => [
+    for (final w in warnings)
+      if (w.kind == 'steep' || w.distanceM * 3.28084 >= minFt) w,
+  ];
 
   factory RouteAlternative.fromJson(Map<String, dynamic> j) => RouteAlternative(
     plan: (j['plan'] ?? '').toString(),
@@ -222,10 +235,36 @@ class RouteAlternative {
     iconMode: (j['icon_mode'] ?? '').toString(),
     distanceM: (j['distance_m'] as num?)?.toDouble() ?? 0.0,
     durationMin: (j['duration_min'] as num?)?.toDouble() ?? 0.0,
+    climbFt: (j['climb_ft'] as num?)?.round(),
     warnings: ((j['warnings'] as List?) ?? [])
         .map((w) => RouteWarning.fromJson(Map<String, dynamic>.from(w)))
         .toList(),
   );
+}
+
+/// How an alternative differs from the selected route, as the short tokens
+/// its chip shows: signed minutes always; distance and climb only when the
+/// difference would change a decision (≥ 0.3 mi, ≥ 50 ft).
+String alternativeDelta(RouteAlternative alt, NavRoute selected) {
+  final tokens = <String>[];
+  final dMin = (alt.durationMin - selected.durationMin).round();
+  tokens.add(dMin == 0 ? 'same time' : '${dMin > 0 ? '+' : '−'}${dMin.abs()} min');
+  final dMi = (alt.distanceM - selected.distanceM) / 1609.344;
+  if (dMi.abs() >= 0.3) {
+    tokens.add('${dMi > 0 ? '+' : '−'}${dMi.abs().toStringAsFixed(1)} mi');
+  }
+  final climb = alt.climbFt;
+  if (climb != null) {
+    final dFt = climb - selected.climbFt;
+    if (dFt.abs() >= 50) tokens.add('${dFt > 0 ? '+' : '−'}${dFt.abs()} ft');
+  }
+  return tokens.join(' · ');
+}
+
+/// Warning kinds the alternative shows that the selected route does not.
+List<RouteWarning> extraWarnings(RouteAlternative alt, NavRoute selected) {
+  final have = {for (final w in selected.visibleWarnings()) w.kind};
+  return [for (final w in alt.visibleWarnings()) if (!have.contains(w.kind)) w];
 }
 
 /// A computed route: the line, its steps and the cumulative distance table
@@ -262,6 +301,9 @@ class NavRoute {
   /// totals the banner reads from.
   final List<WarnRange> warnRanges;
   final List<RouteWarning> warnings;
+
+  /// Rider-drawn stretches this route uses (kind = the contribution's name).
+  final List<WarnRange> communityRanges;
 
   /// Set when the mode's own network couldn't get there and the route fell back
   /// to plain streets; [fallbackNote] is the sentence to show.
@@ -300,6 +342,7 @@ class NavRoute {
     required this.planLabel,
     required this.warnRanges,
     required this.warnings,
+    this.communityRanges = const [],
     required this.fallback,
     required this.fallbackNote,
     required this.alternatives,
@@ -357,6 +400,9 @@ class NavRoute {
           .toList(),
       warnings: ((props['warnings'] as List?) ?? [])
           .map((w) => RouteWarning.fromJson(Map<String, dynamic>.from(w)))
+          .toList(),
+      communityRanges: ((props['community_ranges'] as List?) ?? [])
+          .map((r) => WarnRange.fromJson({...Map<String, dynamic>.from(r), 'kind': r['name']}))
           .toList(),
       fallback: props['fallback']?.toString(),
       fallbackNote: props['fallback_note']?.toString(),
@@ -610,8 +656,18 @@ class NavRoute {
             atM >= cumulative[r.start] - slackM &&
             atM <= cumulative[r.end] + slackM)
           '${warnStepSentence(r.kind)} — drawn dashed red.',
+      for (final r in communityRanges)
+        if (r.start >= 0 &&
+            r.end < cumulative.length &&
+            atM >= cumulative[r.start] - slackM &&
+            atM <= cumulative[r.end] + slackM)
+          'Community route: ${r.kind} — drawn by a rider, not surveyed by BWG.',
     ];
   }
+
+  /// Distinct names of the community contributions this route rides.
+  List<String> get communityNames =>
+      {for (final r in communityRanges) r.kind}.toList();
 
   /// Infrastructure warnings worth surfacing: gaps shorter than [minFt] feet
   /// read as noise — "about 0 ft with no bike lane" helps nobody, and in

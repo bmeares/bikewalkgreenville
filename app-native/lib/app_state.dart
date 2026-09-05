@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' show Random;
 
 import 'package:flutter/foundation.dart' show setEquals;
 import 'package:flutter/material.dart';
@@ -41,10 +42,14 @@ class AppState extends ChangeNotifier {
   static const _kEbike = 'ebike';
   static const _kStress = 'stress';
   static const _kRecents = 'recent_searches';
+  static const _kSaved = 'saved_places';
   static const _kPuck = 'puck_style';
   static const _kTheme = 'theme_mode';
   static const _kMapBase = 'map_base';
   static const _kPreferTrail = 'prefer_trail';
+  static const _kPreferCommunity = 'prefer_community';
+  static const _kVoter = 'voter_id';
+  static const _kConfirmed = 'confirmed_ids';
   static const _kHighContrast = 'high_contrast';
   static const _kLargeUi = 'large_ui';
   static const _kAdvocacy = 'advocacy_layers';
@@ -61,6 +66,10 @@ class AppState extends ChangeNotifier {
   ThemeMode _themeMode = ThemeMode.light;
   MapBase _mapBase = MapBase.auto;
   bool _preferTrail = true;
+  bool _preferCommunity = true;
+  // Opaque per-install token: dedupes community confirmations server-side.
+  String _voter = '';
+  Set<String> _confirmed = {};
   bool _highContrast = false;
   bool _largeUi = false;
 
@@ -89,6 +98,14 @@ class AppState extends ChangeNotifier {
   /// Bias routes onto the Prisma Health Swamp Rabbit Trail (the default).
   /// Off sends `trail=0` and the trail prices like any calm street.
   bool get preferTrail => _preferTrail;
+  bool get preferCommunity => _preferCommunity;
+  String get voter => _voter;
+  bool hasConfirmed(String id) => _confirmed.contains(id);
+  void markConfirmed(String id) {
+    _confirmed.add(id);
+    notifyListeners();
+    _save();
+  }
 
   /// Low-vision support: stronger text/surface contrast and bolder map lines.
   bool get highContrast => _highContrast;
@@ -207,11 +224,23 @@ class AppState extends ChangeNotifier {
         _mapBase = MapBase.auto;
       }
       _preferTrail = prefs.getBool(_kPreferTrail) ?? true;
+      _preferCommunity = prefs.getBool(_kPreferCommunity) ?? true;
+      _voter = prefs.getString(_kVoter) ?? '';
+      if (_voter.isEmpty) {
+        final rng = Random.secure();
+        _voter = List.generate(32, (_) => rng.nextInt(16).toRadixString(16)).join();
+        await prefs.setString(_kVoter, _voter);
+      }
+      _confirmed = (prefs.getStringList(_kConfirmed) ?? const []).toSet();
       _highContrast = prefs.getBool(_kHighContrast) ?? false;
       _largeUi = prefs.getBool(_kLargeUi) ?? false;
       _advocacy = (prefs.getStringList(_kAdvocacy) ?? const []).toSet();
       _recents = [
         for (final s in prefs.getStringList(_kRecents) ?? <String>[])
+          Map<String, dynamic>.from(jsonDecode(s) as Map),
+      ];
+      _saved = [
+        for (final s in prefs.getStringList(_kSaved) ?? <String>[])
           Map<String, dynamic>.from(jsonDecode(s) as Map),
       ];
       notifyListeners();
@@ -232,6 +261,8 @@ class AppState extends ChangeNotifier {
       await prefs.setString(_kTheme, _themeMode.name);
       await prefs.setString(_kMapBase, _mapBase.name);
       await prefs.setBool(_kPreferTrail, _preferTrail);
+      await prefs.setBool(_kPreferCommunity, _preferCommunity);
+      await prefs.setStringList(_kConfirmed, _confirmed.toList());
       await prefs.setBool(_kHighContrast, _highContrast);
       await prefs.setBool(_kLargeUi, _largeUi);
       await prefs.setStringList(_kAdvocacy, _advocacy.toList());
@@ -354,6 +385,13 @@ class AppState extends ChangeNotifier {
     _save();
   }
 
+  void setPreferCommunity(bool value) {
+    if (value == _preferCommunity) return;
+    _preferCommunity = value;
+    notifyListeners();
+    _save();
+  }
+
   void setHighContrast(bool value) {
     if (value == _highContrast) return;
     _highContrast = value;
@@ -408,6 +446,78 @@ class AppState extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setStringList(
           _kRecents, _recents.map(jsonEncode).toList());
+    } catch (_) {}
+  }
+
+  /// Saved places: same row shape as recents (`label`, `sublabel`, `lat`,
+  /// `lon`), kept until removed. A place is identified by its coordinates so a
+  /// rename never duplicates it.
+  List<Map<String, dynamic>> _saved = [];
+
+  List<Map<String, dynamic>> get savedPlaces => _saved;
+
+  static String _placeKey(Map<String, dynamic> p) =>
+      '${(p['lat'] as num).toStringAsFixed(5)},${(p['lon'] as num).toStringAsFixed(5)}';
+
+  bool isSaved(Map<String, dynamic> place) =>
+      place['lat'] is num &&
+      place['lon'] is num &&
+      _saved.any((p) => _placeKey(p) == _placeKey(place));
+
+  /// Save, or when already saved, remove. Returns the removed row so the
+  /// caller can offer undo; null when the place was saved.
+  Map<String, dynamic>? toggleSaved(Map<String, dynamic> place) {
+    if (place['lat'] is! num || place['lon'] is! num) return null;
+    if (isSaved(place)) return removeSaved(place);
+    _saved = [
+      {
+        'label': place['label']?.toString() ?? 'Saved place',
+        'sublabel': place['sublabel']?.toString() ?? '',
+        'lat': (place['lat'] as num).toDouble(),
+        'lon': (place['lon'] as num).toDouble(),
+      },
+      ..._saved,
+    ];
+    notifyListeners();
+    _saveSaved();
+    return null;
+  }
+
+  Map<String, dynamic>? removeSaved(Map<String, dynamic> place) {
+    final index = _saved.indexWhere((p) => _placeKey(p) == _placeKey(place));
+    if (index < 0) return null;
+    final removed = _saved[index];
+    _saved = [..._saved]..removeAt(index);
+    notifyListeners();
+    _saveSaved();
+    return {...removed, '_index': index};
+  }
+
+  /// Undo for [removeSaved]: puts the row back where it was.
+  void restoreSaved(Map<String, dynamic> removed) {
+    final row = Map<String, dynamic>.from(removed)..remove('_index');
+    if (isSaved(row)) return;
+    final index = ((removed['_index'] as int?) ?? 0).clamp(0, _saved.length);
+    _saved = [..._saved]..insert(index, row);
+    notifyListeners();
+    _saveSaved();
+  }
+
+  void renameSaved(Map<String, dynamic> place, String name) {
+    final label = name.trim();
+    if (label.isEmpty) return;
+    _saved = [
+      for (final p in _saved)
+        _placeKey(p) == _placeKey(place) ? {...p, 'label': label} : p,
+    ];
+    notifyListeners();
+    _saveSaved();
+  }
+
+  Future<void> _saveSaved() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(_kSaved, _saved.map(jsonEncode).toList());
     } catch (_) {}
   }
 }

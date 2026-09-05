@@ -17,6 +17,83 @@ anything.
 - **walk-audit config** moved off env vars onto Meerschaum config (`plugins:walk-audit:{smtp,notify}`). Prod values live in the container volume at `/meerschaum/config/plugins.json` (chmod 600); the `/meerschaum/.env` hack has been **deleted**.
 - `WalkAudit.reports` is empty (the deploy-check row was removed).
 
+### 2026-09-05 later (omega) — app v1.21.0+62, map-layers v0.20.0 "Prefer community routes"
+
+**DEPLOYED 2026-09-05 12:40 ET**: map-layers v0.20.0 + web bundle 1.21.0+62 live on
+bwg.mrsm.io (`/bwg-app/version.json` = 62; `/map-layers/route` echoes `community`
+and `alternatives[*].climb_ft`; `/community/confirm` answers 400 on an empty body).
+Container backup of the previous plugin + web bundle:
+`/meerschaum/bwg-release-backups/61/`. Play: versionCode 62 on **internal**
+(completed) and **beta** (in review). TestFlight: build 62 uploaded from
+`mac:~/projects/bwg-release-62` (Delivery 530df3ff…); notes/group/submit run
+once processing finished. Play release notes must stay ≤ 500 chars
+(`app-native/play-release-notes.json`, 461). Source NOT yet committed at deploy
+time — commit `main` next.
+
+- Mirror of the trail preference for rider-drawn edges. Community
+  `shortcut`/`route-suggestion` rows already entered the graph as `path`;
+  they now carry `extras[5] = True` (chunk_extras grew a 6th element) and
+  `_astar.edge_weight` multiplies them by `COMMUNITY_PREF_FACTOR` (0.5) when
+  `_COMMUNITY_PREF` (contextvar, default on, `?community=0`) is set. Joins the
+  plan cache key and `min_factor` (heuristic stays admissible); response echoes
+  `community`. Test: `TestCommunityPreferenceToggle` (3x dogleg: 0.4 loses,
+  0.2 wins).
+- App: `preferCommunity` setting (`prefer_community`, default on) in Settings
+  and the planner's "More" (per-trip override `_tripCommunity`, dies with the
+  trip like `_tripTrail`); `Api.route(community:)` sends `community=0` when off.
+- **Community badge on routes**: legs carry `community`; `_community_ranges(legs)`
+  → `properties.community_ranges` (also merged with offsets in the transit and
+  bcycle composites). App: `NavRoute.communityRanges`/`communityNames`; the
+  hazards ("What to expect") sheet lists the rider-drawn routes used and a
+  tapped stretch says "Community route: <name>". Test `TestCommunityRangesOnRoute`.
+- **Confirm-it-exists votes**: `POST /map-layers/community/confirm` `{id, voter}`;
+  `confirm` rows live in `community_revisions` (`confirms`, `voter` columns —
+  `_community_rows` now `SELECT *` and backfills them, `_active_community`
+  skips them). Layer property `confirmations`; history `type: 'confirm'`.
+  App: `AppState.voter` (random 32-hex, `voter_id`), `confirmed_ids`; feature
+  sheet button "I rode this — it exists (N)". Test in `test_community_api.py`.
+- **Route around open reports**: `_open_report_points()` (community
+  access-issue/crossing points + walk-audit reports minus dismissals, direct
+  SQL on `WalkAudit.reports`/`report_edits`) → 25 m buffers; chunks touching
+  one get danger ×3 at graph build (`REPORT_PENALTY_FACTOR`). Walk-audit
+  reports only take effect at the next graph build (community edit or 24 h
+  TTL). Test `TestOpenReportsRepelRoutes`; `RouteGraphTestCase._graph`
+  stubs `_open_report_points` (set `self.report_points`).
+- **Share trip link**: route card share icon copies
+  `https://bwg.mrsm.io/bwg-app/?from=lat,lon&to=lat,lon&stress=…` to the
+  clipboard (no share_plus dep — add it if a native share sheet is wanted);
+  the web build reads `Uri.base` query in `_openSharedTrip()` after the first
+  style load and plans the trip. Android/iOS app links are NOT registered.
+- **UX plan slices (Codex × Fable, `docs/planning/FLUTTER_UX_PLAN.md`,
+  mailbox `docs/planning/ux-review/`)**: (1) **Saved places** —
+  `AppState.savedPlaces` (`saved_places` prefs key, identity = 5 dp coords),
+  bookmark toggle on the place card, saved rows above recents in the
+  focused-search dropdown (bounded to 35 % height, scrollable, tap routes
+  immediately, ⋮ Rename/Remove with snackbar Undo); `test/saved_places_test.dart`.
+  (2) **Route choices at a glance** — `alternatives[*].climb_ft` from the
+  backend; `alternativeDelta`/`extraWarnings` in `nav.dart`; alternative chips
+  show `name · +4 min · −80 ft` deltas (unknown climb is null, never 0) and a
+  gap glyph only for warning kinds the selected route lacks; chip is
+  `widgets/alternative_chip.dart` (one semantic node with label + tap action,
+  `test/alternative_chip_test.dart`). (3) Recording recovery (Codex) —
+  segmented `points` + `segment_starts` + `active_ms`, `ride_in_progress`
+  checkpoint (30 s / 50 pts, injected timer), pause/resume with lifecycle-only
+  auto-resume, isolated bad fixes ignored, >15 s gap splits, delete undo,
+  `widgets/recording_sheet.dart`. All three cross-reviewed via
+  `docs/planning/ux-review/`; NO device/screen-reader validation yet.
+- **Ride recording** (`lib/rides.dart`, `screens/rides_screen.dart`):
+  `RideRecorder` (provider in main.dart) records a 1 Hz GPS trace while the
+  app is on screen (wakelock on; foreground only — the manifest strips
+  FOREGROUND_SERVICE on purpose), keeps ≥3 m steps, drops fixes with
+  accuracy >30 m, saves to SharedPreferences `rides`. Rail ● button starts/
+  stops; stopping opens the ride on the map (purple `ride` source/layer) with
+  a trim sheet: RangeSlider start/end, "Keep what is on screen" (longest run
+  inside the viewport), "Share this stretch as a community route" →
+  `fitToVertexLimit` (RDP to ≤200 vertices) → `GeometryEditorScreen`
+  (category route-suggestion) → publishes via the existing submit endpoint.
+  "My rides" lives in the long-press menu and Dashboards & Tools (Tools pops
+  the picked ride back to the map). Test `test/rides_test.dart`.
+
 ### 2026-09-05 (omega) — app v1.20.1+61, map-layers + walk-audit NaN fix (DEPLOYED, Play beta + TestFlight)
 
 - **`/map-layers/community/history` 500'd in prod**, so the Community edits page

@@ -43,7 +43,11 @@ class DirectionsResult {
   /// stays in Settings.
   final bool? trail;
 
-  const DirectionsResult({this.from, this.to, this.pickField, this.trail});
+  /// Community-routes preference for THIS trip (null = untouched).
+  final bool? community;
+
+  const DirectionsResult(
+      {this.from, this.to, this.pickField, this.trail, this.community});
 
   bool get isPick => pickField != null;
 }
@@ -62,11 +66,15 @@ class DirectionsSheet extends StatefulWidget {
   /// is active, else the Settings default).
   final bool trail;
 
+  /// Community-routes preference this trip starts from.
+  final bool community;
+
   const DirectionsSheet({
     super.key,
     required this.from,
     required this.to,
     this.trail = true,
+    this.community = true,
   });
 
   @override
@@ -77,6 +85,7 @@ class _DirectionsSheetState extends State<DirectionsSheet> {
   late TripEndpoint _from = widget.from;
   late TripEndpoint _to = widget.to;
   late bool _trail = widget.trail;
+  late bool _community = widget.community;
 
   final _fromCtl = TextEditingController();
   final _toCtl = TextEditingController();
@@ -304,6 +313,16 @@ class _DirectionsSheetState extends State<DirectionsSheet> {
                   value: _trail,
                   onChanged: (v) => setState(() => _trail = v),
                 ),
+                SwitchListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  secondary: const Icon(Icons.groups_outlined),
+                  title: const Text('Prefer community routes'),
+                  subtitle: const Text(
+                      'Favor shortcuts and routes drawn by other riders'),
+                  value: _community,
+                  onChanged: (v) => setState(() => _community = v),
+                ),
                 if (state.showsBikeOptions) ...[
                   SwitchListTile(
                     dense: true,
@@ -352,7 +371,10 @@ class _DirectionsSheetState extends State<DirectionsSheet> {
                         ? () => Navigator.pop(
                               context,
                               DirectionsResult(
-                                  from: _from, to: _to, trail: _trail),
+                                  from: _from,
+                                  to: _to,
+                                  trail: _trail,
+                                  community: _community),
                             )
                         : null,
                   ),
@@ -410,7 +432,11 @@ class _DirectionsSheetState extends State<DirectionsSheet> {
               onPressed: () => Navigator.pop(
                 context,
                 DirectionsResult(
-                    from: _from, to: _to, pickField: field, trail: _trail),
+                    from: _from,
+                    to: _to,
+                    pickField: field,
+                    trail: _trail,
+                    community: _community),
               ),
             ),
           ],

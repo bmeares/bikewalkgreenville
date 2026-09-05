@@ -20,6 +20,8 @@ import '../nav.dart';
 import '../nav_notifier.dart';
 import '../theme.dart';
 import '../widgets/elevation_profile.dart';
+import '../widgets/alternative_chip.dart';
+import '../widgets/recording_sheet.dart';
 import 'add_point_sheet.dart';
 import 'directions_sheet.dart';
 import 'report_sheet.dart';
@@ -28,6 +30,8 @@ import 'geometry_editor_screen.dart';
 import 'package:pointer_interceptor/pointer_interceptor.dart';
 import 'package:flutter/foundation.dart';
 import 'tools_screen.dart';
+import 'rides_screen.dart';
+import '../rides.dart';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -72,6 +76,7 @@ class _MapScreenState extends State<MapScreen> {
   /// Trail preference for the CURRENT trip only (the preview chip and the
   /// planner sheet set it); null = follow Settings. Cleared with the route.
   bool? _tripTrail;
+  bool? _tripCommunity;
 
   /// `from` / `to` while the user is picking that end by tapping the map.
   String? _pickField;
@@ -86,6 +91,15 @@ class _MapScreenState extends State<MapScreen> {
   /// race (rapid pill cycling re-plans in bursts) are discarded on arrival.
   int _planSeq = 0;
   NavRoute? _navRoute;
+
+  /// Ride shown on the map for trimming, and the kept [start, end] indices.
+  Ride? _shownRide;
+  int _rideStart = 0, _rideEnd = 0;
+  bool _sharedTripHandled = false;
+  VoidCallback? _recorderListener;
+  bool _recoveryOffered = false;
+  int? _lastRideRevision;
+  bool? _recordingAwake;
   LatLng? _destination;
   bool _navigating = false;
   NavProgress? _progress;
@@ -155,6 +169,9 @@ class _MapScreenState extends State<MapScreen> {
     _searchCtl.dispose();
     _navWatchdog?.cancel();
     _posSub?.cancel();
+    if (_recorderListener != null) {
+      context.read<RideRecorder>().removeListener(_recorderListener!);
+    }
     _tts?.stop();
     _navNotifier.cancel();
     WakelockPlus.disable();
@@ -322,6 +339,22 @@ class _MapScreenState extends State<MapScreen> {
     );
 
     await map.addSource('pin', GeojsonSourceProperties(data: _emptyCollection));
+    await map.addSource(
+      'ride',
+      GeojsonSourceProperties(data: _emptyCollection),
+    );
+    await map.addLineLayer(
+      'ride',
+      'lyr-ride',
+      const LineLayerProperties(
+        lineColor: '#7B1FA2',
+        lineWidth: 5.0,
+        lineOpacity: 0.85,
+        lineCap: 'round',
+        lineJoin: 'round',
+      ),
+      enableInteraction: false,
+    );
     await map.addCircleLayer(
       'pin',
       'lyr-pin',
@@ -381,6 +414,332 @@ class _MapScreenState extends State<MapScreen> {
       final here = _lastNavPos;
       if (here != null) await _updatePuck(here, _lastNavBearing ?? 0);
     }
+    await _drawRide();
+    if (!mounted) return;
+    if (_recorderListener == null) {
+      _recorderListener = () {
+        final recorder = context.read<RideRecorder>();
+        if (_lastRideRevision != recorder.traceRevision) {
+          _lastRideRevision = recorder.traceRevision;
+          _drawRide();
+        }
+        _offerRideRecovery();
+        final awake = _navigating || (recorder.recording && !recorder.paused);
+        if (_recordingAwake != awake) {
+          _recordingAwake = awake;
+          if (awake) {
+            WakelockPlus.enable();
+          } else {
+            WakelockPlus.disable();
+          }
+        }
+      };
+      context.read<RideRecorder>().addListener(_recorderListener!);
+    }
+    _offerRideRecovery();
+    await _openSharedTrip();
+  }
+
+  // ---------------------------------------------------------------- rides
+
+  /// The live trace while recording, else the shown ride's kept stretch.
+  Future<void> _drawRide() async {
+    final map = _map;
+    if (map == null || !mounted || !_styleReady) return;
+    final recorder = context.read<RideRecorder>();
+    final geometry = recorder.recording
+        ? recorder.liveRide.lineString()
+        : _shownRide?.lineString(_rideStart, _rideEnd);
+    if (geometry == null) {
+      await map.setGeoJsonSource('ride', _emptyCollection);
+      return;
+    }
+    await map.setGeoJsonSource('ride', {
+      'type': 'FeatureCollection',
+      'features': [
+        {
+          'type': 'Feature',
+          'geometry': geometry,
+          'properties': <String, dynamic>{},
+        },
+      ],
+    });
+  }
+
+  Future<void> _toggleRecording() async {
+    final recorder = context.read<RideRecorder>();
+    if (recorder.busy) return;
+    if (!recorder.loaded && !await recorder.retry()) {
+      if (mounted) toast(context, recorder.error ?? 'Could not load rides. Retry.');
+      return;
+    }
+    if (!recorder.recording) {
+      final permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        if (mounted) toast(context, 'Location permission is needed to record.');
+        return;
+      }
+      if (!mounted) return;
+      setState(() => _shownRide = null);
+      if (await recorder.start()) await WakelockPlus.enable();
+      if (!mounted) return;
+      if (recorder.error != null) toast(context, recorder.error!);
+      if (recorder.recording) _openRecordingSheet();
+      return;
+    }
+    _openRecordingSheet();
+  }
+
+  void _offerRideRecovery() {
+    if (!mounted || _recoveryOffered || !context.read<RideRecorder>().recovered) return;
+    _recoveryOffered = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _openRecordingSheet();
+    });
+  }
+
+  void _openRecordingSheet() {
+    showAppSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => RecordingSheet(
+        onResume: () async {
+          final permission = await Geolocator.requestPermission();
+          if (!mounted) return;
+          if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
+            toast(context, 'Location permission is needed to record.');
+            return;
+          }
+          if (await context.read<RideRecorder>().resume()) await WakelockPlus.enable();
+        },
+        onPause: () async {
+          await context.read<RideRecorder>().pause();
+          if (!_navigating) await WakelockPlus.disable();
+        },
+        onSaved: (ride) async {
+          Navigator.pop(ctx);
+          if (!_navigating) await WakelockPlus.disable();
+          if (mounted) await _showRide(ride);
+        },
+        onDiscarded: () async {
+          Navigator.pop(ctx);
+          if (!_navigating) await WakelockPlus.disable();
+        },
+      ),
+    );
+  }
+
+  /// Draw a saved ride and open the trim sheet.
+  Future<void> _showRide(Ride ride) async {
+    setState(() {
+      _shownRide = ride;
+      _rideStart = 0;
+      _rideEnd = ride.points.length - 1;
+    });
+    await _drawRide();
+    await _fitGeometry(ride.lineString());
+    if (mounted) _openRideSheet();
+  }
+
+  /// Longest run of the ride inside the current viewport — "only include the
+  /// part I can see" is how you carve one stretch out of a long ride.
+  Future<void> _trimRideToView() async {
+    final ride = _shownRide;
+    final map = _map;
+    if (ride == null || map == null) return;
+    final bounds = await map.getVisibleRegion();
+    bool inside(LatLng p) =>
+        p.latitude >= bounds.southwest.latitude &&
+        p.latitude <= bounds.northeast.latitude &&
+        p.longitude >= bounds.southwest.longitude &&
+        p.longitude <= bounds.northeast.longitude;
+    final kept = ride.longestStretchWhere(inside);
+    if (kept == null) {
+      if (mounted) toast(context, 'None of this ride is on screen.');
+      return;
+    }
+    setState(() {
+      _rideStart = kept.start;
+      _rideEnd = kept.end;
+    });
+    await _drawRide();
+  }
+
+  Future<void> _clearRide() async {
+    setState(() => _shownRide = null);
+    await _drawRide();
+  }
+
+  void _openRideSheet() {
+    final ride = _shownRide;
+    if (ride == null) return;
+    showAppSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) {
+          final kept = ride.points.sublist(_rideStart, _rideEnd + 1);
+          final segments = ride.segments(_rideStart, _rideEnd);
+          final canShare = segments.length == 1 && kept.length >= 2;
+          return SafeArea(
+            child: SingleChildScrollView(child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: const Icon(
+                    Icons.route_outlined,
+                    color: Color(0xFF7B1FA2),
+                  ),
+                  title: Text(ride.name),
+                  subtitle: Text(
+                    '${formatDistance(segments.fold(0.0, (sum, s) => sum + pathLengthM(s)))} / '
+                    '${formatDistance(ride.distanceM)}',
+                  ),
+                ),
+                if (ride.segmentRanges.length > 1)
+                  Wrap(spacing: 8, children: [
+                    for (final (i, range) in ride.segmentRanges.indexed)
+                      if (range.end > range.start)
+                        ChoiceChip(
+                          label: Text('Segment ${i + 1}'),
+                          selected: _rideStart == range.start && _rideEnd == range.end,
+                          onSelected: (_) {
+                            setState(() {
+                              _rideStart = range.start;
+                              _rideEnd = range.end;
+                            });
+                            setSheet(() {});
+                            _drawRide();
+                          },
+                        ),
+                  ]),
+                RangeSlider(
+                  min: 0,
+                  max: (ride.points.length - 1).toDouble(),
+                  divisions: ride.points.length - 1,
+                  values: RangeValues(
+                    _rideStart.toDouble(),
+                    _rideEnd.toDouble(),
+                  ),
+                  onChanged: (v) {
+                    final start = v.start.round(), end = v.end.round();
+                    if (end - start < 1) return;
+                    setState(() {
+                      _rideStart = start;
+                      _rideEnd = end;
+                    });
+                    setSheet(() {});
+                    _drawRide();
+                  },
+                ),
+                Wrap(
+                  spacing: 8,
+                  alignment: WrapAlignment.center,
+                  children: [
+                    OutlinedButton.icon(
+                      icon: const Icon(Icons.crop_free),
+                      label: const Text('Keep what is on screen'),
+                      onPressed: () async {
+                        await _trimRideToView();
+                        setSheet(() {});
+                      },
+                    ),
+                    OutlinedButton.icon(
+                      icon: const Icon(Icons.undo),
+                      label: const Text('Whole ride'),
+                      onPressed: () {
+                        setState(() {
+                          _rideStart = 0;
+                          _rideEnd = ride.points.length - 1;
+                        });
+                        setSheet(() {});
+                        _drawRide();
+                      },
+                    ),
+                  ],
+                ),
+                ListTile(
+                  leading: const Icon(Icons.groups_outlined, color: brandGreen),
+                  title: const Text('Share this stretch as a community route'),
+                  subtitle: Text(canShare
+                    ? 'Review in the editor before publishing publicly'
+                    : 'Select one segment to share'),
+                  enabled: canShare,
+                  onTap: !canShare ? null : () async {
+                    Navigator.pop(ctx);
+                    final reduced = fitToVertexLimit(kept);
+                    await _openGeometryEditor(
+                      reduced[reduced.length ~/ 2],
+                      geometry: {
+                        'type': 'LineString',
+                        'coordinates': [
+                          for (final p in reduced) [p.longitude, p.latitude],
+                        ],
+                      },
+                      properties: {
+                        'name': ride.name,
+                        'category': 'route-suggestion',
+                      },
+                    );
+                    if (mounted) await _clearRide();
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.close),
+                  title: const Text('Hide ride'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _clearRide();
+                  },
+                ),
+              ],
+            )),
+          );
+        },
+      ),
+    );
+  }
+
+  /// Web build opened from a shared link: `/bwg-app/?from=lat,lon&to=lat,lon`.
+  Future<void> _openSharedTrip() async {
+    if (!kIsWeb || _sharedTripHandled) return;
+    _sharedTripHandled = true;
+    final q = Uri.base.queryParameters;
+    LatLng? parse(String? v) {
+      final parts = (v ?? '').split(',');
+      if (parts.length != 2) return null;
+      final lat = double.tryParse(parts[0]), lon = double.tryParse(parts[1]);
+      return lat == null || lon == null ? null : LatLng(lat, lon);
+    }
+
+    final from = parse(q['from']), to = parse(q['to']);
+    if (to == null) return;
+    final state = context.read<AppState>();
+    final stress = BikeStress.values.where((s) => s.name == q['stress']);
+    if (stress.isNotEmpty) state.setStress(stress.first);
+    setState(() {
+      _from = from == null
+          ? TripEndpoint.myLocation
+          : TripEndpoint(label: 'Shared start', latLng: from);
+      _to = TripEndpoint(label: 'Shared destination', latLng: to);
+      _destination = to;
+    });
+    await _planTrip();
+  }
+
+  /// Copy a link that replans this trip in the web app.
+  Future<void> _shareTrip() async {
+    final route = _navRoute;
+    if (route == null || route.points.length < 2) return;
+    final a = route.points.first, b = route.points.last;
+    String f(double v) => v.toStringAsFixed(5);
+    final url =
+        'https://bwg.mrsm.io/bwg-app/?from=${f(a.latitude)},${f(a.longitude)}'
+        '&to=${f(b.latitude)},${f(b.longitude)}'
+        '&stress=${context.read<AppState>().stressApiName}';
+    await Clipboard.setData(ClipboardData(text: url));
+    if (mounted) toast(context, 'Trip link copied.');
   }
 
   static const _emptyCollection = {
@@ -1034,6 +1393,24 @@ class _MapScreenState extends State<MapScreen> {
               },
             ),
             ListTile(
+              leading: const Icon(
+                Icons.route_outlined,
+                color: Color(0xFF7B1FA2),
+              ),
+              title: const Text('My rides'),
+              subtitle: const Text(
+                'Recorded GPS rides — trim and share a stretch',
+              ),
+              onTap: () async {
+                Navigator.pop(ctx);
+                final picked = await Navigator.push<Ride>(
+                  context,
+                  MaterialPageRoute(builder: (_) => const RidesScreen()),
+                );
+                if (picked != null && mounted) await _showRide(picked);
+              },
+            ),
+            ListTile(
               leading: Icon(state.iconFor(state.mode), color: brandGreen),
               title: Text(state.directionsVerb),
               subtitle: const Text('Turn-by-turn directions to this spot'),
@@ -1273,6 +1650,44 @@ class _MapScreenState extends State<MapScreen> {
                   if (updated == true && mounted) await _refreshCommunity();
                 },
               ),
+              if (def?.id.startsWith('community') == true &&
+                  props['id'] != null)
+                Builder(
+                  builder: (ctx) {
+                    final id = props['id'].toString();
+                    final count =
+                        (props['confirmations'] as num?)?.toInt() ?? 0;
+                    final done = state.hasConfirmed(id);
+                    return TextButton.icon(
+                      icon: Icon(
+                        done ? Icons.thumb_up_alt : Icons.thumb_up_alt_outlined,
+                      ),
+                      label: Text(
+                        done
+                            ? 'You confirmed this exists ($count)'
+                            : 'I rode this — it exists ($count)',
+                      ),
+                      onPressed: done
+                          ? null
+                          : () async {
+                              Navigator.pop(ctx);
+                              try {
+                                final n = await api.confirmContribution(
+                                  id,
+                                  state.voter,
+                                );
+                                state.markConfirmed(id);
+                                if (!mounted) return;
+                                toast(context, 'Thanks — $n confirmed.');
+                                await _refreshCommunity();
+                              } catch (e) {
+                                state.markConfirmed(id);
+                                if (mounted) toast(context, e.toString());
+                              }
+                            },
+                    );
+                  },
+                ),
               // Delete lives where the thing is: tapping a contribution is how
               // people find it, not the history list.
               if (def?.id.startsWith('community') == true &&
@@ -1541,6 +1956,7 @@ class _MapScreenState extends State<MapScreen> {
         // prefer the trail deserve the tunnel-and-trail line too (Bennett's
         // McHan → Legacy Park report). Off prices the SRT like a calm street.
         trail: _tripTrail ?? state.preferTrail,
+        community: _tripCommunity ?? state.preferCommunity,
       );
       // A newer plan superseded this one while it was in flight.
       if (!mounted || seq != _planSeq) return;
@@ -1610,6 +2026,7 @@ class _MapScreenState extends State<MapScreen> {
         from: _from,
         to: to ?? _to ?? fromPlace ?? const TripEndpoint(label: ''),
         trail: _tripTrail ?? state.preferTrail,
+        community: _tripCommunity ?? state.preferCommunity,
       ),
     );
     if (result == null || !mounted) return;
@@ -1619,6 +2036,7 @@ class _MapScreenState extends State<MapScreen> {
       // Trail preference for THIS trip; the durable default lives in
       // Settings and is untouched here.
       if (result.trail != null) _tripTrail = result.trail;
+      if (result.community != null) _tripCommunity = result.community;
     });
     if (result.isPick) {
       setState(() => _pickField = result.pickField);
@@ -1697,6 +2115,7 @@ class _MapScreenState extends State<MapScreen> {
       _to = null;
       _from = TripEndpoint.myLocation;
       _tripTrail = null; // per-trip override dies with the trip
+      _tripCommunity = null;
     });
     await _map?.animateCamera(CameraUpdate.tiltTo(0.0));
   }
@@ -1832,7 +2251,10 @@ class _MapScreenState extends State<MapScreen> {
     _posSub = null;
     await _tts?.stop();
     await _navNotifier.cancel();
-    await WakelockPlus.disable();
+    if (mounted) {
+      final recorder = context.read<RideRecorder>();
+      if (!recorder.recording || recorder.paused) await WakelockPlus.disable();
+    }
     await _map?.setGeoJsonSource('puck', _emptyCollection);
     if (!mounted || !_navigating) return;
     setState(() {
@@ -2201,6 +2623,52 @@ class _MapScreenState extends State<MapScreen> {
     _map?.animateCamera(CameraUpdate.newLatLngZoom(target, 15.5));
   }
 
+  /// Save or remove a place; removal is undoable from the snackbar.
+  void _toggleSaved(Map<String, dynamic> place) {
+    final state = context.read<AppState>();
+    final removed = state.toggleSaved(place);
+    if (removed == null) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text('Removed ${removed['label']}'),
+          action: SnackBarAction(
+            label: 'Undo',
+            onPressed: () => state.restoreSaved(removed),
+          ),
+        ),
+      );
+  }
+
+  Future<void> _renameSaved(Map<String, dynamic> place) async {
+    final ctl = TextEditingController(text: place['label']?.toString() ?? '');
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        content: TextField(
+          controller: ctl,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: 'Name'),
+          onSubmitted: (v) => Navigator.pop(ctx, v),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, ctl.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (name != null && mounted) {
+      context.read<AppState>().renameSaved(place, name);
+    }
+  }
+
   void _clearPlace() {
     setState(() => _place = null);
     _clearPinIfIdle();
@@ -2272,6 +2740,14 @@ class _MapScreenState extends State<MapScreen> {
                 ),
               ),
               onPressed: () => _routeTo(target, label: label),
+            ),
+            IconButton(
+              tooltip: state.isSaved(r) ? 'Remove from saved' : 'Save',
+              icon: Icon(
+                state.isSaved(r) ? Icons.bookmark : Icons.bookmark_border,
+                color: Colors.white,
+              ),
+              onPressed: () => _toggleSaved(r),
             ),
             IconButton(
               tooltip: 'Change start point or modes',
@@ -2476,12 +2952,17 @@ class _MapScreenState extends State<MapScreen> {
                                 IconButton(
                                   icon: const Icon(Icons.menu),
                                   tooltip: 'Dashboards & more',
-                                  onPressed: () => Navigator.push(
+                                  onPressed: () async {
+                                    final picked = await Navigator.push(
                                     context,
                                     MaterialPageRoute(
                                       builder: (_) => const ToolsScreen(),
                                     ),
-                                  ),
+                                    );
+                                    if (picked is Ride && mounted) {
+                                      await _showRide(picked);
+                                    }
+                                  },
                                 ),
                               ],
                             ),
@@ -2521,21 +3002,82 @@ class _MapScreenState extends State<MapScreen> {
                     // Places picked before, one tap from the still-focused field —
                     // the "bring my route back" path after clearing navigation.
                     else if (_searchFocus.hasFocus &&
-                        state.recentSearches.isNotEmpty)
+                        (state.recentSearches.isNotEmpty ||
+                            state.savedPlaces.isNotEmpty))
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 12),
                         child: Material(
                           elevation: 3,
                           borderRadius: BorderRadius.circular(12),
-                          child: Column(
+                          clipBehavior: Clip.antiAlias,
+                          // Bounded and scrollable: every saved place stays
+                          // reachable, and with a keyboard up plus large text
+                          // the list can never cover the whole map.
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(
+                              maxHeight:
+                                  MediaQuery.of(context).size.height * 0.35,
+                            ),
+                            child: ListView(
+                              shrinkWrap: true,
+                              padding: EdgeInsets.zero,
                             children: [
-                              for (final r in state.recentSearches.take(5))
+                                // Saved first: tapping one goes straight to the
+                                // route preview (focus, tap — two taps).
+                                for (final r in state.savedPlaces)
+                                  ListTile(
+                                    dense: true,
+                                    leading: const Icon(Icons.bookmark),
+                                    title: Text(r['label']?.toString() ?? ''),
+                                    subtitle:
+                                        (r['sublabel']?.toString() ?? '')
+                                            .isEmpty
+                                        ? null
+                                        : Text(r['sublabel'].toString()),
+                                    onTap: () async {
+                                      final row = Map<String, dynamic>.from(r);
+                                      await _selectResult(row);
+                                      if (!mounted) return;
+                                      await _routeTo(
+                                        LatLng(
+                                          (row['lat'] as num).toDouble(),
+                                          (row['lon'] as num).toDouble(),
+                                        ),
+                                        label: row['label']?.toString(),
+                                      );
+                                    },
+                                    trailing: PopupMenuButton<String>(
+                                      tooltip: 'Saved place options',
+                                      onSelected: (v) => v == 'rename'
+                                          ? _renameSaved(
+                                              Map<String, dynamic>.from(r),
+                                            )
+                                          : _toggleSaved(
+                                              Map<String, dynamic>.from(r),
+                                            ),
+                                      itemBuilder: (_) => const [
+                                        PopupMenuItem(
+                                          value: 'rename',
+                                          child: Text('Rename'),
+                                        ),
+                                        PopupMenuItem(
+                                          value: 'remove',
+                                          child: Text('Remove'),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                for (final r
+                                    in state.recentSearches
+                                        .where((r) => !state.isSaved(r))
+                                        .take(5))
                                 ListTile(
                                   dense: true,
                                   leading: const Icon(Icons.history),
                                   title: Text(r['label']?.toString() ?? ''),
                                   subtitle:
-                                      (r['sublabel']?.toString() ?? '').isEmpty
+                                        (r['sublabel']?.toString() ?? '')
+                                            .isEmpty
                                       ? null
                                       : Text(r['sublabel'].toString()),
                                   onTap: () => _selectResult(
@@ -2545,6 +3087,7 @@ class _MapScreenState extends State<MapScreen> {
                             ],
                           ),
                         ),
+                      ),
                       ),
                     const SizedBox(height: 8),
                     TravelModes(
@@ -2673,6 +3216,23 @@ class _MapScreenState extends State<MapScreen> {
                   color: warnAccent(context),
                 ),
               ),
+            ),
+          if (!_navigating || context.watch<RideRecorder>().recording)
+            Builder(
+              builder: (ctx) {
+                final recorder = ctx.watch<RideRecorder>();
+                final recording = recorder.recording;
+                return _railButton(
+                  tooltip: recorder.error ?? (recording ? (recorder.paused ? 'Resume ride' : 'Recording controls') : 'Record a ride'),
+                  onTap: _toggleRecording,
+                  icon: Icon(
+                    recorder.error != null ? Icons.error_outline : recording ? (recorder.paused ? Icons.pause_circle : Icons.stop_circle) : Icons.fiber_manual_record,
+                    color: recording
+                        ? const Color(0xFFC62828)
+                        : const Color(0xFF7B1FA2),
+                  ),
+                );
+              },
             ),
           _railButton(
             tooltip: 'My location',
@@ -2841,6 +3401,11 @@ class _MapScreenState extends State<MapScreen> {
                     ],
                   ),
                 ),
+                IconButton(
+                  tooltip: 'Copy a link to this trip',
+                  icon: const Icon(Icons.share_outlined, color: Colors.white),
+                  onPressed: _shareTrip,
+                ),
                 if (route.steps.isNotEmpty)
                   IconButton(
                     tooltip: 'Upcoming turns',
@@ -2922,6 +3487,13 @@ class _MapScreenState extends State<MapScreen> {
     if (route.fallbackNote != null)
       (icon: Icons.info_outline, text: route.fallbackNote!),
     for (final w in route.visibleWarnings()) (icon: w.icon, text: w.message),
+    if (route.communityNames.isNotEmpty)
+      (
+        icon: Icons.groups_outlined,
+        text:
+            'Rides community routes drawn by other riders: '
+            '${route.communityNames.join(', ')}',
+      ),
     if (route.hillSummary() case final hill?)
       (icon: Icons.trending_up, text: hill),
   ];
@@ -3011,10 +3583,11 @@ class _MapScreenState extends State<MapScreen> {
     final ebike = context.read<AppState>().useEbike;
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
-      child: SizedBox(
-        height: 38,
-        child: ListView(
-          scrollDirection: Axis.horizontal,
+      // No fixed height: the row takes the chips' own height, so large text
+      // grows it instead of clipping the labels.
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
           children: [
             Padding(
               padding: const EdgeInsets.only(right: 8),
@@ -3035,20 +3608,10 @@ class _MapScreenState extends State<MapScreen> {
             for (final alt in route.alternatives)
               Padding(
                 padding: const EdgeInsets.only(right: 8),
-                child: ActionChip(
-                  // The alt was costed with the rider's e-bike too; the
-                  // server's label stays plain "Bike" on purpose.
-                  avatar: Icon(
-                    ebike && alt.plan == 'bike'
-                        ? legModeIcons['ebike']!
-                        : (planIcons[alt.plan] ?? Icons.directions),
-                    size: 18,
-                  ),
-                  label: Text(
-                    '${ebike && alt.plan == 'bike' ? 'E-bike' : alt.label}'
-                    ' · ${formatDuration(alt.durationMin)}',
-                  ),
-                  backgroundColor: Theme.of(context).colorScheme.surface,
+                child: AlternativeChip(
+                  alt: alt,
+                  selected: route,
+                  ebike: ebike,
                   onPressed: () => _planTrip(plan: alt.plan),
                 ),
               ),

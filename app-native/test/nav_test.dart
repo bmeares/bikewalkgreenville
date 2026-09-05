@@ -815,4 +815,44 @@ void main() {
       expect(spokenText('You have arrived.'), 'You have arrived.');
     });
   });
+
+  test('alternatives read as differences from the selected route', () {
+    final f = _feature();
+    f['properties']['climb_ft'] = 100;
+    f['properties']['warnings'] = [
+      {'kind': 'no_bike_lane', 'distance_m': 800.0, 'label': '0.5 mi with no bike lane', 'message': 'x'},
+    ];
+    f['properties']['alternatives'] = [
+      {
+        'plan': 'walk', 'label': 'Walk', 'icon_mode': 'walk',
+        'distance_m': 405.0, 'duration_min': 7.0, 'climb_ft': 100,
+        'warnings': [
+          {'kind': 'no_sidewalk', 'distance_m': 600.0, 'label': '0.4 mi with no sidewalk', 'message': 'y'},
+          {'kind': 'no_bike_lane', 'distance_m': 900.0, 'label': 'ignored, selected has it', 'message': 'z'},
+          {'kind': 'steep', 'distance_m': 10.0, 'label': 'steep', 'message': 's'},
+        ],
+      },
+      {
+        'plan': 'bike-transit', 'label': 'Bike + bus', 'icon_mode': 'transit',
+        'distance_m': 1005.0, 'duration_min': 2.0, 'climb_ft': 20, 'warnings': [],
+      },
+      {
+        'plan': 'bcycle', 'label': 'BCycle', 'icon_mode': 'bcycle',
+        'distance_m': 500.0, 'duration_min': 3.2, 'warnings': [],
+      },
+    ];
+    final route = NavRoute.fromFeature(f);
+    final walk = route.alternatives[0];
+    final bus = route.alternatives[1];
+    final bcycle = route.alternatives[2];
+    // Time always; distance/climb only when they change a decision.
+    expect(alternativeDelta(walk, route), '+4 min');
+    expect(alternativeDelta(bus, route), '−1 min · +0.4 mi · −80 ft');
+    // bcycle sent no climb_ft: unknown is not "0 ft", so no climb token.
+    expect(bcycle.climbFt, isNull);
+    expect(alternativeDelta(bcycle, route), 'same time');
+    // Only warning kinds the selected route lacks, at the banner threshold.
+    expect(extraWarnings(walk, route).map((w) => w.kind), ['no_sidewalk', 'steep']);
+    expect(extraWarnings(bus, route), isEmpty);
+  });
 }

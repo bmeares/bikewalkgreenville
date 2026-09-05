@@ -57,7 +57,9 @@ class RouteGraphTestCase(unittest.TestCase):
         coverage."""
         original_rows = ml._route_source_rows
         original_elev = ml._node_elevations
+        original_reports = ml._open_report_points
         ml._route_source_rows = lambda debug=False: rows
+        ml._open_report_points = lambda: list(getattr(self, 'report_points', []))
 
         def _fake_elevations(nodes, debug=False):
             if not elevation:
@@ -72,6 +74,7 @@ class RouteGraphTestCase(unittest.TestCase):
         finally:
             ml._route_source_rows = original_rows
             ml._node_elevations = original_elev
+            ml._open_report_points = original_reports
 
     def _route(self, graph, origin, destination, mode='bike', **kwargs):
         original = ml._get_route_graph
@@ -1008,6 +1011,89 @@ class TestTrailPreferenceToggle(RouteGraphTestCase):
         self.assertNotIn('Srt', names)
 
 
+class TestCommunityPreferenceToggle(RouteGraphTestCase):
+    """`?community=0`: a rider-drawn shortcut prices like a plain path (0.4),
+    so a 3x dogleg loses to the street; with the default bias it prices at
+    half that and the community path wins."""
+
+    A = (34.8500, -82.4000)
+    B = (34.8530, -82.4105)   # community dogleg (~3x the street)
+    C = (34.8560, -82.4000)
+
+    def _rows(self):
+        everyone = frozenset(('bike', 'walk', 'roll'))
+        return [
+            (_line(self.A, self.C), 'L', 'PLAIN ST', True, 1.0, True, None),
+            (_line(self.A, self.B), 'path', 'NEIGHBOR CUT', True, 1.0, True, None, False, everyone, {'community': True}),
+            (_line(self.B, self.C), 'path', 'NEIGHBOR CUT', True, 1.0, True, None, False, everyone, {'community': True}),
+        ]
+
+    def _names(self, community):
+        token = ml._COMMUNITY_PREF.set(community)
+        try:
+            graph = self._graph(self._rows())
+            feature = self._route(graph, self.A, self.C, mode='bike')
+            return {s['name'] for s in feature['properties']['steps'] if s['name']}
+        finally:
+            ml._COMMUNITY_PREF.reset(token)
+
+    def test_default_bias_rides_the_community_path(self):
+        self.assertIn('Neighbor Cut', self._names(True))
+
+    def test_community_off_takes_the_street(self):
+        names = self._names(False)
+        self.assertIn('Plain St', names)
+        self.assertNotIn('Neighbor Cut', names)
+
+
+class TestOpenReportsRepelRoutes(RouteGraphTestCase):
+    """An open access-issue report beside the direct street triples its cost,
+    so a modestly longer parallel street wins; with no reports the direct
+    street wins."""
+
+    A = (34.8500, -82.4000)
+    B = (34.8530, -82.4022)   # dogleg (~1.5x the street)
+    C = (34.8560, -82.4000)
+
+    def _rows(self):
+        return [
+            (_line(self.A, self.C), 'L', 'DIRECT ST', True),
+            (_line(self.A, self.B), 'L', 'AROUND ST', True),
+            (_line(self.B, self.C), 'L', 'AROUND ST', True),
+        ]
+
+    def _names(self, points):
+        self.report_points = points
+        graph = self._graph(self._rows())
+        feature = self._route(graph, self.A, self.C, mode='bike')
+        return {s['name'] for s in feature['properties']['steps'] if s['name']}
+
+    def test_no_reports_takes_the_direct_street(self):
+        self.assertIn('Direct St', self._names([]))
+
+    def test_report_on_the_street_reroutes(self):
+        names = self._names([(34.8530, -82.4000)])
+        self.assertIn('Around St', names)
+        self.assertNotIn('Direct St', names)
+
+
+class TestCommunityRangesOnRoute(RouteGraphTestCase):
+    """A route that rides a rider-drawn path reports it in community_ranges."""
+
+    A = (34.8500, -82.4000)
+    C = (34.8560, -82.4000)
+
+    def test_community_stretch_is_reported(self):
+        everyone = frozenset(('bike', 'walk', 'roll'))
+        graph = self._graph([
+            (_line(self.A, self.C), 'path', 'NEIGHBOR CUT', True, 1.0, True, None, False, everyone, {'community': True}),
+        ])
+        feature = self._route(graph, self.A, self.C, mode='bike')
+        ranges = feature['properties']['community_ranges']
+        self.assertEqual([r['name'] for r in ranges], ['Neighbor Cut'])
+        self.assertGreater(ranges[0]['distance_m'], 500)
+
+
 class TestTunnelNeverFusesWithTheStreetAbove(RouteGraphTestCase):
     """The graph is 2D and the 12 m grid snap fused the Springer St tunnel
     with the S Church St edges crossing above it — riders were told to turn
@@ -1404,3 +1490,23 @@ def test_bus_ride_cannot_bypass_community_exclusion(monkeypatch):
     assert feature['properties']['plan'] == 'walk'
     assert feature['properties']['alternatives'] == []
     assert 'no-entry' in feature['properties']['unavailable'][0]['reason']
+
+
+def test_alternatives_carry_climb_for_every_plan(monkeypatch):
+    """The app compares alternatives by time, distance AND climb, so every
+    alternative must echo its feature's climb_ft (None when the plan had none)."""
+    monkeypatch.setattr(ml, '_active_community', lambda: [])
+    climbs = {'bike': 120, 'walk': 45, 'bike-transit': 30, 'bcycle': 0}
+    def candidate(key, *a, **kw):
+        props = {'plan': key, 'distance_m': 1000, 'duration_min': {'bike': 5, 'walk': 15, 'bike-transit': 12, 'bcycle': 9}[key]}
+        if climbs[key]:
+            props['climb_ft'] = climbs[key]
+        return {'type': 'Feature', 'geometry': {'type': 'LineString', 'coordinates': [[-82.402, 34.85], [-82.398, 34.85]]}, 'properties': props}
+    monkeypatch.setattr(ml, '_compute_plan', candidate)
+    feature = ml._route_multimodal(34.85, -82.402, 34.85, -82.398, {'bike', 'walk', 'transit'}, bcycle=True)
+    assert feature['properties']['plan'] == 'bike'
+    alts = {a['plan']: a for a in feature['properties']['alternatives']}
+    assert set(alts) >= {'walk', 'bike-transit', 'bcycle'}
+    for plan, alt in alts.items():
+        # bcycle's candidate carried no climb: unknown stays None, never 0.
+        assert alt['climb_ft'] == (climbs[plan] or None), plan

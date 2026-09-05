@@ -114,3 +114,27 @@ def test_history_serializes_all_null_columns():
         response = client.get('/map-layers/community/history')
         assert response.status_code == 200, response.text
         assert response.json()['revisions'][0]['replaces'] is None
+
+
+def test_confirmations_count_dedupe_and_hide_from_layer():
+    pipe = MemoryPipe()
+    with patch.object(ml, 'COMMUNITY_PIPE', pipe), patch.object(ml, '_community_changed', lambda: ml._COMMUNITY_CACHE.update(at=0)), patch.object(ml, '_get_route_graph', lambda: {'nodes': {}, 'adj': {}}), patch.object(ml, '_get_transit_data', lambda: {}):
+        ml._COMMUNITY_CACHE.update(at=0, rows=[])
+        ml._SUBMIT_HITS.clear()
+        app = FastAPI(); ml.init_app(app); client = TestClient(app)
+        data = {'category': 'shortcut', 'name': 'Local path', 'comment': 'Public paved path',
+                'lat': '34.85', 'lon': '-82.4',
+                'geometry': json.dumps({'type': 'LineString', 'coordinates': [[-82.4,34.85],[-82.399,34.85]]})}
+        target = client.post('/map-layers/submit-point', data=data).json()['id']
+        assert client.post('/map-layers/community/confirm', json={'id': target, 'voter': 'abc'}).status_code == 400
+        r = client.post('/map-layers/community/confirm', json={'id': target, 'voter': 'voter0001'})
+        assert r.status_code == 200, r.text
+        assert r.json()['confirmations'] == 1
+        assert client.post('/map-layers/community/confirm', json={'id': target, 'voter': 'voter0001'}).status_code == 409
+        assert client.post('/map-layers/community/confirm', json={'id': target, 'voter': 'voter0002'}).json()['confirmations'] == 2
+        features = client.get('/map-layers/community.geojson').json()['features']
+        assert len(features) == 1 and features[0]['properties']['confirmations'] == 2
+        history = client.get('/map-layers/community/history').json()['revisions']
+        assert sum(r['type'] == 'confirm' for r in history) == 2
+        assert not any('voter' in r for r in history)
+        assert client.post('/map-layers/community/confirm', json={'id': 'nope', 'voter': 'voter0003'}).status_code == 409

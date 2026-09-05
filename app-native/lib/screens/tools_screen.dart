@@ -4,6 +4,7 @@ import 'package:url_launcher/url_launcher_string.dart';
 import '../theme.dart';
 import 'settings_screen.dart';
 import 'community_screen.dart';
+import 'rides_screen.dart';
 
 class _Link {
   final String title;
@@ -102,6 +103,22 @@ class ToolsScreen extends StatelessWidget {
             onTap: () => Navigator.push(context,
               MaterialPageRoute(builder: (_) => const CommunityScreen())),
           )),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.route_outlined, color: brandGreen, size: 32),
+              title: const Text('My rides'),
+              subtitle: const Text('Recorded GPS rides; share a stretch as a community route'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () async {
+                final ride = await Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const RidesScreen()),
+                );
+                // Hand the pick back to the map, which draws and trims it.
+                if (ride != null && context.mounted) Navigator.pop(context, ride);
+              },
+            ),
+          ),
           Card(
             child: ListTile(
               leading: const Icon(Icons.settings, color: brandGreen, size: 32),
