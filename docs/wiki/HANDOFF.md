@@ -17,6 +17,20 @@ anything.
 - **walk-audit config** moved off env vars onto Meerschaum config (`plugins:walk-audit:{smtp,notify}`). Prod values live in the container volume at `/meerschaum/config/plugins.json` (chmod 600); the `/meerschaum/.env` hack has been **deleted**.
 - `WalkAudit.reports` is empty (the deploy-check row was removed).
 
+### 2026-09-05 night (omega) — app v1.21.2+64, map chrome cleanup (no backend change)
+
+- **Web: hamburger opened Directions.** The search field's suffix `Row` gains a
+  "clear" button when the field has focus; on web the mousedown focuses the
+  field mid-tap, the row rebuilds with one more child, and UNKEYED elements are
+  reused by index — the hamburger's in-flight tap fired on the element that
+  now held the Directions button. Fix: `ValueKey`s on the three suffix buttons.
+- **Travel modes** left the top column (overflowed at large text) for a rail
+  button (current mode icon, above Layers) that opens `TravelModes` in a sheet.
+- **Map tap sheet** shows only actions AT the spot: `Bike here` + tune, and
+  wrapping chips Report / Add place / Draw route / No-entry area / Who owns
+  this road?. "Community edits & history" and "My rides" left it (both live in
+  Dashboards & Tools; rides also via the ● rail button).
+
 ### 2026-09-05 evening (omega) — app v1.21.1+63, map-layers v0.20.1 batch removal + web icon
 
 - **Why only the newest edit was removable**: the history list shows the undo

@@ -30,7 +30,6 @@ import 'geometry_editor_screen.dart';
 import 'package:pointer_interceptor/pointer_interceptor.dart';
 import 'package:flutter/foundation.dart';
 import 'tools_screen.dart';
-import 'rides_screen.dart';
 import '../rides.dart';
 
 class MapScreen extends StatefulWidget {
@@ -1368,127 +1367,81 @@ class _MapScreenState extends State<MapScreen> {
       return;
     }
     final state = context.read<AppState>();
+    // Only what you can do AT this spot. History and rides live in the menu.
+    // Chips wrap, so large text stacks them instead of overflowing.
+    Widget chip(IconData icon, String label, VoidCallback onTap, {Color? color}) =>
+        ActionChip(
+          avatar: Icon(icon, size: 18, color: color),
+          label: Text(label),
+          onPressed: onTap,
+        );
     showAppSheet(
       context: context,
       showDragHandle: true,
       builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.history),
-              title: const Text('Community edits & history'),
-              subtitle: const Text(
-                'Contributions, rollbacks and dismissed reports — not endorsed by BWG',
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.icon(
+                      icon: Icon(state.iconFor(state.mode)),
+                      label: Text(state.directionsVerb),
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        _routeTo(latLng);
+                      },
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Plan a trip from here',
+                    icon: const Icon(Icons.tune),
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _openDirections(
+                        to: TripEndpoint(label: 'Dropped pin', latLng: latLng),
+                      );
+                    },
+                  ),
+                ],
               ),
-              onTap: () async {
-                Navigator.pop(ctx);
-                final picked = await Navigator.push<Map<String, dynamic>>(
-                  context,
-                  MaterialPageRoute(builder: (_) => const CommunityScreen()),
-                );
-                if (!mounted) return;
-                await _refreshCommunity();
-                if (picked != null) await _fitGeometry(picked['geometry']);
-              },
-            ),
-            ListTile(
-              leading: const Icon(
-                Icons.route_outlined,
-                color: Color(0xFF7B1FA2),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  chip(Icons.report_problem, 'Report', () {
+                    Navigator.pop(ctx);
+                    _openReportSheet(latLng);
+                  }, color: const Color(0xFFF9A825)),
+                  chip(Icons.add_location_alt, 'Add place', () {
+                    Navigator.pop(ctx);
+                    _openAddPointSheet(latLng);
+                  }, color: brandGreen),
+                  chip(Icons.draw_outlined, 'Draw route', () {
+                    Navigator.pop(ctx);
+                    _openGeometryEditor(latLng);
+                  }, color: brandGreen),
+                  chip(Icons.block, 'No-entry area', () {
+                    Navigator.pop(ctx);
+                    _openGeometryEditor(latLng, polygon: true);
+                  }, color: const Color(0xFFC62828)),
+                  chip(Icons.badge_outlined, 'Who owns this road?', () {
+                    Navigator.pop(ctx);
+                    _showRoadInfo(latLng);
+                  }),
+                ],
               ),
-              title: const Text('My rides'),
-              subtitle: const Text(
-                'Recorded GPS rides — trim and share a stretch',
-              ),
-              onTap: () async {
-                Navigator.pop(ctx);
-                final picked = await Navigator.push<Ride>(
-                  context,
-                  MaterialPageRoute(builder: (_) => const RidesScreen()),
-                );
-                if (picked != null && mounted) await _showRide(picked);
-              },
-            ),
-            ListTile(
-              leading: Icon(state.iconFor(state.mode), color: brandGreen),
-              title: Text(state.directionsVerb),
-              subtitle: const Text('Turn-by-turn directions to this spot'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _routeTo(latLng);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.alt_route, color: brandGreen),
-              title: const Text('Plan a trip from here'),
-              subtitle: const Text('Pick a start point and travel modes'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _openDirections(
-                  to: TripEndpoint(label: 'Dropped pin', latLng: latLng),
-                );
-              },
-            ),
-            ListTile(
-              leading: const Icon(
-                Icons.report_problem,
-                color: Color(0xFFF9A825),
-              ),
-              title: const Text('Report an issue here'),
-              subtitle: const Text('Sidewalks, crossings, bike lanes…'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _openReportSheet(latLng);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.add_location_alt, color: brandGreen),
-              title: const Text('Edit the community map here'),
-              subtitle: const Text(
-                'Add places, corrections, access or crossing notes',
-              ),
-              onTap: () {
-                Navigator.pop(ctx);
-                _openAddPointSheet(latLng);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.draw_outlined, color: brandGreen),
-              title: const Text('Draw a route or shortcut'),
-              subtitle: const Text(
-                'Vertices, curves, freehand pen, and eraser',
-              ),
-              onTap: () {
-                Navigator.pop(ctx);
-                _openGeometryEditor(latLng);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.block, color: Color(0xFFC62828)),
-              title: const Text('Draw a no-entry area'),
-              subtitle: const Text(
-                'Private property, closures, or hazards to avoid',
-              ),
-              onTap: () {
-                Navigator.pop(ctx);
-                _openGeometryEditor(latLng, polygon: true);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.badge_outlined),
-              title: const Text('Who owns this road?'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _showRoadInfo(latLng);
-              },
-            ),
-          ],
+            ],
+          ),
         ),
       ),
-    ).whenComplete(() => _clearPinIfIdle());
+    );
   }
-
   Future<void> _setPin(LatLng latLng) async {
     await _map?.setGeoJsonSource('pin', {
       'type': 'FeatureCollection',
@@ -2936,6 +2889,7 @@ class _MapScreenState extends State<MapScreen> {
                                     _searchFocus.hasFocus ||
                                     _results.isNotEmpty)
                                   IconButton(
+                                    key: const ValueKey('search-clear'),
                                     icon: const Icon(Icons.clear),
                                     tooltip: 'Clear search',
                                     onPressed: () {
@@ -2944,12 +2898,14 @@ class _MapScreenState extends State<MapScreen> {
                                     },
                                   ),
                                 IconButton(
+                                  key: const ValueKey('search-directions'),
                                   icon: const Icon(Icons.directions),
                                   tooltip: 'Plan a trip',
                                   color: brandGreen,
                                   onPressed: () => _openDirections(),
                                 ),
                                 IconButton(
+                                  key: const ValueKey('search-menu'),
                                   icon: const Icon(Icons.menu),
                                   tooltip: 'Dashboards & more',
                                   onPressed: () async {
@@ -3089,15 +3045,10 @@ class _MapScreenState extends State<MapScreen> {
                         ),
                       ),
                       ),
-                    const SizedBox(height: 8),
-                    TravelModes(
-                      onChanged: () {
-                        if (_navRoute != null && !_navigating && _to != null) {
-                          _planTrip();
-                        }
-                      },
-                    ),
-                    if (_pickField != null) _pickBanner(),
+                    if (_pickField != null) ...[
+                      const SizedBox(height: 8),
+                      _pickBanner(),
+                    ],
                   ],
                 ),
               ),
@@ -3198,6 +3149,17 @@ class _MapScreenState extends State<MapScreen> {
               ),
             ),
           if (!_navigating)
+            Builder(
+              builder: (ctx) {
+                final state = ctx.watch<AppState>();
+                return _railButton(
+                  tooltip: 'Travel modes',
+                  onTap: _openModesSheet,
+                  icon: Icon(state.iconFor(state.mode), color: brandGreen),
+                );
+              },
+            ),
+          if (!_navigating)
             _railButton(
               tooltip: 'Map layers',
               onTap: _openLayersSheet,
@@ -3240,6 +3202,27 @@ class _MapScreenState extends State<MapScreen> {
             icon: const Icon(Icons.my_location),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Bike / Walk / Transit and their variants, in a sheet instead of a bar
+  /// under the search field: at large text the bar overflowed the screen.
+  void _openModesSheet() {
+    showAppSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          child: TravelModes(
+            onChanged: () {
+              if (_navRoute != null && !_navigating && _to != null) {
+                _planTrip();
+              }
+            },
+          ),
+        ),
       ),
     );
   }
