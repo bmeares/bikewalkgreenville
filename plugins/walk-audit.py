@@ -39,7 +39,9 @@ The repo is public — never commit literal credentials; interpolate them from
 the environment in the compose file.
 """
 
+import math
 import threading
+import time
 
 import meerschaum as mrsm
 from meerschaum.plugins import api_plugin
@@ -63,6 +65,30 @@ CATEGORIES = [
     {'id': 'other', 'label': 'Other accessibility issue'},
 ]
 CATEGORY_LABELS = {c['id']: c['label'] for c in CATEGORIES}
+
+# Walk-audit reports are intended for the Greenville service area.  These are
+# deliberately a little wider than the county boundary to avoid rejecting a
+# report right at the edge, while blocking arbitrary world-wide coordinates.
+SERVICE_BOUNDS = (34.58, -82.65, 35.10, -82.10)  # min lat, min lon, max lat, max lon
+SUBMIT_MAX_PER_HOUR = 10
+SUBMIT_MAX_COMMENT_CHARS = 2000
+SUBMIT_MAX_PHOTO_BYTES = 8 * 1024 * 1024
+_SUBMIT_HITS: dict[str, list[float]] = {}
+_SUBMIT_HITS_LOCK = threading.Lock()
+
+
+def _submit_rate_limited(ip: str | None) -> bool:
+    """True when this client has used up its hourly walk-audit submissions."""
+    key = ip or 'unknown'
+    now = time.time()
+    with _SUBMIT_HITS_LOCK:
+        hits = [t for t in _SUBMIT_HITS.get(key, []) if now - t < 3600]
+        if len(hits) >= SUBMIT_MAX_PER_HOUR:
+            _SUBMIT_HITS[key] = hits
+            return True
+        hits.append(now)
+        _SUBMIT_HITS[key] = hits
+    return False
 
 REPORTS_PIPE: mrsm.Pipe = mrsm.Pipe(
     'app', 'reports', 'WalkAudit',
@@ -285,7 +311,6 @@ def _send_report_email(report: dict, photo_path=None) -> str | None:
 def init_app(app):
     """Register the walk-audit HTTP routes on the Meerschaum API app."""
     import uuid
-    import shutil
     from pathlib import Path
     from fastapi import Form, File, UploadFile, Request
     from fastapi.responses import JSONResponse
@@ -303,6 +328,26 @@ def init_app(app):
         lon: float = Form(...),
         photo: UploadFile = File(None),
     ):
+        if (
+            not (math.isfinite(lat) and math.isfinite(lon))
+            or not (SERVICE_BOUNDS[0] <= lat <= SERVICE_BOUNDS[2])
+            or not (SERVICE_BOUNDS[1] <= lon <= SERVICE_BOUNDS[3])
+        ):
+            return JSONResponse(
+                {'error': 'Reports must be within the Greenville service area.'},
+                status_code=400,
+            )
+        if len(comment or '') > SUBMIT_MAX_COMMENT_CHARS:
+            return JSONResponse(
+                {'error': 'Comment is too long (2000 characters max).'},
+                status_code=400,
+            )
+        client = request.client
+        if _submit_rate_limited(client.host if client else None):
+            return JSONResponse(
+                {'error': 'Too many submissions — please try again later.'},
+                status_code=429,
+            )
         rec_id = uuid.uuid4().hex
         photo_filename = None
         photo_path = None
@@ -310,11 +355,21 @@ def init_app(app):
             ext = Path(photo.filename).suffix or '.jpg'
             photo_filename = f'{rec_id}{ext}'
             photo_path = _photos_dir() / photo_filename
+            written = 0
             with open(photo_path, 'wb') as out:
-                shutil.copyfileobj(photo.file, out)
+                while chunk := photo.file.read(256 * 1024):
+                    written += len(chunk)
+                    if written > SUBMIT_MAX_PHOTO_BYTES:
+                        break
+                    out.write(chunk)
+            if written > SUBMIT_MAX_PHOTO_BYTES:
+                photo_path.unlink(missing_ok=True)
+                return JSONResponse(
+                    {'error': 'Photo is too large (8 MB max).'},
+                    status_code=413,
+                )
 
         road = _nearest_road(lat, lon)
-        client = request.client
         report = {
             'id': rec_id,
             'category': category if category in CATEGORY_LABELS else 'other',

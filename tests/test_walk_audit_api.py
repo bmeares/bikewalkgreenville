@@ -51,3 +51,28 @@ def test_dismiss_hides_report_and_logs_history():
         assert history[1]['name'] == 'Poor lighting near Springer St'
         assert history[1]['geometry'] == {'type': 'Point', 'coordinates': [-82.4, 34.85]}
         assert not any('ip' in h for h in history)
+
+
+def test_submit_rejects_remote_coordinates_and_long_comments():
+    reports = MemoryPipe()
+    with patch.object(wa, 'REPORTS_PIPE', reports), \
+         patch.object(wa, '_nearest_road', lambda lat, lon: {}):
+        wa._SUBMIT_HITS.clear()
+        app = FastAPI(); wa.init_app(app); client = TestClient(app)
+        base = {'category': 'broken-sidewalk', 'comment': 'Observed issue',
+                'lat': '34.85', 'lon': '-82.4'}
+        assert client.post('/walk-audit/submit', data=dict(base, lat='37.422', lon='-122.084')).status_code == 400
+        assert client.post('/walk-audit/submit', data=dict(base, comment='x' * 2001)).status_code == 400
+
+
+def test_submit_rate_limits_each_client():
+    reports = MemoryPipe()
+    with patch.object(wa, 'REPORTS_PIPE', reports), \
+         patch.object(wa, '_nearest_road', lambda lat, lon: {}):
+        wa._SUBMIT_HITS.clear()
+        app = FastAPI(); wa.init_app(app); client = TestClient(app)
+        data = {'category': 'broken-sidewalk', 'comment': 'Observed issue',
+                'lat': '34.85', 'lon': '-82.4'}
+        for _ in range(wa.SUBMIT_MAX_PER_HOUR):
+            assert client.post('/walk-audit/submit', data=data).status_code == 200
+        assert client.post('/walk-audit/submit', data=data).status_code == 429
