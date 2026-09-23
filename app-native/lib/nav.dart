@@ -248,7 +248,9 @@ class RouteAlternative {
 String alternativeDelta(RouteAlternative alt, NavRoute selected) {
   final tokens = <String>[];
   final dMin = (alt.durationMin - selected.durationMin).round();
-  tokens.add(dMin == 0 ? 'same time' : '${dMin > 0 ? '+' : '−'}${dMin.abs()} min');
+  tokens.add(
+    dMin == 0 ? 'same time' : '${dMin > 0 ? '+' : '−'}${dMin.abs()} min',
+  );
   final dMi = (alt.distanceM - selected.distanceM) / 1609.344;
   if (dMi.abs() >= 0.3) {
     tokens.add('${dMi > 0 ? '+' : '−'}${dMi.abs().toStringAsFixed(1)} mi');
@@ -264,7 +266,10 @@ String alternativeDelta(RouteAlternative alt, NavRoute selected) {
 /// Warning kinds the alternative shows that the selected route does not.
 List<RouteWarning> extraWarnings(RouteAlternative alt, NavRoute selected) {
   final have = {for (final w in selected.visibleWarnings()) w.kind};
-  return [for (final w in alt.visibleWarnings()) if (!have.contains(w.kind)) w];
+  return [
+    for (final w in alt.visibleWarnings())
+      if (!have.contains(w.kind)) w,
+  ];
 }
 
 /// A computed route: the line, its steps and the cumulative distance table
@@ -402,7 +407,12 @@ class NavRoute {
           .map((w) => RouteWarning.fromJson(Map<String, dynamic>.from(w)))
           .toList(),
       communityRanges: ((props['community_ranges'] as List?) ?? [])
-          .map((r) => WarnRange.fromJson({...Map<String, dynamic>.from(r), 'kind': r['name']}))
+          .map(
+            (r) => WarnRange.fromJson({
+              ...Map<String, dynamic>.from(r),
+              'kind': r['name'],
+            }),
+          )
           .toList(),
       fallback: props['fallback']?.toString(),
       fallbackNote: props['fallback_note']?.toString(),

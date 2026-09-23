@@ -9,14 +9,14 @@ class RecordingSheet extends StatelessWidget {
     super.key,
     required this.onResume,
     required this.onPause,
-    required this.onSaved,
-    required this.onDiscarded,
+    required this.onStop,
   });
 
   final Future<void> Function() onResume;
   final Future<void> Function() onPause;
-  final void Function(Ride) onSaved;
-  final VoidCallback onDiscarded;
+
+  /// Stop opens the ride summary (Save / Discard live there).
+  final VoidCallback onStop;
 
   @override
   Widget build(BuildContext context) {
@@ -28,13 +28,19 @@ class RecordingSheet extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              recorder.recovered
-                  ? 'Recovered ride'
-                  : recorder.paused
-                  ? 'Paused'
-                  : 'Recording',
-              style: Theme.of(context).textTheme.titleLarge,
+            // Live region: "Recording" / "Paused" is announced on each change
+            // (the elapsed time below ticks every second and stays silent).
+            Semantics(
+              liveRegion: true,
+              header: true,
+              child: Text(
+                recorder.recovered
+                    ? 'Recovered ride'
+                    : recorder.paused
+                    ? 'Paused'
+                    : 'Recording',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
             ),
             const SizedBox(height: 8),
             Text(
@@ -64,42 +70,9 @@ class RecordingSheet extends StatelessWidget {
                   label: Text(recorder.paused ? 'Resume' : 'Pause'),
                 ),
                 OutlinedButton.icon(
-                  onPressed: recorder.busy
-                      ? null
-                      : () async {
-                          final ride = await recorder.stop();
-                          if (context.mounted && ride != null) onSaved(ride);
-                        },
-                  icon: const Icon(Icons.check),
-                  label: const Text('Save'),
-                ),
-                TextButton(
-                  onPressed: recorder.busy
-                      ? null
-                      : () async {
-                          final discard = await showDialog<bool>(
-                            context: context,
-                            builder: (ctx) => AlertDialog(
-                              title: const Text('Discard ride?'),
-                              actions: [
-                                TextButton(
-                                  onPressed: () => Navigator.pop(ctx, false),
-                                  child: const Text('Keep'),
-                                ),
-                                TextButton(
-                                  onPressed: () => Navigator.pop(ctx, true),
-                                  child: const Text('Discard'),
-                                ),
-                              ],
-                            ),
-                          );
-                          if (discard == true &&
-                              await recorder.discard() &&
-                              context.mounted) {
-                            onDiscarded();
-                          }
-                        },
-                  child: const Text('Discard'),
+                  onPressed: recorder.busy ? null : onStop,
+                  icon: const Icon(Icons.stop),
+                  label: const Text('Stop'),
                 ),
               ],
             ),

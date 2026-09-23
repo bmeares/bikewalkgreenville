@@ -1,80 +1,126 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
+import 'package:bwg_app_native/api.dart';
 import 'package:bwg_app_native/geometry_draft.dart';
+
+class _ThrowingApi extends Api {
+  int calls = 0;
+  @override
+  Future<Map<String, dynamic>> route(
+    double fromLat,
+    double fromLon,
+    double toLat,
+    double toLon, {
+    Set<String> modes = const {'bike'},
+    bool roll = false,
+    bool bcycle = false,
+    String? plan,
+    bool ebike = false,
+    String? stress,
+    int alt = 0,
+    bool trail = true,
+    bool community = true,
+  }) async {
+    calls++;
+    throw ApiError('router down');
+  }
+}
+
+class _RoutingApi extends _ThrowingApi {
+  @override
+  Future<Map<String, dynamic>> route(
+    double fromLat,
+    double fromLon,
+    double toLat,
+    double toLon, {
+    Set<String> modes = const {'bike'},
+    bool roll = false,
+    bool bcycle = false,
+    String? plan,
+    bool ebike = false,
+    String? stress,
+    int alt = 0,
+    bool trail = true,
+    bool community = true,
+  }) async {
+    calls++;
+    return {
+      'type': 'Feature',
+      'geometry': {
+        'type': 'LineString',
+        'coordinates': [
+          [fromLon, fromLat],
+          [fromLon, toLat],
+          [toLon, toLat],
+        ],
+      },
+      'properties': <String, dynamic>{},
+    };
+  }
+}
 
 void main() {
   const a = LatLng(34.85, -82.4),
       b = LatLng(34.85, -82.399),
       c = LatLng(34.851, -82.399);
-  test('extend both ends, move, delete and undo/redo retain vertex order', () {
-    final d = GeometryDraft([a, b]);
-    d.checkpoint();
-    d.extend(c, fromStart: true);
-    expect(d.points, [c, a, b]);
-    d.checkpoint();
-    d.points[1] = c;
-    d.points.removeLast();
-    expect(d.points, [c, c]);
-    d.undo();
-    expect(d.points, [c, a, b]);
-    d.undo();
-    expect(d.points, [a, b]);
-    d.redo();
-    expect(d.points, [c, a, b]);
-  });
-  test('polygon closes only on export and reopening preserves indices', () {
-    final d = GeometryDraft([a, b, c], polygon: true);
+  final realApi = api;
+  tearDown(() => api = realApi);
+
+  test('polygon closes only on export and reopening drops the ring close', () {
+    final d = AreaDraft(corners: [a, b]);
+    expect(d.canPublish, isFalse);
+    d.add(c);
     expect(d.canPublish, isTrue);
     final coordinates = d.geometry['coordinates'][0] as List;
     expect(coordinates.length, 4);
     expect(coordinates.first, coordinates.last);
-    final reopened = GeometryDraft([a, b, c, a], polygon: true);
-    expect(reopened.points, [a, b, c]);
-  });
-  test('curves preserve segment endpoints and can be undone', () {
-    final d = GeometryDraft([a, b]);
-    d.checkpoint();
-    d.curve(0, c);
-    expect(d.points.first, a);
-    expect(d.points.last, b);
-    expect(d.points.length, 13);
-    expect(d.points[6].latitude, greaterThan(a.latitude));
+    expect(AreaDraft(corners: [a, b, c, a]).corners, [a, b, c]);
     d.undo();
-    expect(d.points, [a, b]);
+    expect(d.corners, [a, b]);
   });
+
   test(
-    'closing polygon segment can be curved without changing first vertex',
-    () {
-      final d = GeometryDraft([a, b, c], polygon: true);
-      d.curve(2, const LatLng(34.851, -82.4));
-      expect(d.points.first, a);
-      expect(d.geometry['coordinates'][0].last, [-82.4, 34.85]);
-      expect(d.points.length, 14);
+    'a waypoint leg falls back to a straight line when routing fails',
+    () async {
+      final fake = _ThrowingApi();
+      api = fake;
+      final d = RouteDraft();
+      expect(await d.add(a), isFalse); // first tap only places the start
+      expect(await d.add(b), isTrue);
+      expect(fake.calls, 1);
+      expect(d.line, [a, b]);
+      d.undo();
+      expect(d.waypoints, [a]);
+      expect(d.line, [a]);
     },
   );
-  test('freehand simplifies collinear samples while retaining endpoints', () {
+
+  test(
+    'routed legs append the router path; straight toggle skips it',
+    () async {
+      final fake = _RoutingApi();
+      api = fake;
+      final d = RouteDraft();
+      await d.add(a);
+      expect(await d.add(c), isFalse);
+      expect(d.line, [a, const LatLng(34.851, -82.4), c]);
+      await d.add(b, straight: true);
+      expect(fake.calls, 1);
+      expect(d.line.last, b);
+      expect(d.line.length, 4); // shared waypoint not repeated
+    },
+  );
+
+  test('seeding an existing line makes straight legs through its vertices', () {
+    final d = RouteDraft.seeded([a, b, c], replaces: 'x');
+    expect(d.waypoints, [a, b, c]);
+    expect(d.line, [a, b, c]);
+    expect(d.replaces, 'x');
+  });
+
+  test('RDP simplifies collinear samples while retaining endpoints', () {
     final pts = List.generate(100, (i) => LatLng(34.85, -82.4 + i * .00001));
-    final reduced = simplifyStroke(pts, 1.5);
-    expect(reduced, [pts.first, pts.last]);
-    final d = GeometryDraft([b]);
-    d.addStroke(pts, fromStart: true);
-    expect(d.points, [pts.last, pts.first, b]);
-  });
-  test('joining freehand strokes does not duplicate endpoint handles', () {
-    final d = GeometryDraft([a, b]);
-    d.addStroke([b, c]);
-    expect(d.points, [a, b, c]);
-    d.addStroke([a, c], fromStart: true);
-    expect(d.points, [c, a, b, c]);
-  });
-  test('freehand preserves a meaningful bend', () {
+    expect(simplifyStroke(pts, 1.5), [pts.first, pts.last]);
     expect(simplifyStroke([a, b, c], 1.5), [a, b, c]);
-  });
-  test('limit rejection does not truncate or mutate a path', () {
-    final d = GeometryDraft(List.filled(200, a));
-    expect(() => d.addStroke([b, c]), throwsStateError);
-    expect(d.points.length, 200);
-    expect(d.points.last, a);
-    expect(() => d.insert(1, b), throwsStateError);
   });
 }

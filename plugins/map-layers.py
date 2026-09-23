@@ -35,7 +35,7 @@ from meerschaum.actions import make_action
 from meerschaum.plugins import api_plugin
 from meerschaum.utils.warnings import info, warn
 
-__version__ = '0.20.1'
+__version__ = '0.21.0'
 # Freeze at import: a deployment may replace this file while a refresh runs.
 _ROUTER_CODE_DIGEST = __import__('hashlib').sha256(
     __import__('pathlib').Path(__file__).read_bytes()
@@ -1329,11 +1329,19 @@ def _open_report_points() -> list[tuple[float, float]]:
         warn(f"Community reports unavailable for routing: {e}")
     try:
         conn = mrsm.get_connector('sql:bwg')
-        df = conn.read(
+        query = (
             'SELECT r."lat", r."lon", r."category" FROM "WalkAudit"."reports" r '
             'WHERE r."id" NOT IN (SELECT "report_id" FROM "WalkAudit"."report_edits" '
             "WHERE \"action\" = 'dismiss')"
         )
+        # Held (moderation) reports must not shape routes. The `status` column
+        # arrives with walk-audit 0.4.0; fall back for a DB that predates it.
+        try:
+            df = conn.read(query + " AND r.\"status\" IS DISTINCT FROM 'held'", silent=True)
+        except Exception:
+            df = None
+        if df is None:
+            df = conn.read(query)
         if df is not None:
             for r in df.to_dict(orient='records'):
                 if r.get('category') in REPORT_CATEGORIES and r.get('lat') is not None:
@@ -1632,7 +1640,9 @@ def _osm_path_rows(debug: bool = False) -> list[tuple[list, str, str | None, boo
 # Transit tuning: how far someone will walk to/from a stop, how close a stop
 # must sit to its route shape to count as "on" it, minimum useful ride, an
 # average in-service bus speed, and a flat wait estimate (no stop_times yet).
-TRANSIT_WALK_MAX_M = 1500.0
+#: Both reach radii are defaults; `plugins:map-layers:transit:{walk_max_m,
+#: bike_max_m}` in Meerschaum config overrides them at request time.
+TRANSIT_WALK_MAX_M = 2000.0
 TRANSIT_STOP_SNAP_M = 100.0
 TRANSIT_MIN_RIDE_M = 250.0
 TRANSIT_BUS_SPEED_M_S = 6.5
@@ -1640,6 +1650,19 @@ TRANSIT_WAIT_MIN = 8.0
 #: Greenlink buses carry front-load racks, so a bike widens the catchment
 #: around a stop a long way past walking distance.
 TRANSIT_BIKE_MAX_M = 5000.0
+
+
+def _transit_reach_m(access_mode: str) -> float:
+    """How far (m) a rider will go to/from a stop: config, else the default."""
+    bike = _base_mode(access_mode) == 'bike'
+    key, default = ('bike_max_m', TRANSIT_BIKE_MAX_M) if bike else ('walk_max_m', TRANSIT_WALK_MAX_M)
+    try:
+        value = float(mrsm.get_config(
+            'plugins', 'map-layers', 'transit', key, warn=False, write_missing=False,
+        ))
+    except Exception:
+        return default
+    return value if math.isfinite(value) and value > 0 else default
 
 #: With several modes selected, the combined (transit) itinerary is preferred
 #: over the fastest single-mode plan as long as it isn't slower than this
@@ -3865,10 +3888,7 @@ def _route_transit(
     stops, shapes = data['stops'], data['shapes']
     if not stops or not shapes:
         raise ValueError("Transit network is unavailable.")
-    access_max_m = (
-        TRANSIT_BIKE_MAX_M if _base_mode(access_mode) == 'bike'
-        else TRANSIT_WALK_MAX_M
-    )
+    access_max_m = _transit_reach_m(access_mode)
     access_speed = MODE_SPEED_M_S.get(access_mode, MODE_SPEED_M_S['walk'])
 
     def _near(lat, lon):
@@ -3894,7 +3914,11 @@ def _route_transit(
     near_to = _near(to_lat, to_lon)
     if not near_from or not near_to:
         reach = 'biking' if _base_mode(access_mode) == 'bike' else 'walking'
-        raise ValueError(f"No bus stops within {reach} distance.")
+        end = 'start' if not near_from else 'destination'
+        raise ValueError(
+            f"No bus stops within {_format_mi(access_max_m)} "
+            f"({access_max_m / 1000:g} km) {reach} distance of your {end}."
+        )
 
     shapes_by_route: dict[str, list] = {}
     for sh in shapes:
@@ -4581,13 +4605,25 @@ COMMUNITY_PIPE = mrsm.Pipe(
         'dtypes': {'id': 'string', 'ts': 'datetime', 'category': 'string',
                    'name': 'string', 'comment': 'string', 'geometry_json': 'string',
                    'reverts': 'string', 'replaces': 'string', 'photo_filename': 'string', 'lat': 'float', 'lon': 'float',
-                   # 'confirm' rows: `confirms` = the contribution id, `voter` = an
-                   # opaque per-install token (never published; dedupes votes).
-                   'confirms': 'string', 'voter': 'string'},
+                   # Legacy 'confirm' rows: `confirms` = the contribution id,
+                   # `voter` = an opaque per-install token (never published).
+                   'confirms': 'string', 'voter': 'string',
+                   # v0.21.0: `username` = the signed-in author/voter/moderator
+                   # (an email — NEVER published). 'vote' rows: `confirms` =
+                   # target, `vote` = up|down|null (null = vote withdrawn).
+                   # `status` = held|null on contributions; `photo_status` =
+                   # pending|approved|rejected. 'moderate' rows (admins) set
+                   # a target's `status`/`photo_status` without rewriting it.
+                   'username': 'string', 'vote': 'string', 'status': 'string',
+                   'photo_status': 'string'},
     },
 )
 _COMMUNITY_CACHE = {'at': 0.0, 'rows': []}
 _COMMUNITY_LOCK = threading.Lock()
+#: Revision categories that are not contributions themselves.
+_META_CATEGORIES = ('confirm', 'vote', 'moderate')
+_COMMUNITY_COLUMNS = ('confirms', 'voter', 'username', 'vote', 'status', 'photo_status', 'photo_filename')
+PHOTO_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.webp')
 
 
 def _community_rows():
@@ -4595,21 +4631,95 @@ def _community_rows():
         return _COMMUNITY_CACHE['rows']
     if not COMMUNITY_PIPE.exists():
         return []
-    # SELECT *: the confirm columns only exist once the first vote lands.
+    # SELECT *: newer columns only exist once the first row using them lands.
     df = COMMUNITY_PIPE.instance_connector.read(
         'SELECT * FROM "MapLayers"."community_revisions" ORDER BY "ts", "id"'
     )
     if df is None:
         raise RuntimeError('Community history could not be read.')
-    df = df.drop(columns=['photo_filename'], errors='ignore')
-    for col in ('confirms', 'voter'):
+    for col in _COMMUNITY_COLUMNS:
         if col not in df.columns:
             df[col] = None
     # astype(object) first: on a float/all-null column `where` keeps NaN, which
     # is not JSON — the history endpoint 500'd on an all-null 'replaces'.
     rows = df.astype(object).where(df.notna(), None).to_dict(orient='records')
+    # Photos are hidden until approved: rows from before moderation are pending.
+    for r in rows:
+        if r.get('photo_filename') and not r.get('photo_status'):
+            r['photo_status'] = 'pending'
+    # Moderator decisions apply in order on top of the original revision.
+    by_id = {r['id']: r for r in rows}
+    for r in rows:
+        target = by_id.get(r.get('confirms')) if r.get('category') == 'moderate' else None
+        if target is not None:
+            if r.get('status'):
+                target['status'] = None if r['status'] == 'published' else r['status']
+            if r.get('photo_status') and target.get('photo_filename'):
+                target['photo_status'] = r['photo_status']
     _COMMUNITY_CACHE.update(at=time.time(), rows=rows)
     return rows
+
+
+def _auth():
+    """The shared `bwg-auth` plugin module (bwg_user / require_user /
+    moderation_check). Same module object the API mounted, so its in-process
+    counters are shared; tests and CLI runs fall back to the sibling file."""
+    global _BWG_AUTH
+    if _BWG_AUTH is None:
+        module = mrsm.Plugin('bwg-auth').module
+        if module is None:
+            import importlib.util
+            from pathlib import Path
+            spec = importlib.util.spec_from_file_location(
+                'bwg_auth', Path(__file__).resolve().parent / 'bwg-auth.py')
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        _BWG_AUTH = module
+    return _BWG_AUTH
+
+
+_BWG_AUTH = None
+
+
+def _photo_url(r) -> str | None:
+    """Public photo URL — only once a moderator approved it."""
+    if r.get('photo_filename') and r.get('photo_status') == 'approved':
+        return f"/map-layers/photos/{r['photo_filename']}"
+    return None
+
+
+def moderate_contributions(ids, *, username: str, status: str | None = None,
+                           photo_status: str | None = None) -> mrsm.SuccessTuple:
+    """Record an admin decision on contributions (the moderation console and
+    `POST /map-layers/community/moderate` both call this).
+
+    `status`: 'published' approves held text, 'rejected' hides it for good,
+    'held' takes it back off the map for review.
+    `photo_status`: 'approved' | 'rejected' | 'pending'.
+    """
+    import json
+    import uuid
+    if status not in (None, 'published', 'rejected', 'held') or photo_status not in (None, 'approved', 'rejected', 'pending'):
+        return False, 'Unknown moderation decision.'
+    if not status and not photo_status:
+        return False, 'Nothing to change.'
+    with _COMMUNITY_LOCK:
+        _COMMUNITY_CACHE['at'] = 0.0
+        by_id = {r['id']: r for r in _community_rows() if r.get('category') not in _META_CATEGORIES}
+        targets = [by_id[i] for i in dict.fromkeys(ids) if i in by_id]
+        if not targets:
+            return False, 'No such contribution.'
+        success, msg = COMMUNITY_PIPE.sync([{
+            'id': uuid.uuid4().hex, 'category': 'moderate', 'name': t.get('name'),
+            'comment': None, 'reverts': None, 'replaces': None, 'confirms': t['id'],
+            'username': username, 'status': status, 'photo_status': photo_status,
+            'geometry_json': json.dumps({'type': 'Point', 'coordinates': [t['lon'], t['lat']]}),
+            'lat': t['lat'], 'lon': t['lon'],
+        } for t in targets])
+    if not success:
+        return False, msg
+    _community_changed()
+    return True, f'Updated {len(targets)} contribution(s).'
 
 
 
@@ -4627,27 +4737,45 @@ def _fmt_et(ts) -> str:
 def _active_community(rows=None):
     rows = _community_rows() if rows is None else rows
     reverted = {r['reverts'] for r in rows if r.get('reverts')}
+    # Held (awaiting a moderator) and rejected text is not on the map, and a
+    # held edit does not hide the version it would replace.
     versions = [r for r in rows if not r.get('reverts') and r['id'] not in reverted
-                and r.get('category') != 'confirm']
+                and r.get('category') not in _META_CATEGORIES
+                and r.get('status') not in ('held', 'rejected')]
     replaced = {r['replaces'] for r in versions if r.get('replaces')}
     return [r for r in versions if r['id'] not in replaced]
 
 
-def _confirmation_counts(rows=None) -> dict[str, int]:
-    """Contribution id -> number of "I rode this, it exists" votes."""
-    from collections import Counter
+def _votes(rows=None) -> tuple[dict[str, dict[str, int]], dict[tuple[str, str], str]]:
+    """({contribution id: {'up', 'down'}}, {(username, id): 'up'|'down'}).
+
+    A user's latest 'vote' row wins (null withdraws it). Legacy anonymous
+    'confirm' rows (one per install) count as up votes.
+    """
     rows = _community_rows() if rows is None else rows
-    return Counter(r['confirms'] for r in rows if r.get('category') == 'confirm' and r.get('confirms'))
+    mine: dict[tuple[str, str], str | None] = {}
+    counts: dict[str, dict[str, int]] = {}
+    for r in rows:
+        if r.get('category') == 'confirm' and r.get('confirms'):
+            counts.setdefault(r['confirms'], {'up': 0, 'down': 0})['up'] += 1
+        elif r.get('category') == 'vote' and r.get('confirms') and r.get('username'):
+            mine[(r['username'], r['confirms'])] = r.get('vote')
+    for (_, target), vote in mine.items():
+        if vote in ('up', 'down'):
+            counts.setdefault(target, {'up': 0, 'down': 0})[vote] += 1
+    return counts, {k: v for k, v in mine.items() if v in ('up', 'down')}
 
 
 def _build_community_layer(debug=False):
     import json
     rows = _community_rows()
-    counts = _confirmation_counts(rows)
+    counts, _ = _votes(rows)
     return json.dumps({'type': 'FeatureCollection', 'features': [
         {'type': 'Feature', 'geometry': json.loads(r['geometry_json']),
          'properties': {**{k: r.get(k) for k in ('id', 'name', 'comment', 'category')},
-                        'confirmations': counts.get(r['id'], 0)}}
+                        'upvotes': counts.get(r['id'], {}).get('up', 0),
+                        'downvotes': counts.get(r['id'], {}).get('down', 0),
+                        'photo_url': _photo_url(r)}}
         for r in _active_community(rows)
     ]})
 
@@ -4710,19 +4838,22 @@ SUBMISSION_CATEGORIES = (
     'other',
 )
 
-#: Cheap abuse guards for the anonymous submission endpoint: an in-process
-#: per-IP sliding window and a hard cap on the streamed photo. Not real
+#: Cheap abuse guards for the submission endpoints: an in-process per-user
+#: sliding window and a hard cap on the streamed photo. Not real
 #: DoS protection (that's the reverse proxy's job) but enough that one script
 #: kiddie can't fill the disk or the table overnight.
 SUBMIT_MAX_PER_HOUR = 10
+#: Votes / confirms get their own, larger per-user budget.
+VOTE_MAX_PER_HOUR = 120
+FEEDBACK_MAX_PER_HOUR = 10
 SUBMIT_MAX_PHOTO_BYTES = 8 * 1024 * 1024
 _SUBMIT_HITS: dict[str, list[float]] = {}
 _SUBMIT_HITS_LOCK = threading.Lock()
 
 
-def _submit_rate_limited(ip: str | None) -> bool:
-    """True when this client has used up its hourly submissions."""
-    key = ip or 'unknown'
+def _submit_rate_limited(key: str | None) -> bool:
+    """True when this user has used up their hourly submissions/rollbacks."""
+    key = key or 'unknown'
     now = time.time()
     with _SUBMIT_HITS_LOCK:
         hits = [t for t in _SUBMIT_HITS.get(key, []) if now - t < 3600]
@@ -4757,9 +4888,90 @@ FEEDBACK_PIPE: mrsm.Pipe = mrsm.Pipe(
             'photo_filename': 'string',
             'ip': 'string',
             'user_agent': 'string',
+            'username': 'string',
         },
     },
 )
+
+# Signed-in riders' saved routes (private; synced across their devices).
+SAVED_ROUTES_PIPE = mrsm.Pipe(
+    'app', 'saved_routes', 'BwgApp', instance='sql:bwg',
+    parameters={
+        'autotime': True, 'schema': 'BwgApp', 'target': 'saved_routes',
+        'columns': {'datetime': 'created', 'id': 'id'},
+        'dtypes': {'id': 'string', 'created': 'datetime', 'username': 'string',
+                   'name': 'string', 'from_lat': 'float', 'from_lon': 'float',
+                   'to_lat': 'float', 'to_lon': 'float', 'modes': 'string',
+                   'stress': 'string', 'distance_m': 'float', 'duration_min': 'float',
+                   'geometry': 'string'},
+    },
+)
+SAVED_ROUTES_MAX = 200
+SAVED_ROUTE_MAX_COORDS = 10000
+
+
+def _saved_routes(username: str) -> list[dict]:
+    import json
+    if not SAVED_ROUTES_PIPE.exists():
+        return []
+    df = SAVED_ROUTES_PIPE.get_data(params={'username': username})
+    if df is None:
+        raise RuntimeError('Saved routes could not be read.')
+    rows = df.astype(object).where(df.notna(), None).to_dict(orient='records')
+    rows.sort(key=lambda r: str(r.get('created')), reverse=True)
+    return [
+        {**{k: r.get(k) for k in ('id', 'name', 'from_lat', 'from_lon', 'to_lat', 'to_lon',
+                                  'modes', 'stress', 'distance_m', 'duration_min')},
+         'created': str(r.get('created')),
+         'geometry': json.loads(r['geometry']) if r.get('geometry') else None}
+        for r in rows
+    ]
+
+
+def _validate_saved_route(body) -> dict:
+    """Trust boundary for POST /bwg/routes; raises ValueError."""
+    import json
+    if not isinstance(body, dict):
+        raise ValueError('Expected a JSON object.')
+    name = ' '.join(str(body.get('name') or '').split())
+    if not 1 <= len(name) <= 80:
+        raise ValueError('Name the route (up to 80 characters).')
+    minlon, minlat, maxlon, maxlat = SEARCH_BOUNDS
+    out: dict[str, Any] = {'name': name}
+    for key, lo, hi in (('from_lat', minlat, maxlat), ('from_lon', minlon, maxlon),
+                        ('to_lat', minlat, maxlat), ('to_lon', minlon, maxlon)):
+        v = body.get(key)
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not lo <= v <= hi:
+            raise ValueError('Start and destination must be within the Greenville service area.')
+        out[key] = float(v)
+    modes = [m.strip() for m in str(body.get('modes') or 'bike').split(',') if m.strip()]
+    if not modes or any(m not in ('bike', 'walk', 'roll', 'transit', 'ebike', 'bcycle') for m in modes):
+        raise ValueError('Expected modes from bike, walk, roll, transit.')
+    out['modes'] = ','.join(dict.fromkeys(modes))
+    stress = body.get('stress') or None
+    if stress is not None and stress not in STRESS_LEVELS:
+        raise ValueError(f"Expected stress from {', '.join(STRESS_LEVELS)}.")
+    out['stress'] = stress
+    for key in ('distance_m', 'duration_min'):
+        v = body.get(key)
+        if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float))
+                              or not math.isfinite(v) or v < 0):
+            raise ValueError(f'{key} must be a non-negative number.')
+        out[key] = None if v is None else float(v)
+    geom = body.get('geometry')
+    if isinstance(geom, dict) and geom.get('type') == 'Feature':
+        geom = geom.get('geometry')
+    if geom is not None:
+        coords = geom.get('coordinates') if isinstance(geom, dict) else None
+        if (geom.get('type') if isinstance(geom, dict) else None) != 'LineString' \
+                or not isinstance(coords, list) or not 2 <= len(coords) <= SAVED_ROUTE_MAX_COORDS \
+                or any(not isinstance(p, list) or len(p) < 2
+                       or any(isinstance(c, bool) or not isinstance(c, (int, float)) or not math.isfinite(c)
+                              for c in p[:2]) for p in coords):
+            raise ValueError('geometry must be a GeoJSON LineString.')
+        geom = json.dumps({'type': 'LineString', 'coordinates': [p[:2] for p in coords]})
+    out['geometry'] = geom
+    return out
 
 
 def _photos_dir():
@@ -4826,9 +5038,8 @@ def export_map_layers(debug: bool = False, **kwargs) -> mrsm.SuccessTuple:
 def init_app(app):
     """Register the map-layers HTTP routes on the Meerschaum API app."""
     import uuid
-    import shutil
     from pathlib import Path
-    from fastapi import Form, File, UploadFile, Request, Query
+    from fastapi import Form, File, HTTPException, UploadFile, Request, Query
     from fastapi.responses import JSONResponse, FileResponse, Response
     from starlette.middleware.gzip import GZipMiddleware
 
@@ -4847,6 +5058,14 @@ def init_app(app):
         except Exception as e:
             warn(f"Routing warm-up failed: {e}")
     threading.Thread(target=_warm_routing, daemon=True).start()
+
+    def _signed_in(request, write: bool = True):
+        """(user, None) for a signed-in rider, else (None, 401/403 response)."""
+        from fastapi import HTTPException
+        try:
+            return _auth().require_user(request, write=write), None
+        except HTTPException as e:
+            return None, JSONResponse({'error': e.detail}, status_code=e.status_code)
 
     @app.get('/map-layers/index.json')
     def map_layers_index():
@@ -5006,7 +5225,11 @@ def init_app(app):
         replaces: str = Form(''),
     ):
         """A missing point on the map (bike rack, repair station...), submitted
-        by a rider. Anonymous, immediately public, and reversible through history."""
+        by a signed-in rider. Public right away (unless the text is held for a
+        moderator), reversible through history; photos wait for approval."""
+        user, denied = _signed_in(request)
+        if denied:
+            return denied
         category = (category or '').strip().lower()
         if category not in SUBMISSION_CATEGORIES:
             return JSONResponse(
@@ -5025,8 +5248,7 @@ def init_app(app):
                 {'error': 'Give the spot a name or a short description.'},
                 status_code=400,
             )
-        client = request.client
-        if _submit_rate_limited(client.host if client else None):
+        if _submit_rate_limited(user['username']):
             return JSONResponse(
                 {'error': 'Too many submissions — please try again later.'},
                 status_code=429,
@@ -5034,7 +5256,10 @@ def init_app(app):
         rec_id = uuid.uuid4().hex
         photo_filename = None
         if photo is not None and photo.filename:
-            ext = Path(photo.filename).suffix or '.jpg'
+            try:
+                ext = _auth().validate_image(photo)
+            except HTTPException as e:
+                return JSONResponse({'error': e.detail}, status_code=e.status_code)
             photo_filename = f'{rec_id}{ext}'
             photo_path = _photos_dir() / photo_filename
             written = 0
@@ -5058,8 +5283,9 @@ def init_app(app):
             if photo_filename:
                 (_photos_dir() / photo_filename).unlink(missing_ok=True)
             return JSONResponse({'error': str(e)}, status_code=400)
-        # Public revision excludes IP, user-agent and uploaded photo metadata.
+        # Public revision excludes IP, user-agent, username and unapproved photos.
         import json
+        held = _auth().moderation_check(f'{name}\n{comment}', username=user['username']) == 'held'
         with _COMMUNITY_LOCK:
             _COMMUNITY_CACHE['at'] = 0.0
             if replaces and not any(r['id'] == replaces for r in _active_community()):
@@ -5070,57 +5296,63 @@ def init_app(app):
                 'lat': lat, 'lon': lon, 'geometry_json': json.dumps(geom),
                 'reverts': None, 'replaces': replaces or None,
                 'photo_filename': photo_filename,
+                'photo_status': 'pending' if photo_filename else None,
+                'status': 'held' if held else None,
+                'username': user['username'],
             }])
         if not success:
             if photo_filename:
                 (_photos_dir() / photo_filename).unlink(missing_ok=True)
             return JSONResponse({'error': 'Could not save the contribution. Please retry.'}, status_code=503)
         _community_changed()
-        return JSONResponse({'ok': True, 'id': rec_id, 'status': 'published'})
+        return JSONResponse({'ok': True, 'id': rec_id, 'status': 'held' if held else 'published',
+                             'photo_status': 'pending' if photo_filename else None})
 
     @app.get('/map-layers/community/history')
-    def community_history():
+    def community_history(request: Request):
+        """Public edit history. Held/rejected text, votes and moderation rows
+        stay out; `mine` marks the caller's own revisions when signed in."""
         import json
         rows = _community_rows()
         active = {r['id'] for r in _active_community(rows)}
+        me = _auth().bwg_user(request)
+        me = me['username'] if me else None
         return {'revisions': [
             {**{k: str(r[k]) if k == 'ts' else r.get(k)
                 for k in ('id', 'ts', 'category', 'name', 'comment', 'reverts', 'replaces')},
              'ts_display': _fmt_et(r['ts']),
              'type': 'confirm' if r.get('category') == 'confirm' else 'rollback' if r.get('reverts') else 'edit' if r.get('replaces') else 'add',
              'geometry': json.loads(r['geometry_json']) if r.get('geometry_json') else None,
+             'photo_url': _photo_url(r),
+             'mine': bool(me and r.get('username') == me),
              'active': r['id'] in active}
             for r in reversed(rows)
+            if r.get('category') not in ('vote', 'moderate')
+            and r.get('status') not in ('held', 'rejected')
         ]}
 
-    @app.post('/map-layers/community/confirm')
-    async def community_confirm(request: Request):
-        """"I rode this, it exists" — one vote per install per contribution.
-        Public, append-only, shown as a count on the feature."""
+    def _record_vote(request, user, target: str, up: bool, toggle: bool = True):
+        """Shared by /community/vote and the /community/confirm alias."""
         import json
-        try:
-            body = await request.json()
-            target = str(body.get('id') or '')
-            voter = str(body.get('voter') or '')
-        except Exception:
-            return JSONResponse({'error': 'Expected JSON with id and voter.'}, status_code=400)
-        if not target or not (8 <= len(voter) <= 64) or not voter.isalnum():
-            return JSONResponse({'error': 'Expected JSON with id and voter.'}, status_code=400)
-        client = request.client
-        if _submit_rate_limited(client.host if client else None):
-            return JSONResponse({'error': 'Too many submissions — please try again later.'}, status_code=429)
+        if _auth().rate_limited('community-vote', user['username'], VOTE_MAX_PER_HOUR):
+            return JSONResponse({'error': 'Too many votes — please try again later.'}, status_code=429)
+        wanted = 'up' if up else 'down'
         with _COMMUNITY_LOCK:
             _COMMUNITY_CACHE['at'] = 0.0
             rows = _community_rows()
             current = next((r for r in _active_community(rows) if r['id'] == target), None)
             if current is None:
                 return JSONResponse({'error': 'This contribution is gone or was rolled back.'}, status_code=409)
-            if any(r.get('category') == 'confirm' and r.get('confirms') == target and r.get('voter') == voter for r in rows):
+            _, mine = _votes(rows)
+            before = mine.get((user['username'], target))
+            if before == wanted and not toggle:
                 return JSONResponse({'error': 'You already confirmed this one.'}, status_code=409)
+            # Same vote again withdraws it; the other one flips it.
+            after = None if before == wanted else wanted
             success, _ = COMMUNITY_PIPE.sync([{
-                'id': uuid.uuid4().hex, 'category': 'confirm',
+                'id': uuid.uuid4().hex, 'category': 'vote',
                 'name': current.get('name'), 'comment': None, 'reverts': None, 'replaces': None,
-                'confirms': target, 'voter': voter,
+                'confirms': target, 'vote': after, 'username': user['username'],
                 'geometry_json': json.dumps({'type': 'Point', 'coordinates': [current['lon'], current['lat']]}),
                 'lat': current['lat'], 'lon': current['lon'],
             }])
@@ -5128,12 +5360,136 @@ def init_app(app):
             return JSONResponse({'error': 'Vote was not saved. Please retry.'}, status_code=503)
         _COMMUNITY_CACHE['at'] = 0.0
         _CACHE.pop('community', None)
-        return {'ok': True, 'confirmations': _confirmation_counts().get(target, 0)}
+        counts, _ = _votes()
+        count = counts.get(target, {'up': 0, 'down': 0})
+        return {'ok': True, 'up': count['up'], 'down': count['down'], 'mine': after,
+                'confirmations': count['up']}
+
+    async def _vote_body(request):
+        try:
+            body = await request.json()
+            return str(body.get('id') or ''), body
+        except Exception:
+            return '', {}
+
+    @app.post('/map-layers/community/vote')
+    async def community_vote(request: Request):
+        """`{id, up: bool}` -> `{up, down, mine}`. One vote per rider per
+        contribution: repeating it withdraws it, the other one flips it."""
+        user, denied = _signed_in(request)
+        if denied:
+            return denied
+        target, body = await _vote_body(request)
+        if not target or not isinstance(body.get('up'), bool):
+            return JSONResponse({'error': 'Expected JSON with id and up (true/false).'}, status_code=400)
+        return _record_vote(request, user, target, body['up'])
+
+    @app.post('/map-layers/community/confirm')
+    async def community_confirm(request: Request):
+        """Legacy "I rode this, it exists": an up vote (409 if already up)."""
+        user, denied = _signed_in(request)
+        if denied:
+            return denied
+        target, _ = await _vote_body(request)
+        if not target:
+            return JSONResponse({'error': 'Expected JSON with id.'}, status_code=400)
+        return _record_vote(request, user, target, True, toggle=False)
+
+    @app.post('/map-layers/community/moderate')
+    async def community_moderate(request: Request):
+        """Admins: `{id | ids, status?: published|rejected|held, photo_status?:
+        approved|rejected|pending}`."""
+        user, denied = _signed_in(request)
+        if denied:
+            return denied
+        if not user['is_admin']:
+            return JSONResponse({'error': 'Moderators only.'}, status_code=403)
+        try:
+            body = await request.json()
+            ids = [str(x) for x in (body.get('ids') or []) if x] or [str(body.get('id') or '')]
+            ids = [i for i in ids if i][:200]
+        except Exception:
+            return JSONResponse({'error': 'Expected JSON with id or ids.'}, status_code=400)
+        success, msg = moderate_contributions(
+            ids, username=user['username'],
+            status=body.get('status'), photo_status=body.get('photo_status'),
+        )
+        if not success:
+            return JSONResponse({'error': msg}, status_code=400)
+        return {'ok': True, 'message': msg}
+
+    @app.get('/map-layers/photos/{filename}')
+    def community_photo(filename: str):
+        """An approved contribution photo; 404 for anything else."""
+        row = next((r for r in _community_rows()
+                    if r.get('category') not in _META_CATEGORIES
+                    and r.get('photo_filename') == filename
+                    and r.get('photo_status') == 'approved'), None)
+        path = _photos_dir() / filename
+        if (row is None or Path(filename).name != filename
+                or Path(filename).suffix.lower() not in PHOTO_EXTENSIONS or not path.is_file()):
+            return JSONResponse({'error': 'Photo not found.'}, status_code=404)
+        return FileResponse(path, headers={'Cache-Control': 'public, max-age=86400',
+                                           'X-Content-Type-Options': 'nosniff'})
+
+    @app.get('/bwg/routes')
+    def saved_routes_list(request: Request):
+        user, denied = _signed_in(request, write=False)
+        if denied:
+            return denied
+        try:
+            return {'routes': _saved_routes(user['username'])}
+        except RuntimeError as e:
+            return JSONResponse({'error': str(e)}, status_code=503)
+
+    @app.post('/bwg/routes')
+    async def saved_routes_add(request: Request):
+        user, denied = _signed_in(request)
+        if denied:
+            return denied
+        if len(await request.body()) > 600_000:
+            return JSONResponse({'error': 'Route is too large.'}, status_code=413)
+        try:
+            route = _validate_saved_route(await request.json())
+        except ValueError as e:
+            return JSONResponse({'error': str(e)}, status_code=400)
+        except Exception:
+            return JSONResponse({'error': 'Expected a JSON object.'}, status_code=400)
+        try:
+            if len(_saved_routes(user['username'])) >= SAVED_ROUTES_MAX:
+                return JSONResponse({'error': f'You can save up to {SAVED_ROUTES_MAX} routes. Delete one first.'}, status_code=409)
+        except RuntimeError as e:
+            return JSONResponse({'error': str(e)}, status_code=503)
+        rec_id = uuid.uuid4().hex
+        success, _ = SAVED_ROUTES_PIPE.sync([{'id': rec_id, 'username': user['username'], **route}])
+        if not success:
+            return JSONResponse({'error': 'Route was not saved. Please retry.'}, status_code=503)
+        saved = next((r for r in _saved_routes(user['username']) if r['id'] == rec_id), None)
+        return saved or {'id': rec_id, **route}
+
+    @app.delete('/bwg/routes/{route_id}')
+    def saved_routes_delete(route_id: str, request: Request):
+        user, denied = _signed_in(request)
+        if denied:
+            return denied
+        try:
+            if not any(r['id'] == route_id for r in _saved_routes(user['username'])):
+                return JSONResponse({'error': 'Saved route not found.'}, status_code=404)
+        except RuntimeError as e:
+            return JSONResponse({'error': str(e)}, status_code=503)
+        success, _ = SAVED_ROUTES_PIPE.clear(params={'id': route_id, 'username': user['username']})
+        if not success:
+            return JSONResponse({'error': 'Route was not deleted. Please retry.'}, status_code=503)
+        return {'ok': True}
 
     @app.post('/map-layers/community/rollback')
     async def community_rollback(request: Request):
+        """Remove contributions. Riders may remove their own; admins anything."""
         import json
-        if _submit_rate_limited(request.client.host if request.client else None):
+        user, denied = _signed_in(request)
+        if denied:
+            return denied
+        if _submit_rate_limited(user['username']):
             return JSONResponse({'error': 'Too many changes. Please try later.'}, status_code=429)
         if len(await request.body()) > 4096:
             return JSONResponse({'error': 'Request too large.'}, status_code=413)
@@ -5157,19 +5513,27 @@ def init_app(app):
             skipped = [i for i in ids if i not in active]
             if len(skipped) == len(ids):
                 return JSONResponse({'error': 'This contribution is already rolled back or does not exist.'}, status_code=409)
+            if not user['is_admin'] and any(
+                by_id[i].get('username') != user['username'] for i in ids if i in active
+            ):
+                return JSONResponse({'error': 'You can only remove your own contributions.'}, status_code=403)
             # Removing a contribution takes the WHOLE thing off the map: every
             # earlier version in its `replaces` chain is reverted too, so an
             # edit's predecessor never resurfaces (that "peel one layer" behaviour
             # is why only the newest edit ever seemed removable).
+            # A rider undoing their own edit takes back only their versions;
+            # someone else's earlier version resurfaces (admins take it all).
             targets: list[str] = []
             for i in ids:
                 cur = i if i in active else None
-                while cur and cur in by_id and cur not in reverted and cur not in targets:
+                while (cur and cur in by_id and cur not in reverted and cur not in targets
+                       and (user['is_admin'] or by_id[cur].get('username') == user['username'])):
                     targets.append(cur)
                     cur = by_id[cur].get('replaces')
             success, _ = COMMUNITY_PIPE.sync([{
                 'id': uuid.uuid4().hex, 'category': 'rollback',
                 'name': by_id[t].get('name'), 'comment': reason, 'reverts': t, 'replaces': None,
+                'username': user['username'],
                 'geometry_json': json.dumps({'type': 'Point', 'coordinates': [by_id[t]['lon'], by_id[t]['lat']]}),
                 'lat': by_id[t]['lat'], 'lon': by_id[t]['lon'],
             } for t in targets])
@@ -5467,13 +5831,30 @@ def init_app(app):
         feedback: str = Form(''),
         photo: UploadFile = File(None),
     ):
+        user, denied = _signed_in(request)
+        if denied:
+            return denied
+        if _auth().rate_limited('layer-feedback', user['username'], FEEDBACK_MAX_PER_HOUR):
+            return JSONResponse({'error': 'Too many submissions — please try again later.'}, status_code=429)
         rec_id = uuid.uuid4().hex
         photo_filename = None
         if photo is not None and photo.filename:
-            ext = Path(photo.filename).suffix or '.jpg'
+            try:
+                ext = _auth().validate_image(photo)
+            except HTTPException as e:
+                return JSONResponse({'error': e.detail}, status_code=e.status_code)
             photo_filename = f'{rec_id}{ext}'
-            with open(_photos_dir() / photo_filename, 'wb') as out:
-                shutil.copyfileobj(photo.file, out)
+            photo_path = _photos_dir() / photo_filename
+            written = 0
+            with open(photo_path, 'wb') as out:
+                while chunk := photo.file.read(256 * 1024):
+                    written += len(chunk)
+                    if written > SUBMIT_MAX_PHOTO_BYTES:
+                        break
+                    out.write(chunk)
+            if written > SUBMIT_MAX_PHOTO_BYTES:
+                photo_path.unlink(missing_ok=True)
+                return JSONResponse({'error': 'Photo is too large (8 MB max).'}, status_code=413)
 
         client = request.client
         FEEDBACK_PIPE.sync(
@@ -5488,6 +5869,7 @@ def init_app(app):
                 'photo_filename': photo_filename,
                 'ip': client.host if client else None,
                 'user_agent': request.headers.get('user-agent'),
+                'username': user['username'],
             }],
             blocking=False,
         )

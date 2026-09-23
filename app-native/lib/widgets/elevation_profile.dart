@@ -27,7 +27,11 @@ class ElevationProfile extends StatelessWidget {
     // explicit height or the layout throws and takes the whole bottom overlay
     // (preview, Start, FABs) down with it.
     final labelColor = Theme.of(context).colorScheme.onSurfaceVariant;
-    return SizedBox(
+    // One spoken summary instead of two bare numbers and a silent chart.
+    return Semantics(
+      label: 'Elevation profile, $lo to $hi feet',
+      excludeSemantics: true,
+      child: SizedBox(
       height: height,
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -49,6 +53,7 @@ class ElevationProfile extends StatelessWidget {
           ),
         ],
       ),
+    ),
     );
   }
 }

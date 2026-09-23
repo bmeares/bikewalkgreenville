@@ -1,5 +1,5 @@
+import 'dart:async' show Completer;
 import 'dart:convert';
-import 'dart:math' show Random;
 
 import 'package:flutter/foundation.dart' show setEquals;
 import 'package:flutter/material.dart';
@@ -48,11 +48,15 @@ class AppState extends ChangeNotifier {
   static const _kMapBase = 'map_base';
   static const _kPreferTrail = 'prefer_trail';
   static const _kPreferCommunity = 'prefer_community';
-  static const _kVoter = 'voter_id';
-  static const _kConfirmed = 'confirmed_ids';
+  static const _kMyVotes = 'my_votes';
   static const _kHighContrast = 'high_contrast';
   static const _kLargeUi = 'large_ui';
   static const _kAdvocacy = 'advocacy_layers';
+  static const _kWelcomeSeen = 'welcome_seen';
+  static const _kDisclaimerVersion = 'disclaimer_accepted_version';
+  static const _kDisclaimerAt = 'disclaimer_accepted_at';
+  static const _kNotifiedEvents = 'notified_event_uids';
+  static const _kMine = 'my_contribution_ids';
   static const _maxRecents = 8;
 
   Set<TravelMode> _modes = {TravelMode.cyclist};
@@ -67,11 +71,14 @@ class AppState extends ChangeNotifier {
   MapBase _mapBase = MapBase.auto;
   bool _preferTrail = true;
   bool _preferCommunity = true;
-  // Opaque per-install token: dedupes community confirmations server-side.
-  String _voter = '';
-  Set<String> _confirmed = {};
+  Map<String, String> _myVotes = {};
   bool _highContrast = false;
   bool _largeUi = false;
+  bool _welcomeSeen = false;
+  int _disclaimerVersion = 0;
+  String? _disclaimerAt;
+  Set<String> _notifiedEvents = {};
+  Set<String> _mine = {};
 
   /// Experimental advocacy layers the user has opted into (Settings) —
   /// only these get a toggle in the layers sheet.
@@ -99,12 +106,62 @@ class AppState extends ChangeNotifier {
   /// Off sends `trail=0` and the trail prices like any calm street.
   bool get preferTrail => _preferTrail;
   bool get preferCommunity => _preferCommunity;
-  String get voter => _voter;
-  bool hasConfirmed(String id) => _confirmed.contains(id);
-  void markConfirmed(String id) {
-    _confirmed.add(id);
+  /// This device's vote ('up' / 'down') on community feature [id], as the
+  /// last vote reply reported it; null when none.
+  String? myVote(String id) => _myVotes[id];
+  void setMyVote(String id, String? vote) {
+    if (vote == 'up' || vote == 'down') {
+      _myVotes[id] = vote!;
+    } else {
+      _myVotes.remove(id);
+    }
     notifyListeners();
-    _save();
+    _setPref((p) => p.setString(_kMyVotes, jsonEncode(_myVotes)));
+  }
+
+  /// Community contributions submitted from this device. The layer GeoJSON
+  /// carries no author, so this is how the feature sheet knows to offer
+  /// "Remove" to a non-admin (the server still checks ownership).
+  bool isMyContribution(String id) => _mine.contains(id);
+  void rememberContribution(String id) {
+    if (id.isEmpty || !_mine.add(id)) return;
+    // ponytail: grows by one id per submission; prune if it ever matters.
+    _setPref((p) => p.setStringList(_kMine, _mine.toList()));
+  }
+
+  /// First-launch welcome tour already shown (or dismissed for good).
+  bool get welcomeSeen => _welcomeSeen;
+  void setWelcomeSeen(bool value) {
+    _welcomeSeen = value;
+    notifyListeners();
+    _setPref((p) => p.setBool(_kWelcomeSeen, value));
+  }
+
+  /// Version of the safety/liability disclaimer the rider agreed to (0 = none).
+  int get disclaimerAcceptedVersion => _disclaimerVersion;
+  String? get disclaimerAcceptedAt => _disclaimerAt;
+  void acceptDisclaimer(int version) {
+    _disclaimerVersion = version;
+    _disclaimerAt = DateTime.now().toUtc().toIso8601String();
+    notifyListeners();
+    _setPref((p) async {
+      await p.setInt(_kDisclaimerVersion, version);
+      await p.setString(_kDisclaimerAt, _disclaimerAt!);
+    });
+  }
+
+  /// Calendar events already announced with a local notification.
+  bool eventNotified(String uid) => _notifiedEvents.contains(uid);
+  void markEventNotified(String uid) {
+    if (!_notifiedEvents.add(uid)) return;
+    // ponytail: grows by a few uids a month; prune if it ever matters.
+    _setPref((p) => p.setStringList(_kNotifiedEvents, _notifiedEvents.toList()));
+  }
+
+  Future<void> _setPref(Future<void> Function(SharedPreferences) write) async {
+    try {
+      await write(await SharedPreferences.getInstance());
+    } catch (_) {}
   }
 
   /// Low-vision support: stronger text/surface contrast and bolder map lines.
@@ -129,9 +186,8 @@ class AppState extends ChangeNotifier {
 
   bool get isMultiModal => _modes.length > 1;
 
-  /// "Bike here" / "Go here" — the button label on a destination card.
-  String get directionsVerb =>
-      isMultiModal ? 'Go here' : (modeVerbs[mode] ?? 'Directions');
+  /// "Navigate here" — the button label on a destination card.
+  String get directionsVerb => modeVerbs[mode] ?? 'Navigate here';
 
   /// Walking is relabelled when the rider rolls; everything downstream (the
   /// router's weighting, the sidewalk warnings) follows the same flag.
@@ -184,6 +240,11 @@ class AppState extends ChangeNotifier {
     _save();
   }
 
+  final _loaded = Completer<void>();
+
+  /// Completes once [load] has run (successfully or not).
+  Future<void> get loaded => _loaded.future;
+
   Future<void> load() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -225,16 +286,19 @@ class AppState extends ChangeNotifier {
       }
       _preferTrail = prefs.getBool(_kPreferTrail) ?? true;
       _preferCommunity = prefs.getBool(_kPreferCommunity) ?? true;
-      _voter = prefs.getString(_kVoter) ?? '';
-      if (_voter.isEmpty) {
-        final rng = Random.secure();
-        _voter = List.generate(32, (_) => rng.nextInt(16).toRadixString(16)).join();
-        await prefs.setString(_kVoter, _voter);
+      final votes = prefs.getString(_kMyVotes);
+      if (votes != null) {
+        _myVotes = Map<String, String>.from(jsonDecode(votes) as Map);
       }
-      _confirmed = (prefs.getStringList(_kConfirmed) ?? const []).toSet();
       _highContrast = prefs.getBool(_kHighContrast) ?? false;
       _largeUi = prefs.getBool(_kLargeUi) ?? false;
+      _welcomeSeen = prefs.getBool(_kWelcomeSeen) ?? false;
+      _disclaimerVersion = prefs.getInt(_kDisclaimerVersion) ?? 0;
+      _disclaimerAt = prefs.getString(_kDisclaimerAt);
+      _notifiedEvents =
+          (prefs.getStringList(_kNotifiedEvents) ?? const []).toSet();
       _advocacy = (prefs.getStringList(_kAdvocacy) ?? const []).toSet();
+      _mine = (prefs.getStringList(_kMine) ?? const []).toSet();
       _recents = [
         for (final s in prefs.getStringList(_kRecents) ?? <String>[])
           Map<String, dynamic>.from(jsonDecode(s) as Map),
@@ -246,6 +310,8 @@ class AppState extends ChangeNotifier {
       notifyListeners();
     } catch (_) {
       // Preferences are a convenience; defaults are perfectly usable.
+    } finally {
+      if (!_loaded.isCompleted) _loaded.complete();
     }
   }
 
@@ -262,7 +328,6 @@ class AppState extends ChangeNotifier {
       await prefs.setString(_kMapBase, _mapBase.name);
       await prefs.setBool(_kPreferTrail, _preferTrail);
       await prefs.setBool(_kPreferCommunity, _preferCommunity);
-      await prefs.setStringList(_kConfirmed, _confirmed.toList());
       await prefs.setBool(_kHighContrast, _highContrast);
       await prefs.setBool(_kLargeUi, _largeUi);
       await prefs.setStringList(_kAdvocacy, _advocacy.toList());
@@ -519,5 +584,86 @@ class AppState extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setStringList(_kSaved, _saved.map(jsonEncode).toList());
     } catch (_) {}
+  }
+
+  // ------------------------------------------------------------ account sync
+
+  /// The rider preferences that follow a signed-in account between devices
+  /// (`settings` on `/bwg/auth/me`). Device-only state — votes, the welcome
+  /// tour, event notifications, theme and accessibility sizing — stays local.
+  Map<String, dynamic> get syncedSettings => {
+    'saved_places': _saved,
+    'prefer_community': _preferCommunity,
+    'prefer_trail': _preferTrail,
+    'stress': _stress.name,
+    'modes': _modes.map((m) => m.name).toList()..sort(),
+    'roll': _roll,
+    'ebike': _useEbike,
+    'bcycle': _useBcycle,
+    'advocacy_layers': _advocacy.toList()..sort(),
+    'disclaimer_accepted_version': _disclaimerVersion,
+  };
+
+  /// Fold an account's settings into this device on sign-in.
+  ///
+  /// Saved places: on the first sign-in merge ([union]), a union keyed by
+  /// coordinates (local rows and labels first); on later refreshes the
+  /// account's list wins, so a place deleted on another device stays gone.
+  /// Scalars: the remote value wins only where this device is still on the
+  /// default — a choice made here is never overwritten. The disclaimer takes
+  /// the higher accepted version.
+  // ponytail: no per-field timestamps; last-writer-wins after the first merge.
+  void mergeRemoteSettings(Map<String, dynamic> remote, {bool union = true}) {
+    final places = remote['saved_places'];
+    if (places is List) {
+      if (!union) _saved = [];
+      final keys = {for (final p in _saved) _placeKey(p)};
+      for (final p in places) {
+        if (p is! Map || p['lat'] is! num || p['lon'] is! num) continue;
+        final row = {
+          'label': p['label']?.toString() ?? 'Saved place',
+          'sublabel': p['sublabel']?.toString() ?? '',
+          'lat': (p['lat'] as num).toDouble(),
+          'lon': (p['lon'] as num).toDouble(),
+        };
+        if (keys.add(_placeKey(row))) _saved = [..._saved, row];
+      }
+    }
+    T? pick<T>(String key) => remote[key] is T ? remote[key] as T : null;
+    if (_preferCommunity) _preferCommunity = pick<bool>('prefer_community') ?? true;
+    if (_preferTrail) _preferTrail = pick<bool>('prefer_trail') ?? true;
+    if (!_roll) _roll = pick<bool>('roll') ?? false;
+    if (!_useEbike) _useEbike = pick<bool>('ebike') ?? false;
+    if (!_useBcycle) _useBcycle = pick<bool>('bcycle') ?? false;
+    if (_stress == BikeStress.balanced) {
+      _stress = BikeStress.values.firstWhere(
+        (s) => s.name == pick<String>('stress'),
+        orElse: () => BikeStress.balanced,
+      );
+    }
+    final modes = pick<List>('modes');
+    if (modes != null &&
+        setEquals(_modes, const {TravelMode.cyclist})) {
+      final parsed = TravelMode.values
+          .where((m) => modes.contains(m.name))
+          .toSet();
+      if (parsed.isNotEmpty) _modes = parsed;
+    }
+    final advocacy = pick<List>('advocacy_layers');
+    if (advocacy != null && _advocacy.isEmpty) {
+      _advocacy = advocacy.map((e) => e.toString()).toSet();
+      for (final id in _advocacy) {
+        _overrides[id] = true;
+      }
+    }
+    final remoteDisclaimer =
+        (remote['disclaimer_accepted_version'] as num?)?.toInt() ?? 0;
+    if (remoteDisclaimer > _disclaimerVersion) {
+      _disclaimerVersion = remoteDisclaimer;
+      _setPref((p) => p.setInt(_kDisclaimerVersion, remoteDisclaimer));
+    }
+    notifyListeners();
+    _save();
+    _saveSaved();
   }
 }

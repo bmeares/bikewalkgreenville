@@ -10,7 +10,7 @@ void main() {
     expect(state.modes, {TravelMode.cyclist});
     expect(state.apiModes, {'bike'});
     expect(state.isMultiModal, isFalse);
-    expect(state.directionsVerb, 'Bike here');
+    expect(state.directionsVerb, 'Navigate here');
   });
 
   test('modes are multi-select and drive the api parameter', () {
@@ -19,7 +19,7 @@ void main() {
     expect(state.modes, {TravelMode.cyclist, TravelMode.transit});
     expect(state.apiModes, {'bike', 'transit'});
     expect(state.isMultiModal, isTrue);
-    expect(state.directionsVerb, 'Go here');
+    expect(state.directionsVerb, 'Navigate here');
   });
 
   test('the last mode cannot be turned off', () {

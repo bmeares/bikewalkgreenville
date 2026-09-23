@@ -79,6 +79,113 @@ class Ride {
     return best;
   }
 
+  /// Index of the ride point closest to [p].
+  ///
+  /// ponytail: linear scan in local meters, O(n) per drag frame — a 2 h ride
+  /// at 1 Hz is ~7k points, well under a millisecond. Add a grid index if
+  /// rides get much longer.
+  int nearestIndex(LatLng p) {
+    final mx = math.cos(p.latitude * math.pi / 180);
+    var best = 0;
+    var bestD = double.infinity;
+    for (var i = 0; i < points.length; i++) {
+      final dx = (points[i].longitude - p.longitude) * mx;
+      final dy = points[i].latitude - p.latitude;
+      final d = dx * dx + dy * dy;
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  /// Nearest point to [p] searched outward from index [from]: at least
+  /// [window] points each way, then onward only while the distance keeps
+  /// shrinking. Ties go to the index closest to [from], so a trim handle on an
+  /// out-and-back ride stays on its own leg instead of jumping to the return.
+  int nearestIndexNear(LatLng p, int from, {int window = 10}) {
+    if (points.isEmpty) return 0;
+    final mx = math.cos(p.latitude * math.pi / 180);
+    double d(int i) {
+      final dx = (points[i].longitude - p.longitude) * mx;
+      final dy = points[i].latitude - p.latitude;
+      return dx * dx + dy * dy;
+    }
+
+    final start = from.clamp(0, points.length - 1);
+    var best = start;
+    var bestD = d(start);
+    for (final step in const [-1, 1]) {
+      var prev = bestD;
+      for (var k = 1; ; k++) {
+        final j = start + step * k;
+        if (j < 0 || j >= points.length) break;
+        final dj = d(j);
+        if (k > window && dj >= prev) break;
+        prev = dj;
+        if (dj < bestD) {
+          bestD = dj;
+          best = j;
+        }
+      }
+    }
+    return best;
+  }
+
+  /// Ordered, clamped trim range with at least one step between the handles.
+  ({int start, int end}) trimRange(int a, int b) {
+    if (points.length < 2) return (start: 0, end: points.length - 1);
+    final last = points.length - 1;
+    var start = math.min(a, b).clamp(0, last);
+    var end = math.max(a, b).clamp(0, last);
+    if (end == start) {
+      if (end < last) {
+        end++;
+      } else {
+        start--;
+      }
+    }
+    return (start: start, end: end);
+  }
+
+  /// Whether the kept range jumps across a GPS gap between segments.
+  bool spansGap(int start, int end) =>
+      segmentRanges.any((r) => r.start > start && r.start <= end);
+
+  /// Ridden distance inside the kept range (gaps not counted).
+  double keptDistanceM(int start, int end) =>
+      segments(start, end).fold(0.0, (sum, s) => sum + pathLengthM(s));
+
+  /// Map features for trimming: `part` is kept (purple), rest (grey) or gap
+  /// (dashed straight line joining segments inside the kept range).
+  Map<String, dynamic> trimCollection(int start, int end) {
+    List<List<double>> coords(List<LatLng> pts) => [
+      for (final p in pts) [p.longitude, p.latitude],
+    ];
+    Map<String, dynamic> line(List<LatLng> pts, String part) => {
+      'type': 'Feature',
+      'geometry': {'type': 'LineString', 'coordinates': coords(pts)},
+      'properties': {'part': part},
+    };
+    final features = <Map<String, dynamic>>[];
+    for (final s in segments(0, start)) {
+      if (s.length >= 2) features.add(line(s, 'rest'));
+    }
+    for (final s in segments(end)) {
+      if (s.length >= 2) features.add(line(s, 'rest'));
+    }
+    for (final s in segments(start, end)) {
+      if (s.length >= 2) features.add(line(s, 'kept'));
+    }
+    for (final r in segmentRanges) {
+      if (r.start > start && r.start <= end) {
+        features.add(line([points[r.start - 1], points[r.start]], 'gap'));
+      }
+    }
+    return {'type': 'FeatureCollection', 'features': features};
+  }
+
   Map<String, dynamic> toJson() => {
     'id': id,
     'name': name,
@@ -444,7 +551,7 @@ class RideRecorder extends ChangeNotifier with WidgetsBindingObserver {
     }
     final ride = Ride(
       id: snapshot.id,
-      name: name ?? 'Ride ${_stamp(snapshot.startedAt)}',
+      name: name ?? defaultRideName(snapshot.startedAt),
       startedAt: snapshot.startedAt,
       endedAt: snapshot.endedAt,
       points: snapshot.points,
@@ -545,24 +652,23 @@ class RideRecorder extends ChangeNotifier with WidgetsBindingObserver {
     _sub?.cancel();
     super.dispose();
   }
-
-  static String _stamp(DateTime t) {
-    const months = [
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
-      'May',
-      'Jun',
-      'Jul',
-      'Aug',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dec',
-    ];
-    final h = t.hour % 12 == 0 ? 12 : t.hour % 12;
-    final m = t.minute.toString().padLeft(2, '0');
-    return '${months[t.month - 1]} ${t.day}, $h:$m ${t.hour < 12 ? 'AM' : 'PM'}';
-  }
 }
+
+const _months = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+
+/// "Ride on Sep 23".
+String defaultRideName(DateTime t) =>
+    'Ride on ${_months[t.month - 1]} ${t.day}';

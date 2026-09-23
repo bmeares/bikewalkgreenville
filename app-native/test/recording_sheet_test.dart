@@ -46,8 +46,7 @@ void main() {
                 resumed = true;
               },
               onPause: () async {},
-              onSaved: (_) {},
-              onDiscarded: () {},
+              onStop: () {},
             ),
           ),
         ),

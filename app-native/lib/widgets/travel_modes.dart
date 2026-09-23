@@ -31,7 +31,7 @@ class TravelModes extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     FilterChip(
-                    showCheckmark: false,
+                      showCheckmark: false,
                       avatar: Icon(state.iconFor(mode), size: 18),
                       label: Text(state.labelFor(mode)),
                       selected: state.modes.contains(mode),
@@ -50,9 +50,10 @@ class TravelModes extends StatelessWidget {
                             : 'Choose Walk or Roll',
                         icon: const Icon(Icons.expand_more, size: 20),
                         padding: EdgeInsets.zero,
+                        // 48 dp: the accessibility minimum tap target.
                         constraints: const BoxConstraints(
-                          minWidth: 32,
-                          minHeight: 40,
+                          minWidth: 48,
+                          minHeight: 48,
                         ),
                         initialValue: mode == TravelMode.cyclist
                             ? state.useEbike

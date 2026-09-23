@@ -5,6 +5,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
 import '../api.dart';
+import '../auth.dart';
 import '../theme.dart';
 import '../widgets/safety_notice.dart';
 
@@ -71,28 +72,35 @@ class _ReportSheetState extends State<ReportSheet> {
       _error = null;
     });
     try {
-      Map<String, dynamic> result;
+      Map<String, dynamic>? result;
       if (isParkingFeedback) {
-        await api.submitBikeParkingFeedback(
+        result = await withAuth(context, () async {
+          await api.submitBikeParkingFeedback(
           spotName: widget.spotName!,
           lat: widget.latLng.latitude,
           lon: widget.latLng.longitude,
           feedback: _commentCtl.text.trim(),
           photoBytes: _photoBytes,
           photoName: _photoName,
-        );
-        result = {'ok': true};
+          );
+          return <String, dynamic>{'ok': true};
+        });
       } else {
-        result = await api.submitWalkAudit(
+        result = await withAuth(context, () => api.submitWalkAudit(
           category: _category,
           comment: _commentCtl.text.trim(),
           lat: widget.latLng.latitude,
           lon: widget.latLng.longitude,
           photoBytes: _photoBytes,
           photoName: _photoName,
-        );
+        ));
       }
-      if (mounted) Navigator.pop(context, result);
+      if (!mounted) return;
+      if (result == null) {
+        setState(() => _busy = false);
+        return;
+      }
+      Navigator.pop(context, result);
     } on Exception catch (e) {
       if (mounted) {
         setState(() {
@@ -127,7 +135,10 @@ class _ReportSheetState extends State<ReportSheet> {
               Text(
                 '${widget.latLng.latitude.toStringAsFixed(5)}, '
                 '${widget.latLng.longitude.toStringAsFixed(5)}',
-                style: const TextStyle(color: Colors.black54, fontSize: 12),
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  fontSize: 12,
+                ),
               ),
               const SizedBox(height: 12),
               if (!isParkingFeedback) ...[
@@ -211,15 +222,20 @@ class _ReportSheetState extends State<ReportSheet> {
               if (_error != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
-                  child: Text(_error!,
-                      style: const TextStyle(color: Colors.red)),
+                  child: Semantics(
+                    liveRegion: true,
+                    child: Text(_error!,
+                        style: TextStyle(
+                            color: Theme.of(context).colorScheme.error)),
+                  ),
                 ),
               const Text(routeDisclaimer, style: TextStyle(fontSize: 12)),
               const SizedBox(height: 16),
               SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
-                  style: FilledButton.styleFrom(backgroundColor: brandGreen),
+                  style: FilledButton.styleFrom(
+                      backgroundColor: brandGreenStrong),
                   icon: _busy
                       ? const SizedBox(
                           width: 18,

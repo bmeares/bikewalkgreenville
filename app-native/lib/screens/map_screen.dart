@@ -20,17 +20,27 @@ import '../nav.dart';
 import '../nav_notifier.dart';
 import '../theme.dart';
 import '../widgets/elevation_profile.dart';
+import '../widgets/map_cards.dart';
 import '../widgets/alternative_chip.dart';
 import '../widgets/recording_sheet.dart';
+import '../widgets/record_icon.dart';
+import '../widgets/welcome_tour.dart';
+import '../auth.dart';
 import 'add_point_sheet.dart';
 import 'directions_sheet.dart';
 import 'report_sheet.dart';
 import 'community_screen.dart';
-import 'geometry_editor_screen.dart';
+import 'area_draw_sheet.dart';
+import 'route_draw_sheet.dart';
+import '../geometry_draft.dart';
+import '../widgets/ride_summary_sheet.dart';
 import 'package:pointer_interceptor/pointer_interceptor.dart';
 import 'package:flutter/foundation.dart';
+import 'rides_screen.dart';
 import 'tools_screen.dart';
 import '../rides.dart';
+import '../group_ride.dart';
+import 'group_ride_sheet.dart';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -64,6 +74,12 @@ class _MapScreenState extends State<MapScreen> {
   List<dynamic> _results = [];
   int _searchSeq = 0;
 
+  /// A search request is in flight — spinner in the field's suffix.
+  bool _searching = false;
+
+  /// "Searching…", "3 results", "No results" — a live region announces it.
+  String _searchStatus = '';
+
   /// Destination picked from search — drives the bottom place card.
   Map<String, dynamic>? _place;
 
@@ -91,11 +107,33 @@ class _MapScreenState extends State<MapScreen> {
   int _planSeq = 0;
   NavRoute? _navRoute;
 
+  /// The router's raw Feature behind [_navRoute]: a leading group rider
+  /// shares it with the group.
+  Map<String, dynamic>? _navFeature;
+
   /// Ride shown on the map for trimming, and the kept [start, end] indices.
   Ride? _shownRide;
   int _rideStart = 0, _rideEnd = 0;
+
+  /// Trim mode: two draggable circle annotations on the ride line.
+  bool _trimming = false;
+  Circle? _startHandle, _endHandle;
+  bool _rideDrawing = false, _rideDrawPending = false;
+
+  /// Draw tools (waypoint route / no-entry corners); map taps feed them.
+  RouteDraft? _routeDraft;
+  AreaDraft? _areaDraft;
+  bool _straightNext = false;
+  int _legsPending = 0;
+  Future<void> _drawQueue = Future.value();
   bool _sharedTripHandled = false;
+  bool _welcomeOffered = false;
   VoidCallback? _recorderListener;
+  VoidCallback? _groupListener;
+  int _groupRevision = -1;
+  bool _groupEnded = false;
+  bool _groupWasActive = false;
+  final Set<String> _groupImages = {};
   bool _recoveryOffered = false;
   int? _lastRideRevision;
   bool? _recordingAwake;
@@ -171,6 +209,9 @@ class _MapScreenState extends State<MapScreen> {
     if (_recorderListener != null) {
       context.read<RideRecorder>().removeListener(_recorderListener!);
     }
+    if (_groupListener != null) {
+      context.read<GroupRideClient>().removeListener(_groupListener!);
+    }
     _tts?.stop();
     _navNotifier.cancel();
     WakelockPlus.disable();
@@ -179,9 +220,67 @@ class _MapScreenState extends State<MapScreen> {
 
   // ---------------------------------------------------------------- layers
 
+  /// The app's own line layers (highlight, route, ride, draft, group route),
+  /// built in one place so style load and the High contrast toggle agree.
+  /// High contrast widens them 1.6x and swaps the pale amber highlight for
+  /// deep orange on light bases (amber is 1.5:1 on the light basemap); a dark
+  /// base swaps the ride purple (2.6:1 on black) for a light orchid (8.8:1).
+  Map<String, LineLayerProperties> _ownLineStyles() {
+    final state = context.read<AppState>();
+    final hc = state.highContrast;
+    final k = hc ? 1.6 : 1.0;
+    final ride = _darkBase() ? rideLineOnDarkHex : rideLineHex;
+    LineLayerProperties line(dynamic color, double width, {double? opacity,
+        List<double>? dash, String cap = 'round'}) => LineLayerProperties(
+      lineColor: color,
+      lineWidth: width * k,
+      lineOpacity: opacity == null ? null : (hc ? math.max(opacity, 0.9) : opacity),
+      lineDasharray: dash,
+      lineCap: cap,
+      lineJoin: 'round',
+    );
+    return {
+      'lyr-highlight-line': line(
+        hc && !_darkBase() ? '#E65100' : '#FFC107', 12.0,
+        opacity: hc ? 0.7 : 0.55,
+      ),
+      'lyr-route-casing': line('#ffffff', 8.0),
+      'lyr-route': line(['coalesce', ['get', 'color'], '#1565C0'], 5.0),
+      'lyr-route-hills': line([
+        'match',
+        ['get', 'sev'],
+        for (final e in hillColors.entries) ...[e.key, e.value],
+        hillColors['mod']!,
+      ], 5.0),
+      'lyr-route-warn': line('#D32F2F', 5.0, dash: [2.0, 1.6], cap: 'butt'),
+      'lyr-ride-rest': line('#9E9E9E', 4.0, opacity: 0.8),
+      'lyr-ride-gap': line(ride, 3.0, opacity: 0.85, dash: [1.5, 1.5], cap: 'butt'),
+      'lyr-ride': line(ride, 5.0, opacity: 0.85),
+      'lyr-draft-line': line(['get', 'color'], 4.0),
+      'lyr-group-route': line(groupLeaderHex, 5.0, opacity: 0.7, dash: [2.0, 1.0]),
+    };
+  }
+
+  /// Satellite imagery or the dark basemap: colors must read on near-black.
+  bool _darkBase() =>
+      context.read<AppState>().mapBase == MapBase.satellite ||
+      Theme.of(context).brightness == Brightness.dark;
+
+  /// High contrast toggled without a style reload: re-apply [_ownLineStyles].
+  Future<void> _restyleOwnLines() async {
+    final map = _map;
+    if (map == null || !mounted) return;
+    for (final e in _ownLineStyles().entries) {
+      try {
+        await map.setLayerProperties(e.key, e.value);
+      } catch (_) {}
+    }
+  }
+
   Future<void> _onStyleLoaded() async {
     final map = _map!;
     final ratio = _imageDpr;
+    final own = _ownLineStyles();
 
     // Tap highlight: one source, two layers — the line layer renders when the
     // tapped feature is a line, the circle layer when it's a point. The
@@ -194,13 +293,7 @@ class _MapScreenState extends State<MapScreen> {
     await map.addLineLayer(
       'highlight',
       'lyr-highlight-line',
-      const LineLayerProperties(
-        lineColor: '#FFC107',
-        lineWidth: 12.0,
-        lineOpacity: 0.55,
-        lineCap: 'round',
-        lineJoin: 'round',
-      ),
+      own['lyr-highlight-line']!,
       filter: [
         '==',
         ['geometry-type'],
@@ -237,27 +330,13 @@ class _MapScreenState extends State<MapScreen> {
     await map.addLineLayer(
       'route',
       'lyr-route-casing',
-      const LineLayerProperties(
-        lineColor: '#ffffff',
-        lineWidth: 8.0,
-        lineCap: 'round',
-        lineJoin: 'round',
-      ),
+      own['lyr-route-casing']!,
       enableInteraction: false,
     );
     await map.addLineLayer(
       'route',
       'lyr-route',
-      LineLayerProperties(
-        lineColor: [
-          'coalesce',
-          ['get', 'color'],
-          '#1565C0',
-        ],
-        lineWidth: 5.0,
-        lineCap: 'round',
-        lineJoin: 'round',
-      ),
+      own['lyr-route']!,
       enableInteraction: false,
     );
 
@@ -271,17 +350,7 @@ class _MapScreenState extends State<MapScreen> {
     await map.addLineLayer(
       'route-hills',
       'lyr-route-hills',
-      LineLayerProperties(
-        lineColor: [
-          'match',
-          ['get', 'sev'],
-          for (final e in hillColors.entries) ...[e.key, e.value],
-          hillColors['mod']!,
-        ],
-        lineWidth: 5.0,
-        lineCap: 'round',
-        lineJoin: 'round',
-      ),
+      own['lyr-route-hills']!,
       enableInteraction: false,
     );
 
@@ -295,13 +364,7 @@ class _MapScreenState extends State<MapScreen> {
     await map.addLineLayer(
       'route-warn',
       'lyr-route-warn',
-      const LineLayerProperties(
-        lineColor: '#D32F2F',
-        lineWidth: 5.0,
-        lineDasharray: [2.0, 1.6],
-        lineCap: 'butt',
-        lineJoin: 'round',
-      ),
+      own['lyr-route-warn']!,
       enableInteraction: false,
     );
 
@@ -342,16 +405,58 @@ class _MapScreenState extends State<MapScreen> {
       'ride',
       GeojsonSourceProperties(data: _emptyCollection),
     );
+    // Trimming: the discarded part grey, the kept stretch purple, GPS gaps
+    // inside the kept range dashed.
+    await map.addLineLayer(
+      'ride',
+      'lyr-ride-rest',
+      own['lyr-ride-rest']!,
+      filter: ['==', ['get', 'part'], 'rest'],
+      enableInteraction: false,
+    );
+    await map.addLineLayer(
+      'ride',
+      'lyr-ride-gap',
+      own['lyr-ride-gap']!,
+      filter: ['==', ['get', 'part'], 'gap'],
+      enableInteraction: false,
+    );
     await map.addLineLayer(
       'ride',
       'lyr-ride',
-      const LineLayerProperties(
-        lineColor: '#7B1FA2',
-        lineWidth: 5.0,
-        lineOpacity: 0.85,
-        lineCap: 'round',
-        lineJoin: 'round',
+      own['lyr-ride']!,
+      filter: ['==', ['get', 'part'], 'kept'],
+      enableInteraction: false,
+    );
+    // Draw tools: the draft route/area and its waypoint markers.
+    await map.addSource(
+      'draft',
+      GeojsonSourceProperties(data: _emptyCollection),
+    );
+    await map.addFillLayer(
+      'draft',
+      'lyr-draft-fill',
+      const FillLayerProperties(fillColor: '#C62828', fillOpacity: 0.22),
+      filter: ['==', ['geometry-type'], 'Polygon'],
+      enableInteraction: false,
+    );
+    await map.addLineLayer(
+      'draft',
+      'lyr-draft-line',
+      own['lyr-draft-line']!,
+      filter: ['!=', ['geometry-type'], 'Point'],
+      enableInteraction: false,
+    );
+    await map.addCircleLayer(
+      'draft',
+      'lyr-draft-pt',
+      const CircleLayerProperties(
+        circleColor: '#ffffff',
+        circleRadius: 6.0,
+        circleStrokeColor: ['get', 'color'],
+        circleStrokeWidth: 3.0,
       ),
+      filter: ['==', ['geometry-type'], 'Point'],
       enableInteraction: false,
     );
     await map.addCircleLayer(
@@ -362,6 +467,56 @@ class _MapScreenState extends State<MapScreen> {
         circleRadius: 9.0,
         circleStrokeColor: '#ffffff',
         circleStrokeWidth: 3.0,
+      ),
+      enableInteraction: false,
+    );
+
+    // Group ride: the leader's shared route (tap → follow it), then everyone
+    // else as dots with name labels (bitmaps: satellite has no glyphs).
+    _groupImages.clear();
+    await map.addSource(
+      'group-route',
+      GeojsonSourceProperties(data: _emptyCollection),
+    );
+    await map.addLineLayer(
+      'group-route',
+      'lyr-group-route',
+      own['lyr-group-route']!,
+    );
+    await map.addSource(
+      'group-members',
+      GeojsonSourceProperties(data: _emptyCollection),
+    );
+    await map.addCircleLayer(
+      'group-members',
+      'lyr-group-members',
+      const CircleLayerProperties(
+        circleColor: [
+          'case',
+          ['get', 'leader'],
+          groupLeaderHex,
+          groupRideHex,
+        ],
+        circleRadius: [
+          'case',
+          ['get', 'leader'],
+          10.0,
+          7.0,
+        ],
+        circleStrokeColor: '#ffffff',
+        circleStrokeWidth: 3.0,
+      ),
+      enableInteraction: false,
+    );
+    await map.addSymbolLayer(
+      'group-members',
+      'lyr-group-names',
+      const SymbolLayerProperties(
+        iconImage: ['get', 'img'],
+        iconAnchor: 'top',
+        iconOffset: [0, 12],
+        iconAllowOverlap: true,
+        iconIgnorePlacement: true,
       ),
       enableInteraction: false,
     );
@@ -414,6 +569,9 @@ class _MapScreenState extends State<MapScreen> {
       if (here != null) await _updatePuck(here, _lastNavBearing ?? 0);
     }
     await _drawRide();
+    await _drawDraft();
+    // A style reload wipes annotations; put the trim handles back.
+    if (_trimming) await _placeHandles();
     if (!mounted) return;
     if (_recorderListener == null) {
       _recorderListener = () {
@@ -423,46 +581,104 @@ class _MapScreenState extends State<MapScreen> {
           _drawRide();
         }
         _offerRideRecovery();
-        final awake = _navigating || (recorder.recording && !recorder.paused);
-        if (_recordingAwake != awake) {
-          _recordingAwake = awake;
-          if (awake) {
-            WakelockPlus.enable();
-          } else {
-            WakelockPlus.disable();
-          }
-        }
+        _syncWakelock();
       };
       context.read<RideRecorder>().addListener(_recorderListener!);
     }
+    if (_groupListener == null) {
+      _groupListener = () {
+        final group = context.read<GroupRideClient>();
+        if (group.ended && !_groupEnded && mounted) {
+          toast(context, 'The ride has ended.');
+        }
+        _groupEnded = group.ended;
+        // Started / joined a ride mid-navigation: the leader's route goes up
+        // now rather than waiting for the next reroute.
+        if (group.active && !_groupWasActive && _navigating) {
+          unawaited(_shareGroupRoute());
+        }
+        _groupWasActive = group.active;
+        if (_groupRevision != group.revision) {
+          _groupRevision = group.revision;
+          _drawGroup();
+        }
+      };
+      context.read<GroupRideClient>().addListener(_groupListener!);
+    }
+    await _drawGroup();
     _offerRideRecovery();
     await _openSharedTrip();
+    if (!_welcomeOffered && mounted) {
+      _welcomeOffered = true;
+      await maybeShowWelcomeTour(context);
+    }
   }
 
   // ---------------------------------------------------------------- rides
 
-  /// The live trace while recording, else the shown ride's kept stretch.
+  /// Keep the screen on while navigating OR actively recording (all four
+  /// combinations): one place decides, called on every change of either.
+  void _syncWakelock() {
+    if (!mounted) return;
+    final recorder = context.read<RideRecorder>();
+    final awake = _navigating || (recorder.recording && !recorder.paused);
+    if (_recordingAwake == awake) return;
+    _recordingAwake = awake;
+    if (awake) {
+      WakelockPlus.enable();
+    } else {
+      WakelockPlus.disable();
+    }
+  }
+
+  /// The live trace while recording, else the shown ride split into kept /
+  /// discarded / gap parts.
   Future<void> _drawRide() async {
     final map = _map;
     if (map == null || !mounted || !_styleReady) return;
-    final recorder = context.read<RideRecorder>();
-    final geometry = recorder.recording
-        ? recorder.liveRide.lineString()
-        : _shownRide?.lineString(_rideStart, _rideEnd);
-    if (geometry == null) {
-      await map.setGeoJsonSource('ride', _emptyCollection);
+    // Drag frames arrive faster than the platform channel; coalesce them.
+    if (_rideDrawing) {
+      _rideDrawPending = true;
       return;
     }
-    await map.setGeoJsonSource('ride', {
-      'type': 'FeatureCollection',
-      'features': [
-        {
-          'type': 'Feature',
-          'geometry': geometry,
-          'properties': <String, dynamic>{},
-        },
-      ],
-    });
+    _rideDrawing = true;
+    final recorder = context.read<RideRecorder>();
+    try {
+      do {
+        _rideDrawPending = false;
+        final ride = _shownRide;
+        final Map<String, dynamic> data;
+        if (recorder.recording && ride == null) {
+          data = {
+            'type': 'FeatureCollection',
+            'features': [
+              {
+                'type': 'Feature',
+                'geometry': recorder.liveRide.lineString(),
+                'properties': {'part': 'kept'},
+              },
+            ],
+          };
+        } else if (ride != null) {
+          data = ride.trimCollection(_rideStart, _rideEnd);
+        } else {
+          data = _emptyCollection;
+        }
+        await map.setGeoJsonSource('ride', data);
+      } while (_rideDrawPending && mounted);
+    } finally {
+      _rideDrawing = false;
+    }
+  }
+
+  Future<bool> _locationForRecording() async {
+    final permission = await Geolocator.requestPermission();
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      if (mounted) toast(context, 'Location permission is needed to record.');
+      return false;
+    }
+    return mounted;
   }
 
   Future<void> _toggleRecording() async {
@@ -473,16 +689,11 @@ class _MapScreenState extends State<MapScreen> {
       return;
     }
     if (!recorder.recording) {
-      final permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
-        if (mounted) toast(context, 'Location permission is needed to record.');
-        return;
-      }
+      if (!await _locationForRecording()) return;
+      await _clearRide();
+      await recorder.start();
       if (!mounted) return;
-      setState(() => _shownRide = null);
-      if (await recorder.start()) await WakelockPlus.enable();
-      if (!mounted) return;
+      _syncWakelock();
       if (recorder.error != null) toast(context, recorder.error!);
       if (recorder.recording) _openRecordingSheet();
       return;
@@ -494,7 +705,7 @@ class _MapScreenState extends State<MapScreen> {
     if (!mounted || _recoveryOffered || !context.read<RideRecorder>().recovered) return;
     _recoveryOffered = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _openRecordingSheet();
+      if (mounted) _openRideSummary();
     });
   }
 
@@ -504,41 +715,167 @@ class _MapScreenState extends State<MapScreen> {
       showDragHandle: true,
       builder: (ctx) => RecordingSheet(
         onResume: () async {
-          final permission = await Geolocator.requestPermission();
-          if (!mounted) return;
-          if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
-            toast(context, 'Location permission is needed to record.');
-            return;
-          }
-          if (await context.read<RideRecorder>().resume()) await WakelockPlus.enable();
+          final recorder = context.read<RideRecorder>();
+          if (!await _locationForRecording()) return;
+          await recorder.resume();
+          _syncWakelock();
         },
         onPause: () async {
           await context.read<RideRecorder>().pause();
-          if (!_navigating) await WakelockPlus.disable();
+          _syncWakelock();
         },
-        onSaved: (ride) async {
+        onStop: () async {
           Navigator.pop(ctx);
-          if (!_navigating) await WakelockPlus.disable();
-          if (mounted) await _showRide(ride);
-        },
-        onDiscarded: () async {
-          Navigator.pop(ctx);
-          if (!_navigating) await WakelockPlus.disable();
+          await context.read<RideRecorder>().pause();
+          _syncWakelock();
+          if (mounted) await _openRideSummary();
         },
       ),
     );
   }
 
-  /// Draw a saved ride and open the trim sheet.
-  Future<void> _showRide(Ride ride) async {
+  /// Stop → summary. With [saved], the sheet opens on an existing ride (from
+  /// My rides) at its after-save state.
+  Future<void> _openRideSummary({Ride? saved}) async {
+    final recorder = context.read<RideRecorder>();
+    if (saved == null && !recorder.recording) return;
+    final ride = saved ?? recorder.liveRide;
+    await _setShownRide(ride);
+    if (!mounted) return;
+    final result = await showAppSheet<RideSummaryResult>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (_) => RideSummarySheet(
+        ride: ride,
+        canShare: !_navigating,
+        onSave: saved != null
+            ? null
+            : (name) async {
+                final done = await recorder.stop(name: name);
+                if (done != null && mounted) await _setShownRide(done);
+                return (ride: done, error: done == null ? recorder.error : null);
+              },
+        onDiscard: saved != null
+            ? null
+            : () async {
+                final ok = await recorder.discard();
+                _syncWakelock();
+                return ok;
+              },
+      ),
+    );
+    if (!mounted) return;
+    if (result == RideSummaryResult.share && _shownRide != null) {
+      await _startTrim();
+    } else {
+      await _clearRide();
+    }
+  }
+
+  bool get _toolOpen =>
+      _routeDraft != null || _areaDraft != null || _trimming;
+
+  Future<void> _showRide(Ride ride) => _openRideSummary(saved: ride);
+
+  Future<void> _setShownRide(Ride ride) async {
     setState(() {
       _shownRide = ride;
       _rideStart = 0;
-      _rideEnd = ride.points.length - 1;
+      _rideEnd = math.max(0, ride.points.length - 1);
     });
     await _drawRide();
-    await _fitGeometry(ride.lineString());
-    if (mounted) _openRideSheet();
+    // Navigating owns the camera.
+    if (!_navigating) await _fitGeometry(ride.lineString());
+  }
+
+  // ------------------------------------------------------------- trimming
+
+  Future<void> _startTrim() async {
+    final ride = _shownRide;
+    if (ride == null || ride.points.length < 2) return;
+    setState(() => _trimming = true);
+    await _placeHandles();
+  }
+
+  /// Start / end handles as draggable circle annotations. maplibre_gl moves
+  /// the circle itself; [_onHandleDrag] snaps it to the nearest ride point.
+  Future<void> _placeHandles() async {
+    final map = _map;
+    final ride = _shownRide;
+    if (map == null || ride == null || !_styleReady) return;
+    await _removeHandles();
+    // Hit area = radius + stroke: a 24 dp halo makes a 48 dp target around
+    // the 22 dp dot, so a thumb can grab it without covering it.
+    CircleOptions handle(LatLng at, String color) => CircleOptions(
+      geometry: at,
+      circleRadius: 11,
+      circleColor: color,
+      circleStrokeColor: '#ffffff',
+      circleStrokeWidth: 13,
+      circleStrokeOpacity: 0.55,
+      draggable: true,
+    );
+    try {
+      _startHandle = await map.addCircle(
+        handle(ride.points[_rideStart], '#2E7D32'),
+      );
+      _endHandle = await map.addCircle(
+        handle(ride.points[_rideEnd], '#C62828'),
+      );
+    } catch (_) {
+      // Annotation manager not ready (style reloading); onStyleLoaded retries.
+    }
+  }
+
+  Future<void> _removeHandles() async {
+    final map = _map;
+    final handles = [?_startHandle, ?_endHandle];
+    _startHandle = _endHandle = null;
+    if (map == null || handles.isEmpty) return;
+    try {
+      await map.removeCircles(handles);
+    } catch (_) {}
+  }
+
+  void _onHandleDrag(
+    math.Point<double> point,
+    LatLng origin,
+    LatLng current,
+    LatLng delta,
+    String id,
+    Annotation? annotation,
+    DragEventType eventType,
+  ) {
+    final ride = _shownRide;
+    if (!mounted || !_trimming || ride == null) return;
+    final isStart = id == _startHandle?.id;
+    if (!isStart && id != _endHandle?.id) return;
+    final i = ride.nearestIndexNear(current, isStart ? _rideStart : _rideEnd);
+    final range = isStart
+        ? ride.trimRange(math.min(i, _rideEnd - 1), _rideEnd)
+        : ride.trimRange(_rideStart, math.max(i, _rideStart + 1));
+    if (range.start != _rideStart || range.end != _rideEnd) {
+      setState(() {
+        _rideStart = range.start;
+        _rideEnd = range.end;
+      });
+      _drawRide();
+    }
+    if (eventType == DragEventType.end) {
+      final circle = isStart ? _startHandle : _endHandle;
+      final snapped = ride.points[isStart ? _rideStart : _rideEnd];
+      // Let the annotation manager finish its own drag update first.
+      if (circle != null) {
+        Future<void>.delayed(const Duration(milliseconds: 50), () async {
+          // Trim may have ended (handles removed) within those 50 ms.
+          if (circle != _startHandle && circle != _endHandle) return;
+          try {
+            await _map?.updateCircle(circle, CircleOptions(geometry: snapped));
+          } catch (_) {}
+        });
+      }
+    }
   }
 
   /// Longest run of the ride inside the current viewport — "only include the
@@ -558,145 +895,300 @@ class _MapScreenState extends State<MapScreen> {
       if (mounted) toast(context, 'None of this ride is on screen.');
       return;
     }
+    await _setTrim(kept.start, kept.end);
+  }
+
+  Future<void> _setTrim(int start, int end) async {
     setState(() {
-      _rideStart = kept.start;
-      _rideEnd = kept.end;
+      _rideStart = start;
+      _rideEnd = end;
+    });
+    await _drawRide();
+    if (_trimming) await _placeHandles();
+  }
+
+  Future<void> _clearRide() async {
+    await _removeHandles();
+    if (!mounted) return;
+    setState(() {
+      _shownRide = null;
+      _trimming = false;
     });
     await _drawRide();
   }
 
-  Future<void> _clearRide() async {
-    setState(() => _shownRide = null);
-    await _drawRide();
-  }
-
-  void _openRideSheet() {
+  /// Kept stretch → ≤200 vertices → name/comment sheet → publish.
+  Future<void> _shareStretch() async {
     final ride = _shownRide;
     if (ride == null) return;
-    showAppSheet(
+    final kept = ride.points.sublist(_rideStart, _rideEnd + 1);
+    if (kept.length < 2) return;
+    final published = await _publishGeometry(
+      fitToVertexLimit(kept),
+      name: ride.name,
+      category: 'route-suggestion',
+    );
+    if (published && mounted) await _clearRide();
+  }
+
+  /// Shared publish step for every drawn/recorded geometry: auth gate, then
+  /// the existing name / comment / category sheet and submit endpoint.
+  Future<bool> _publishGeometry(
+    List<LatLng> points, {
+    bool polygon = false,
+    String? name,
+    String? comment,
+    String? category,
+    String? replaces,
+  }) async {
+    if (!await AuthGate.require(context) || !mounted) return false;
+    final coords = [
+      for (final p in points) [p.longitude, p.latitude],
+    ];
+    final saved = await showAppSheet<Map<String, dynamic>>(
       context: context,
-      showDragHandle: true,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheet) {
-          final kept = ride.points.sublist(_rideStart, _rideEnd + 1);
-          final segments = ride.segments(_rideStart, _rideEnd);
-          final canShare = segments.length == 1 && kept.length >= 2;
-          return SafeArea(
-            child: SingleChildScrollView(child: Column(
-              mainAxisSize: MainAxisSize.min,
+      isScrollControlled: true,
+      builder: (_) => AddPointSheet(
+        latLng: points[points.length ~/ 2],
+        geometry: polygon
+            ? {
+                'type': 'Polygon',
+                'coordinates': [
+                  [...coords, coords.first],
+                ],
+              }
+            : {'type': 'LineString', 'coordinates': coords},
+        initialCategory: polygon ? 'no-entry' : category ?? 'route-suggestion',
+        initialName: name,
+        initialComment: comment,
+        replaces: replaces,
+      ),
+    );
+    if (saved == null || !mounted) return false;
+    await _refreshCommunity();
+    if (mounted) {
+      toast(
+        context,
+        submittedMessage(
+          saved,
+          published: 'Published. Community history includes rollback.',
+        ),
+      );
+    }
+    return true;
+  }
+
+  Widget _trimPanel() {
+    final ride = _shownRide!;
+    final gap = ride.spansGap(_rideStart, _rideEnd);
+    return Material(
+      elevation: 6,
+      borderRadius: BorderRadius.circular(18),
+      color: Theme.of(context).colorScheme.surface,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 10, 6, 10),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
               children: [
-                ListTile(
-                  leading: const Icon(
-                    Icons.route_outlined,
-                    color: Color(0xFF7B1FA2),
-                  ),
-                  title: Text(ride.name),
-                  subtitle: Text(
-                    '${formatDistance(segments.fold(0.0, (sum, s) => sum + pathLengthM(s)))} / '
-                    '${formatDistance(ride.distanceM)}',
-                  ),
-                ),
-                if (ride.segmentRanges.length > 1)
-                  Wrap(spacing: 8, children: [
-                    for (final (i, range) in ride.segmentRanges.indexed)
-                      if (range.end > range.start)
-                        ChoiceChip(
-                          label: Text('Segment ${i + 1}'),
-                          selected: _rideStart == range.start && _rideEnd == range.end,
-                          onSelected: (_) {
-                            setState(() {
-                              _rideStart = range.start;
-                              _rideEnd = range.end;
-                            });
-                            setSheet(() {});
-                            _drawRide();
-                          },
-                        ),
-                  ]),
-                RangeSlider(
-                  min: 0,
-                  max: (ride.points.length - 1).toDouble(),
-                  divisions: ride.points.length - 1,
-                  values: RangeValues(
-                    _rideStart.toDouble(),
-                    _rideEnd.toDouble(),
-                  ),
-                  onChanged: (v) {
-                    final start = v.start.round(), end = v.end.round();
-                    if (end - start < 1) return;
-                    setState(() {
-                      _rideStart = start;
-                      _rideEnd = end;
-                    });
-                    setSheet(() {});
-                    _drawRide();
-                  },
-                ),
-                Wrap(
-                  spacing: 8,
-                  alignment: WrapAlignment.center,
-                  children: [
-                    OutlinedButton.icon(
-                      icon: const Icon(Icons.crop_free),
-                      label: const Text('Keep what is on screen'),
-                      onPressed: () async {
-                        await _trimRideToView();
-                        setSheet(() {});
-                      },
+                Expanded(
+                  child: Semantics(
+                    liveRegion: true,
+                    child: Text(
+                      'Keeping ${formatDistance(ride.keptDistanceM(_rideStart, _rideEnd))} '
+                      'of ${formatDistance(ride.distanceM)}'
+                      '${gap ? ' · includes a GPS gap' : ''}',
+                      style: Theme.of(context).textTheme.titleSmall,
                     ),
-                    OutlinedButton.icon(
-                      icon: const Icon(Icons.undo),
-                      label: const Text('Whole ride'),
-                      onPressed: () {
-                        setState(() {
-                          _rideStart = 0;
-                          _rideEnd = ride.points.length - 1;
-                        });
-                        setSheet(() {});
-                        _drawRide();
-                      },
-                    ),
-                  ],
+                  ),
                 ),
-                ListTile(
-                  leading: const Icon(Icons.groups_outlined, color: brandGreen),
-                  title: const Text('Share this stretch as a community route'),
-                  subtitle: Text(canShare
-                    ? 'Review in the editor before publishing publicly'
-                    : 'Select one segment to share'),
-                  enabled: canShare,
-                  onTap: !canShare ? null : () async {
-                    Navigator.pop(ctx);
-                    final reduced = fitToVertexLimit(kept);
-                    await _openGeometryEditor(
-                      reduced[reduced.length ~/ 2],
-                      geometry: {
-                        'type': 'LineString',
-                        'coordinates': [
-                          for (final p in reduced) [p.longitude, p.latitude],
-                        ],
-                      },
-                      properties: {
-                        'name': ride.name,
-                        'category': 'route-suggestion',
-                      },
-                    );
-                    if (mounted) await _clearRide();
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.close),
-                  title: const Text('Hide ride'),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _clearRide();
-                  },
+                IconButton(
+                  tooltip: 'Close',
+                  icon: const Icon(Icons.close),
+                  onPressed: _clearRide,
                 ),
               ],
-            )),
-          );
-        },
+            ),
+            const Text(
+              'Drag the green and red handles along the ride.',
+              style: TextStyle(fontSize: 12),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                ActionChip(
+                  avatar: const Icon(Icons.crop_free, size: 18),
+                  label: const Text('Keep what is on screen'),
+                  onPressed: _trimRideToView,
+                ),
+                ActionChip(
+                  avatar: const Icon(Icons.undo, size: 18),
+                  label: const Text('Whole ride'),
+                  onPressed: () => _setTrim(0, ride.points.length - 1),
+                ),
+                FilledButton.icon(
+                  style: FilledButton.styleFrom(backgroundColor: brandGreenStrong),
+                  icon: const Icon(Icons.groups_outlined),
+                  label: const Text('Share'),
+                  onPressed: _shareStretch,
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
+    );
+  }
+
+  // ---------------------------------------------------------- draw tools
+
+  Future<void> _startRouteDraw(LatLng first) async {
+    final state = context.read<AppState>();
+    await _clearRide();
+    setState(() {
+      _areaDraft = null;
+      _straightNext = false;
+      _routeDraft = RouteDraft(
+        modes: state.apiModes,
+        stress: state.stressApiName,
+      );
+    });
+    await _addDraftPoint(first);
+  }
+
+  Future<void> _startAreaDraw(LatLng first) async {
+    await _clearRide();
+    setState(() {
+      _routeDraft = null;
+      _areaDraft = AreaDraft();
+    });
+    await _addDraftPoint(first);
+  }
+
+  /// Map tap while a draw tool is open. Legs are fetched in tap order.
+  Future<void> _addDraftPoint(LatLng p) {
+    final route = _routeDraft, area = _areaDraft;
+    if (area != null) {
+      if (!area.add(p)) toast(context, 'Use at most 200 corners.');
+      setState(() {});
+      return _drawDraft();
+    }
+    if (route == null) return Future.value();
+    final straight = _straightNext;
+    setState(() => _legsPending++);
+    return _drawQueue = _drawQueue.then((_) async {
+      final fellBack = await route.add(p, straight: straight);
+      if (!mounted || _routeDraft != route) return;
+      setState(() => _legsPending--);
+      if (fellBack) toast(context, 'No route found; drew a straight line.');
+      await _drawDraft();
+    });
+  }
+
+  Future<void> _drawDraft() async {
+    final map = _map;
+    if (map == null || !_styleReady) return;
+    final route = _routeDraft, area = _areaDraft;
+    // The waypoint markers replace the dropped pin the tool started from.
+    if (route != null || area != null) {
+      await map.setGeoJsonSource('pin', _emptyCollection);
+    }
+    final color = area != null ? '#C62828' : '#6F9920';
+    final pts = route?.waypoints ?? area?.corners ?? const <LatLng>[];
+    List<double> c(LatLng p) => [p.longitude, p.latitude];
+    final line = route?.line ?? const <LatLng>[];
+    await map.setGeoJsonSource('draft', {
+      'type': 'FeatureCollection',
+      'features': [
+        if (area != null && area.corners.length >= 3)
+          {'type': 'Feature', 'geometry': area.geometry, 'properties': {'color': color}},
+        if (area != null && area.corners.length == 2)
+          {
+            'type': 'Feature',
+            'geometry': {'type': 'LineString', 'coordinates': area.corners.map(c).toList()},
+            'properties': {'color': color},
+          },
+        if (line.length >= 2)
+          {
+            'type': 'Feature',
+            'geometry': {'type': 'LineString', 'coordinates': line.map(c).toList()},
+            'properties': {'color': color},
+          },
+        for (final p in pts)
+          {
+            'type': 'Feature',
+            'geometry': {'type': 'Point', 'coordinates': c(p)},
+            'properties': {'color': color},
+          },
+      ],
+    });
+  }
+
+  Future<void> _cancelDraw() async {
+    setState(() {
+      _routeDraft = null;
+      _areaDraft = null;
+      _legsPending = 0;
+    });
+    await _drawDraft();
+  }
+
+  Future<void> _publishDraw() async {
+    await _drawQueue;
+    if (!mounted) return;
+    final route = _routeDraft, area = _areaDraft;
+    final bool ok;
+    if (area != null && area.canPublish) {
+      ok = await _publishGeometry(
+        area.corners,
+        polygon: true,
+        name: area.name,
+        comment: area.comment,
+        replaces: area.replaces,
+      );
+    } else if (route != null && route.canPublish) {
+      ok = await _publishGeometry(
+        fitToVertexLimit(route.line),
+        name: route.name,
+        comment: route.comment,
+        category: route.category,
+        replaces: route.replaces,
+      );
+    } else {
+      return;
+    }
+    if (ok && mounted) await _cancelDraw();
+  }
+
+  Widget _drawBar() {
+    final area = _areaDraft;
+    if (area != null) {
+      return AreaDrawBar(
+        draft: area,
+        onUndo: () {
+          setState(area.undo);
+          _drawDraft();
+        },
+        onPublish: _publishDraw,
+        onCancel: _cancelDraw,
+      );
+    }
+    final route = _routeDraft!;
+    return RouteDrawBar(
+      draft: route,
+      straight: _straightNext,
+      busy: _legsPending > 0,
+      onUndo: () {
+        setState(route.undo);
+        _drawDraft();
+      },
+      onStraight: (v) => setState(() => _straightNext = v),
+      onPublish: _publishDraw,
+      onCancel: _cancelDraw,
     );
   }
 
@@ -712,6 +1204,14 @@ class _MapScreenState extends State<MapScreen> {
       return lat == null || lon == null ? null : LatLng(lat, lon);
     }
 
+    // `?ride=CODE`: a group ride share link opens the join sheet.
+    final rideCode = rideCodeFromUri(Uri.base);
+    if (rideCode != null) {
+      if (!context.read<GroupRideClient>().active) {
+        unawaited(_openGroupRide(code: rideCode));
+      }
+      return;
+    }
     final from = parse(q['from']), to = parse(q['to']);
     if (to == null) return;
     final state = context.read<AppState>();
@@ -975,7 +1475,10 @@ class _MapScreenState extends State<MapScreen> {
                     for (final e in stressColors.entries) ...[e.key, e.value],
                     '#9e9e9e',
                   ]
-                : _layerColorExpr(def),
+                // Community purple sinks into the dark base (2.6:1).
+                : _layerColorExpr(def,
+                    mounted && _darkBase() && def.color == rideLineHex
+                        ? rideLineOnDarkHex : null),
             lineWidth: def.width * boost,
             lineOpacity: opacity,
             lineCap: 'round',
@@ -994,19 +1497,19 @@ class _MapScreenState extends State<MapScreen> {
 
   /// Data-driven color: a per-layer property match (lots vs garages), else a
   /// per-feature `color` (GTFS routes), else the layer's own color.
-  dynamic _layerColorExpr(LayerDef def) {
+  dynamic _layerColorExpr(LayerDef def, [String? fallback]) {
     if (def.matchProp != null && def.matchColors != null) {
       return [
         'match',
         ['get', def.matchProp!],
         for (final e in def.matchColors!.entries) ...[e.key, e.value],
-        def.color,
+        fallback ?? def.color,
       ];
     }
     return [
       'coalesce',
       ['get', 'color'],
-      def.color,
+      fallback ?? def.color,
     ];
   }
 
@@ -1060,8 +1563,10 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   bool _featureQueryPending = false;
-  Future<void> _openGeometryEditor(
-    LatLng at, {
+  /// "Edit this contribution" on a community line or area: reopen it in the
+  /// waypoint tool (vertices → straight legs) or the corner tool. The
+  /// published revision replaces the old one via `replaces`.
+  Future<void> _editDrawn({
     bool polygon = false,
     Map<String, dynamic>? geometry,
     Map<String, dynamic>? properties,
@@ -1101,27 +1606,39 @@ class _MapScreenState extends State<MapScreen> {
         ModalRoute.of(context)?.isCurrent != true) {
       return;
     }
-    final saved = await Navigator.push<bool>(
-      context,
-      MaterialPageRoute(
-        builder: (_) => GeometryEditorScreen(
-          center: at,
-          style: _activeStyle ?? basemapStyleUrl,
-          polygon: polygon,
-          geometry: geometry,
-          name: properties?['name']?.toString(),
-          comment: properties?['comment']?.toString(),
+    final vertices = geometryLatLngs(geometry);
+    if (vertices.length < 2) return;
+    final state = context.read<AppState>();
+    await _clearRide();
+    if (!mounted) return;
+    final name = properties?['name']?.toString();
+    final comment = properties?['comment']?.toString();
+    final replaces = properties?['id']?.toString();
+    setState(() {
+      _straightNext = false;
+      if (polygon) {
+        _routeDraft = null;
+        _areaDraft = AreaDraft(
+          corners: vertices,
+          name: name,
+          comment: comment,
+          replaces: replaces,
+        );
+      } else {
+        _areaDraft = null;
+        _routeDraft = RouteDraft.seeded(
+          vertices,
+          modes: state.apiModes,
+          stress: state.stressApiName,
+          name: name,
+          comment: comment,
           category: properties?['category']?.toString(),
-          replaces: properties?['id']?.toString(),
-        ),
-      ),
-    );
-    if (saved == true && mounted) {
-      await _refreshCommunity();
-      if (mounted) {
-        toast(context, 'Published. Community history includes rollback.');
+          replaces: replaces,
+        );
       }
-    }
+    });
+    await _drawDraft();
+    await _fitGeometry(geometry);
   }
 
   /// Fly to a GeoJSON geometry picked from the Community edits list.
@@ -1195,7 +1712,18 @@ class _MapScreenState extends State<MapScreen> {
     String layerId,
     Annotation? annotation,
   ) async {
+    // Trim handles are annotations: dragging them is the interaction.
+    if (annotation != null) return;
     if (!_mapCanInteract()) return;
+    if (_routeDraft != null || _areaDraft != null) {
+      await _addDraftPoint(latLng);
+      return;
+    }
+    if (_trimming) return;
+    if (layerId == 'lyr-group-route') {
+      await _offerFollowLeader();
+      return;
+    }
     final interaction = _interactionSeq;
     _featureQueryPending = true;
     try {
@@ -1273,6 +1801,13 @@ class _MapScreenState extends State<MapScreen> {
       _searchFocus.unfocus();
       return;
     }
+    // Draw tools own the taps: each one is a waypoint / corner.
+    if (_routeDraft != null || _areaDraft != null) {
+      await _addDraftPoint(latLng);
+      return;
+    }
+    // Trimming: the handles are dragged; plain taps do nothing.
+    if (_trimming) return;
     // A tap while picking a trip endpoint means "there", not "what's here?".
     if (_pickField != null) {
       await _applyPick(latLng);
@@ -1424,11 +1959,11 @@ class _MapScreenState extends State<MapScreen> {
                   }, color: brandGreen),
                   chip(Icons.draw_outlined, 'Draw route', () {
                     Navigator.pop(ctx);
-                    _openGeometryEditor(latLng);
+                    _startRouteDraw(latLng);
                   }, color: brandGreen),
                   chip(Icons.block, 'No-entry area', () {
                     Navigator.pop(ctx);
-                    _openGeometryEditor(latLng, polygon: true);
+                    _startAreaDraw(latLng);
                   }, color: const Color(0xFFC62828)),
                   chip(Icons.badge_outlined, 'Who owns this road?', () {
                     Navigator.pop(ctx);
@@ -1557,9 +2092,12 @@ class _MapScreenState extends State<MapScreen> {
                   ),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: Text(
-                      title,
-                      style: Theme.of(ctx).textTheme.titleMedium,
+                    child: Semantics(
+                      header: true,
+                      child: Text(
+                        title,
+                        style: Theme.of(ctx).textTheme.titleMedium,
+                      ),
                     ),
                   ),
                 ],
@@ -1569,6 +2107,7 @@ class _MapScreenState extends State<MapScreen> {
                 label: const Text('Edit community information'),
                 onPressed: () async {
                   Navigator.pop(ctx);
+                  if (!await AuthGate.require(context) || !mounted) return;
                   final community = def?.id.startsWith('community') == true;
                   final geometry = feature['geometry'];
                   if (community &&
@@ -1577,15 +2116,14 @@ class _MapScreenState extends State<MapScreen> {
                         'LineString',
                         'Polygon',
                       ].contains(geometry['type'])) {
-                    await _openGeometryEditor(
-                      target,
+                    await _editDrawn(
                       polygon: geometry['type'] == 'Polygon',
                       geometry: Map<String, dynamic>.from(geometry),
                       properties: Map<String, dynamic>.from(props),
                     );
                     return;
                   }
-                  final updated = await showAppSheet<bool>(
+                  final updated = await showAppSheet<Map<String, dynamic>>(
                     context: context,
                     isScrollControlled: true,
                     builder: (_) => AddPointSheet(
@@ -1600,51 +2138,36 @@ class _MapScreenState extends State<MapScreen> {
                       replaces: community ? props['id']?.toString() : null,
                     ),
                   );
-                  if (updated == true && mounted) await _refreshCommunity();
+                  if (updated == null || !mounted) return;
+                  toast(
+                    context,
+                    submittedMessage(updated, published: 'Thanks — updated.'),
+                  );
+                  await _refreshCommunity();
                 },
               ),
               if (def?.id.startsWith('community') == true &&
                   props['id'] != null)
-                Builder(
-                  builder: (ctx) {
-                    final id = props['id'].toString();
-                    final count =
-                        (props['confirmations'] as num?)?.toInt() ?? 0;
-                    final done = state.hasConfirmed(id);
-                    return TextButton.icon(
-                      icon: Icon(
-                        done ? Icons.thumb_up_alt : Icons.thumb_up_alt_outlined,
-                      ),
-                      label: Text(
-                        done
-                            ? 'You confirmed this exists ($count)'
-                            : 'I rode this — it exists ($count)',
-                      ),
-                      onPressed: done
-                          ? null
-                          : () async {
-                              Navigator.pop(ctx);
-                              try {
-                                final n = await api.confirmContribution(
-                                  id,
-                                  state.voter,
-                                );
-                                state.markConfirmed(id);
-                                if (!mounted) return;
-                                toast(context, 'Thanks — $n confirmed.');
-                                await _refreshCommunity();
-                              } catch (e) {
-                                state.markConfirmed(id);
-                                if (mounted) toast(context, e.toString());
-                              }
-                            },
-                    );
+                VoteButtons(
+                  id: props['id'].toString(),
+                  up: ((props['upvotes'] ?? props['confirmations']) as num?)
+                          ?.toInt() ??
+                      0,
+                  down: (props['downvotes'] as num?)?.toInt() ?? 0,
+                  mine: state.myVote(props['id'].toString()),
+                  onVoted: (mine) {
+                    state.setMyVote(props['id'].toString(), mine);
+                    _refreshCommunity();
                   },
                 ),
               // Delete lives where the thing is: tapping a contribution is how
               // people find it, not the history list.
+              // Admins remove anything; riders their own (remembered on this
+              // device — the layer carries no author; the server re-checks).
               if (def?.id.startsWith('community') == true &&
-                  props['id'] != null)
+                  props['id'] != null &&
+                  (context.read<AuthState>().isAdmin ||
+                      state.isMyContribution(props['id'].toString())))
                 TextButton.icon(
                   icon: const Icon(Icons.delete_outline),
                   label: const Text('Remove this contribution'),
@@ -1660,11 +2183,14 @@ class _MapScreenState extends State<MapScreen> {
                     );
                     if (reason == null || !mounted) return;
                     try {
-                      await api.rollbackContribution(
-                        props['id'].toString(),
-                        reason,
-                      );
-                      if (!mounted) return;
+                      final done = await withAuth(context, () async {
+                        await api.rollbackContribution(
+                          props['id'].toString(),
+                          reason,
+                        );
+                        return true;
+                      });
+                      if (done == null || !mounted) return;
                       toast(context, 'Removed. History keeps it.');
                       await _refreshCommunity();
                     } catch (_) {
@@ -1689,8 +2215,11 @@ class _MapScreenState extends State<MapScreen> {
                     );
                     if (reason == null || !mounted) return;
                     try {
-                      await api.dismissReport(props['id'].toString(), reason);
-                      if (!mounted) return;
+                      final done = await withAuth(context, () async {
+                        await api.dismissReport(props['id'].toString(), reason);
+                        return true;
+                      });
+                      if (done == null || !mounted) return;
                       toast(context, 'Report dismissed. History keeps it.');
                       await _refreshReports();
                     } catch (_) {
@@ -1718,11 +2247,15 @@ class _MapScreenState extends State<MapScreen> {
                         _openBcycleApp(props['rental_uri']?.toString()),
                   ),
                 ),
-              Row(
+              // Wrap: at large text the three actions stack instead of
+              // overflowing.
+              Wrap(
+                spacing: 4,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   FilledButton.icon(
                     style: FilledButton.styleFrom(
-                      backgroundColor: brandGreen,
+                      backgroundColor: brandGreenStrong,
                       foregroundColor: Colors.white,
                     ),
                     icon: Icon(state.iconFor(state.mode), size: 18),
@@ -1732,7 +2265,6 @@ class _MapScreenState extends State<MapScreen> {
                       _routeTo(target, label: title);
                     },
                   ),
-                  const Spacer(),
                   IconButton(
                     tooltip: 'Who owns this road?',
                     icon: const Icon(Icons.badge_outlined),
@@ -1779,7 +2311,10 @@ class _MapScreenState extends State<MapScreen> {
         ),
       );
     }
-    final color = !renting || (bikes ?? 0) == 0 ? warnRed : brandGreen;
+    // Text colors that pass 4.5:1 on either theme (brandGreen was 3.4:1).
+    final color = !renting || (bikes ?? 0) == 0
+        ? Theme.of(ctx).colorScheme.error
+        : brandOnSurface(ctx);
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Row(
@@ -1848,6 +2383,174 @@ class _MapScreenState extends State<MapScreen> {
     } on Exception catch (e) {
       if (mounted) toast(context, e.toString());
     }
+  }
+
+  // ------------------------------------------------------------ group rides
+
+  /// Everyone but me (the native dot is me) plus the leader's shared route.
+  Future<void> _drawGroup() async {
+    final map = _map;
+    if (map == null || !mounted || !_styleReady) return;
+    final group = context.read<GroupRideClient>();
+    final darkBase =
+        context.read<AppState>().mapBase == MapBase.satellite ||
+        Theme.of(context).brightness == Brightness.dark;
+    final features = <Map<String, dynamic>>[];
+    for (final m in group.active ? group.members : const <GroupMember>[]) {
+      final at = m.position;
+      if (at == null || m.id == group.memberId) continue;
+      final img = 'grp-${darkBase ? 'd' : 'l'}-${m.name}';
+      if (_groupImages.add(img)) {
+        try {
+          await map.addImage(
+            img,
+            await renderLabel(
+              text: m.name,
+              devicePixelRatio: _imageDpr,
+              darkBase: darkBase,
+            ),
+          );
+        } catch (_) {
+          _groupImages.remove(img);
+        }
+      }
+      features.add({
+        'type': 'Feature',
+        'geometry': {
+          'type': 'Point',
+          'coordinates': [at.longitude, at.latitude],
+        },
+        'properties': {'name': m.name, 'leader': m.isLeader, 'img': img},
+      });
+    }
+    if (!mounted) return;
+    await map.setGeoJsonSource('group-members', {
+      'type': 'FeatureCollection',
+      'features': features,
+    });
+    final route = group.active ? group.leaderRoute : null;
+    await map.setGeoJsonSource('group-route', {
+      'type': 'FeatureCollection',
+      'features': [?route],
+    });
+  }
+
+  /// Group ride sheet (menu tile, rail button, `?ride=` link).
+  Future<void> _openGroupRide({String? code}) async {
+    final action = await showAppSheet<GroupSheetAction>(
+      context: context,
+      builder: (_) =>
+          GroupRideSheet(locate: _bestOrigin, initialCode: code),
+    );
+    if (action == null || !mounted) return;
+    switch (action.kind) {
+      case 'catch-up':
+        final m = action.member;
+        final at = m?.position;
+        if (m == null || at == null) return;
+        await _planTrip(
+          from: TripEndpoint.myLocation,
+          to: TripEndpoint(label: m.name, latLng: at),
+        );
+      case 'follow':
+        await _followLeader();
+      case 'fit':
+        await _fitGroup();
+    }
+  }
+
+  /// Leader navigating: share the planned line (and every reroute).
+  Future<void> _shareGroupRoute() async {
+    final feature = _navFeature;
+    final group = context.read<GroupRideClient>();
+    if (feature == null || !_navigating || !group.isLeader) return;
+    await group.setRoute(feature);
+  }
+
+  Future<void> _offerFollowLeader() async {
+    final group = context.read<GroupRideClient>();
+    if (group.isLeader || group.leaderRoute == null) return;
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Leader's route"),
+        content: Text(
+          'Navigate along the route ${group.leader?.name ?? 'the leader'} '
+          'is riding?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Follow the leader'),
+          ),
+        ],
+      ),
+    );
+    if (go == true && mounted) await _followLeader();
+  }
+
+  /// Turn-by-turn along the leader's shared Feature. Reroutes head for the
+  /// leader's destination (ponytail: not back onto their exact line).
+  Future<void> _followLeader() async {
+    final feature = context.read<GroupRideClient>().leaderRoute;
+    if (feature == null) return;
+    final route = NavRoute.fromFeature(feature);
+    if (route.isEmpty) return;
+    ++_planSeq;
+    await _stopNav();
+    await _map?.setGeoJsonSource('route', route.routeCollection());
+    await _map?.setGeoJsonSource('route-hills', route.hillCollection());
+    await _map?.setGeoJsonSource('route-warn', route.warnCollection());
+    await _map?.setGeoJsonSource('route-steps', route.stepCollection());
+    await _setPin(route.destination);
+    if (!mounted) return;
+    setState(() {
+      _routing = true;
+      _navRoute = route;
+      _navFeature = null; // theirs, not ours to re-share
+      _destination = route.destination;
+      _from = TripEndpoint.myLocation;
+      _to = TripEndpoint(
+        label: "Leader's destination",
+        latLng: route.destination,
+      );
+      _place = null;
+    });
+    await _startNav();
+  }
+
+  /// Frame me and everyone in the ride.
+  Future<void> _fitGroup() async {
+    final group = context.read<GroupRideClient>();
+    final pts = [
+      for (final m in group.members) ?m.position,
+      ?group.position,
+    ];
+    if (pts.isEmpty) return;
+    if (pts.length == 1) {
+      await _map?.animateCamera(CameraUpdate.newLatLngZoom(pts.first, 16.0));
+      return;
+    }
+    var s = pts.first.latitude, n = s, w = pts.first.longitude, e = w;
+    for (final p in pts) {
+      s = math.min(s, p.latitude);
+      n = math.max(n, p.latitude);
+      w = math.min(w, p.longitude);
+      e = math.max(e, p.longitude);
+    }
+    await _map?.animateCamera(
+      CameraUpdate.newLatLngBounds(
+        LatLngBounds(southwest: LatLng(s, w), northeast: LatLng(n, e)),
+        left: 60,
+        right: 60,
+        top: 160,
+        bottom: 200,
+      ),
+    );
   }
 
   // ---------------------------------------------------------------- routing
@@ -1922,6 +2625,9 @@ class _MapScreenState extends State<MapScreen> {
       await _map?.setGeoJsonSource('route-steps', route.stepCollection());
       await _setPin(dest);
       if (!mounted || seq != _planSeq) return;
+      _navFeature = feature;
+      // A leader mid-ride (incl. every reroute) keeps the group's line fresh.
+      if (_navigating) unawaited(_shareGroupRoute());
       setState(() {
         _routing = true;
         _navRoute = route;
@@ -1943,13 +2649,158 @@ class _MapScreenState extends State<MapScreen> {
     } on Exception catch (e) {
       if (!mounted || seq != _planSeq) return;
       setState(() => _routing = _navRoute != null);
-      toast(context, e.toString());
+      final msg = e.toString();
+      if (msg.contains('No bus stops') &&
+          state.modes.contains(TravelMode.transit)) {
+        // The backend says how far it looked; say it verbatim and offer the
+        // obvious way out.
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(
+            SnackBar(
+              content: Text(msg),
+              duration: const Duration(seconds: 10),
+              action: SnackBarAction(
+                label: 'Route without the bus',
+                onPressed: () {
+                  final rest = {...state.modes}..remove(TravelMode.transit);
+                  state.setModes(rest.isEmpty ? {TravelMode.pedestrian} : rest);
+                  _planTrip(from: startPoint, to: endPoint, silent: silent);
+                },
+              ),
+            ),
+          );
+      } else {
+        toast(context, msg);
+      }
     } finally {
       // Only the newest request may clear the spinner.
       if (mounted && seq == _planSeq && _planning) {
         setState(() => _planning = false);
       }
     }
+  }
+
+  // ------------------------------------------------------------ saved routes
+
+  /// Bookmark the previewed trip to the account (`POST /bwg/routes`).
+  Future<void> _saveCurrentRoute() async {
+    final route = _navRoute;
+    final dest = _destination;
+    if (route == null || dest == null || route.points.isEmpty) return;
+    if (!await AuthGate.require(context) || !mounted) return;
+    final state = context.read<AppState>();
+    // ponytail: "my location" is saved as the coordinates it resolved to;
+    // add a from_here flag server-side if riders want it to follow them.
+    final origin = _from.latLng ?? route.points.first;
+    final fromLabel = _from.isMyLocation ? 'My location' : _from.label;
+    final toLabel = _to?.label ?? 'Destination';
+    final ctl = TextEditingController(text: '$fromLabel → $toLabel');
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Save route'),
+        content: TextField(
+          controller: ctl,
+          autofocus: true,
+          maxLength: 80,
+          decoration: const InputDecoration(labelText: 'Name'),
+          onSubmitted: (v) => Navigator.pop(ctx, v),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, ctl.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    Future<void>.delayed(const Duration(seconds: 1), ctl.dispose);
+    if (name == null || name.trim().isEmpty || !mounted) return;
+    final body = <String, dynamic>{
+      'name': name.trim(),
+      'from_lat': origin.latitude,
+      'from_lon': origin.longitude,
+      'to_lat': dest.latitude,
+      'to_lon': dest.longitude,
+      'modes': {
+        ...state.apiModes,
+        if (state.roll) 'roll',
+        if (state.useEbike) 'ebike',
+        if (state.useBcycle) 'bcycle',
+      }.join(','),
+      'stress': state.stressApiName,
+      'distance_m': route.distanceM,
+      'duration_min': route.durationMin,
+      if (route.points.length <= 10000)
+        'geometry': {
+          'type': 'LineString',
+          'coordinates': [
+            for (final p in route.points) [p.longitude, p.latitude],
+          ],
+        },
+    };
+    try {
+      final saved = await withAuth(context, () => auth.saveRoute(body));
+      if (saved == null || !mounted) return;
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(
+          SnackBar(
+            content: const Text('Route saved'),
+            action: SnackBarAction(
+              label: 'Undo',
+              onPressed: () => auth
+                  .deleteSavedRoute(saved['id'].toString())
+                  .catchError((_) {}),
+            ),
+          ),
+        );
+    } catch (e) {
+      if (mounted) toast(context, e.toString());
+    }
+  }
+
+  /// Re-plan a saved route from its stored endpoints, modes and stress.
+  Future<void> _openSavedRoute(Map<String, dynamic> r) async {
+    final state = context.read<AppState>();
+    final modes = '${r['modes'] ?? 'bike'}'.split(',');
+    final travel = {
+      if (modes.any(const {'bike', 'ebike', 'bcycle'}.contains))
+        TravelMode.cyclist,
+      if (modes.any(const {'walk', 'roll'}.contains)) TravelMode.pedestrian,
+      if (modes.contains('transit')) TravelMode.transit,
+    };
+    state.setModes(travel);
+    state.setRoll(modes.contains('roll'));
+    state.setUseEbike(modes.contains('ebike'));
+    state.setUseBcycle(modes.contains('bcycle'));
+    for (final level in BikeStress.values) {
+      if (level.name == r['stress']) state.setStress(level);
+    }
+    final from = LatLng(
+      (r['from_lat'] as num).toDouble(),
+      (r['from_lon'] as num).toDouble(),
+    );
+    final to = LatLng(
+      (r['to_lat'] as num).toDouble(),
+      (r['to_lon'] as num).toDouble(),
+    );
+    // Names default to "A → B"; reuse the halves as endpoint labels.
+    final name = r['name']?.toString() ?? 'Saved route';
+    final halves = name.split(' → ');
+    _searchFocus.unfocus();
+    await _planTrip(
+      from: TripEndpoint(
+        label: halves.length == 2 ? halves.first : 'Start',
+        latLng: from,
+      ),
+      to: TripEndpoint(label: halves.length == 2 ? halves.last : name, latLng: to),
+    );
   }
 
   // ------------------------------------------------------------- trip planner
@@ -2062,6 +2913,7 @@ class _MapScreenState extends State<MapScreen> {
     setState(() {
       _routing = false;
       _navRoute = null;
+      _navFeature = null;
       _destination = null;
       _progress = null;
       _place = null;
@@ -2087,7 +2939,6 @@ class _MapScreenState extends State<MapScreen> {
       return;
     }
     await _initTts();
-    await WakelockPlus.enable();
     await _ensurePuckImage();
     if (!mounted) return;
     setState(() {
@@ -2101,7 +2952,9 @@ class _MapScreenState extends State<MapScreen> {
       // Ignore camera chatter from the initial fly-in.
       _progAnimUntil = DateTime.now().add(const Duration(seconds: 3));
     });
+    _syncWakelock();
     _rerouteGovernor.reset();
+    unawaited(_shareGroupRoute());
     // Strip the thematic overlays so the street layout underneath is legible.
     _applyVisibility();
     await _subscribeNavPositions();
@@ -2204,10 +3057,6 @@ class _MapScreenState extends State<MapScreen> {
     _posSub = null;
     await _tts?.stop();
     await _navNotifier.cancel();
-    if (mounted) {
-      final recorder = context.read<RideRecorder>();
-      if (!recorder.recording || recorder.paused) await WakelockPlus.disable();
-    }
     await _map?.setGeoJsonSource('puck', _emptyCollection);
     if (!mounted || !_navigating) return;
     setState(() {
@@ -2215,6 +3064,9 @@ class _MapScreenState extends State<MapScreen> {
       _progress = null;
       _lastNavFix = null;
     });
+    // Leader stopped navigating: followers shouldn't chase a stale line.
+    unawaited(context.read<GroupRideClient>().clearRoute());
+    _syncWakelock();
     _applyVisibility();
     final here = _map?.cameraPosition?.target;
     if (here != null) {
@@ -2536,24 +3388,78 @@ class _MapScreenState extends State<MapScreen> {
     _searchDebounce?.cancel();
     _searchFocus.unfocus();
     if (clearText) _searchCtl.clear();
-    setState(() => _results = []);
+    setState(() {
+      _results = [];
+      _searching = false;
+      _searchStatus = '';
+    });
   }
 
   void _onSearchChanged(String q) {
     _searchDebounce?.cancel();
     final seq = ++_searchSeq;
     if (q.trim().length < 2) {
-      setState(() => _results = []);
+      setState(() {
+        _results = [];
+        _searching = false;
+        _searchStatus = '';
+      });
       return;
     }
     _searchDebounce = Timer(const Duration(milliseconds: 400), () async {
+      if (!mounted || seq != _searchSeq) return;
+      setState(() {
+        _searching = true;
+        _searchStatus = 'Searching…';
+      });
       try {
         final results = await api.search(q.trim());
         if (mounted && seq == _searchSeq && _searchFocus.hasFocus) {
-          setState(() => _results = results);
+          setState(() {
+            _results = results;
+            final n = math.min(results.length, 6); // the dropdown shows 6
+            _searchStatus = n == 0
+                ? 'No results'
+                : '$n result${n == 1 ? '' : 's'}';
+          });
         }
-      } catch (_) {}
+      } catch (_) {
+        if (mounted && seq == _searchSeq) {
+          setState(() => _searchStatus = 'Search failed. Check your connection.');
+        }
+      } finally {
+        // Only the newest request owns the spinner.
+        if (mounted && seq == _searchSeq) setState(() => _searching = false);
+      }
     });
+  }
+
+  /// The search state as a live region. "No results" and errors are shown
+  /// (sighted riders need them too); "Searching…" and "N results" are heard
+  /// only — the spinner and the list already show them.
+  Widget _searchStatusLine() {
+    final shown = !_searching && _results.isEmpty;
+    return Semantics(
+      key: const ValueKey('search-status'),
+      container: true,
+      liveRegion: true,
+      label: _searchStatus,
+      excludeSemantics: true,
+      child: shown
+          ? Padding(
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+              child: Material(
+                elevation: 3,
+                borderRadius: BorderRadius.circular(12),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  child: Row(children: [Expanded(child: Text(_searchStatus))]),
+                ),
+              ),
+            )
+          // 1 dp, not zero: zero-size nodes are dropped as invisible.
+          : const SizedBox.square(dimension: 1),
+    );
   }
 
   Future<void> _selectResult(Map<String, dynamic> r) async {
@@ -2599,6 +3505,7 @@ class _MapScreenState extends State<MapScreen> {
     final name = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
+        title: const Text('Rename saved place'),
         content: TextField(
           controller: ctl,
           autofocus: true,
@@ -2637,91 +3544,29 @@ class _MapScreenState extends State<MapScreen> {
     );
     final label = (r['label'] ?? 'Destination').toString();
     final sublabel = (r['sublabel'] ?? '').toString();
-    return Material(
-      elevation: 6,
-      borderRadius: BorderRadius.circular(18),
-      color: brandGreen,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 8, 14),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    label,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 17,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  if (sublabel.isNotEmpty)
-                    Text(
-                      sublabel,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 13,
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 10),
-            // Tap the label to route straight away; the ⋮ opens the planner
-            // when the trip doesn't start where you're standing.
-            FilledButton.icon(
-              style: FilledButton.styleFrom(
-                backgroundColor: Colors.white,
-                foregroundColor: brandDark,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 12,
-                ),
-              ),
-              icon: Icon(state.iconFor(state.mode), size: 20),
-              label: Text(
-                state.directionsVerb,
-                style: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              onPressed: () => _routeTo(target, label: label),
-            ),
-            IconButton(
-              tooltip: state.isSaved(r) ? 'Remove from saved' : 'Save',
-              icon: Icon(
-                state.isSaved(r) ? Icons.bookmark : Icons.bookmark_border,
-                color: Colors.white,
-              ),
-              onPressed: () => _toggleSaved(r),
-            ),
-            IconButton(
-              tooltip: 'Change start point or modes',
-              icon: const Icon(Icons.tune, color: Colors.white70),
-              onPressed: () => _openDirections(
-                to: TripEndpoint(label: label, latLng: target),
-              ),
-            ),
-            IconButton(
-              icon: const Icon(Icons.close, color: Colors.white70),
-              onPressed: _clearPlace,
-            ),
-          ],
-        ),
+    return PlaceCard(
+      label: label,
+      sublabel: sublabel,
+      verb: state.directionsVerb,
+      modeIcon: state.iconFor(state.mode),
+      saved: state.isSaved(r),
+      onNavigate: () => _routeTo(target, label: label),
+      onToggleSaved: () => _toggleSaved(r),
+      onPlan: () => _openDirections(
+        to: TripEndpoint(label: label, latLng: target),
       ),
+      onClose: _clearPlace,
     );
   }
 
   // ---------------------------------------------------------------- reports
 
   Future<void> _openReportSheet(LatLng latLng, {String? spotName}) async {
+    // Ask before the form, not after the rider has typed it all out.
+    if (!await AuthGate.require(context) || !mounted) {
+      _clearPinIfIdle();
+      return;
+    }
     final submitted = await showAppSheet<Map<String, dynamic>>(
       context: context,
       isScrollControlled: true,
@@ -2731,9 +3576,12 @@ class _MapScreenState extends State<MapScreen> {
       final road = submitted['road_name'];
       toast(
         context,
-        road != null
-            ? 'Thanks! Your report near $road is on the map.'
-            : 'Thanks! Your report is on the map.',
+        submittedMessage(
+          submitted,
+          published: road != null
+              ? 'Thanks! Your report near $road is on the map.'
+              : 'Thanks! Your report is on the map.',
+        ),
       );
       await _refreshReports();
     }
@@ -2757,15 +3605,23 @@ class _MapScreenState extends State<MapScreen> {
 
   /// "This exists on the ground but not on the map."
   Future<void> _openAddPointSheet(LatLng latLng) async {
-    final submitted = await showAppSheet<bool>(
+    if (!await AuthGate.require(context) || !mounted) {
+      _clearPinIfIdle();
+      return;
+    }
+    final submitted = await showAppSheet<Map<String, dynamic>>(
       context: context,
       isScrollControlled: true,
       builder: (_) => AddPointSheet(latLng: latLng),
     );
-    if (submitted == true && mounted) {
+    if (submitted != null && mounted) {
       toast(
         context,
-        'Published to the community map. Changes can be rolled back.',
+        submittedMessage(
+          submitted,
+          published:
+              'Published to the community map. Changes can be rolled back.',
+        ),
       );
       await _refreshCommunity();
     }
@@ -2790,6 +3646,7 @@ class _MapScreenState extends State<MapScreen> {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
+    final account = context.watch<AuthState>();
     // The rider picks the base (layers sheet); `auto` follows the app theme
     // (Theme.of resolves ThemeMode.system for us).
     final styleUrl = switch (state.mapBase) {
@@ -2815,6 +3672,7 @@ class _MapScreenState extends State<MapScreen> {
         _activeContrast != state.highContrast &&
         _styleReady) {
       _restyleLineLayers();
+      _restyleOwnLines();
     }
     _activeContrast = state.highContrast;
     return Scaffold(
@@ -2824,7 +3682,15 @@ class _MapScreenState extends State<MapScreen> {
       resizeToAvoidBottomInset: false,
       body: Stack(
         children: [
-          MapLibreMap(
+          // One labeled node for the map: TalkBack/VoiceOver would otherwise
+          // wander into the native view's tiles. Everything to do on the map
+          // (search, rail, cards, sheets) sits above it and stays reachable.
+          Semantics(
+            label: 'Map of Greenville',
+            hint: 'Use search or the buttons at the bottom right to explore',
+            container: true,
+            excludeSemantics: true,
+            child: MapLibreMap(
             styleString: styleUrl,
             initialCameraPosition: const CameraPosition(
               target: LatLng(homeLat, homeLon),
@@ -2833,6 +3699,7 @@ class _MapScreenState extends State<MapScreen> {
             onMapCreated: (c) {
               _map = c;
               c.onFeatureTapped.add(_onFeatureTap);
+              c.onFeatureDrag.add(_onHandleDrag);
             },
             onStyleLoadedCallback: _onStyleLoaded,
             // The native compass drew itself under the status bar and vanished
@@ -2854,13 +3721,19 @@ class _MapScreenState extends State<MapScreen> {
               8,
               MediaQuery.of(context).padding.bottom + 8,
             ),
-          ),
+          )),
 
           // Top chrome: search + mode switch (hidden while navigating).
           if (!_navigating)
             SafeArea(
               child: PointerInterceptor(
                 intercepting: kIsWeb,
+                // The dropdowns below count as "inside" the search field.
+                // Without this, on web the pointer-DOWN on a result is a tap
+                // outside the field: EditableText unfocuses it, the focus
+                // listener rebuilds, the dropdown (gated on hasFocus) is
+                // gone before pointer-up, and the tap never lands.
+                child: TextFieldTapRegion(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -2880,11 +3753,24 @@ class _MapScreenState extends State<MapScreen> {
                             hintText: 'Search streets, stops, bike parking…',
                             prefixIcon: Padding(
                               padding: const EdgeInsets.only(left: 8),
-                              child: Image.asset('assets/logo.png', width: 28),
+                              child: Image.asset('assets/logo.png', width: 28,
+                                  excludeFromSemantics: true),
                             ),
                             suffixIcon: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
+                                if (_searching)
+                                  const Padding(
+                                    key: ValueKey('search-progress'),
+                                    padding: EdgeInsets.all(4),
+                                    child: SizedBox.square(
+                                      dimension: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        semanticsLabel: 'Searching',
+                                      ),
+                                    ),
+                                  ),
                                 if (_searchCtl.text.isNotEmpty ||
                                     _searchFocus.hasFocus ||
                                     _results.isNotEmpty)
@@ -2917,6 +3803,12 @@ class _MapScreenState extends State<MapScreen> {
                                     );
                                     if (picked is Ride && mounted) {
                                       await _showRide(picked);
+                                    } else if (picked is SavedRoutePick &&
+                                        mounted) {
+                                      await _openSavedRoute(picked.route);
+                                    } else if (picked == 'group-ride' &&
+                                        context.mounted) {
+                                      await _openGroupRide();
                                     }
                                   },
                                 ),
@@ -2931,6 +3823,8 @@ class _MapScreenState extends State<MapScreen> {
                         ),
                       ),
                     ),
+                    if (_searchFocus.hasFocus && _searchStatus.isNotEmpty)
+                      _searchStatusLine(),
                     if (_searchFocus.hasFocus && _results.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -2939,8 +3833,11 @@ class _MapScreenState extends State<MapScreen> {
                           borderRadius: BorderRadius.circular(12),
                           child: Column(
                             children: [
-                              for (final r in _results.take(6))
+                              for (final (i, r) in _results.take(6).indexed)
                                 ListTile(
+                                  key: ValueKey(
+                                    'result-$i-${r['label']}-${r['lat']},${r['lon']}',
+                                  ),
                                   dense: true,
                                   leading: const Icon(Icons.place_outlined),
                                   title: Text(r['label']?.toString() ?? ''),
@@ -2959,7 +3856,8 @@ class _MapScreenState extends State<MapScreen> {
                     // the "bring my route back" path after clearing navigation.
                     else if (_searchFocus.hasFocus &&
                         (state.recentSearches.isNotEmpty ||
-                            state.savedPlaces.isNotEmpty))
+                            state.savedPlaces.isNotEmpty ||
+                            account.savedRoutes.isNotEmpty))
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 12),
                         child: Material(
@@ -2982,6 +3880,9 @@ class _MapScreenState extends State<MapScreen> {
                                 // route preview (focus, tap — two taps).
                                 for (final r in state.savedPlaces)
                                   ListTile(
+                                    key: ValueKey(
+                                      'saved-${r['lat']},${r['lon']}',
+                                    ),
                                     dense: true,
                                     leading: const Icon(Icons.bookmark),
                                     title: Text(r['label']?.toString() ?? ''),
@@ -3023,11 +3924,53 @@ class _MapScreenState extends State<MapScreen> {
                                       ],
                                     ),
                                   ),
+                                // Saved routes (account): the first few, then
+                                // the full list in My rides & routes.
+                                for (final r in account.savedRoutes.take(3))
+                                  ListTile(
+                                    key: ValueKey('saved-route-${r['id']}'),
+                                    dense: true,
+                                    leading: const Icon(Icons.bookmark_added_outlined),
+                                    title: Text(r['name']?.toString() ?? 'Saved route'),
+                                    subtitle: r['distance_m'] is num
+                                        ? Text(formatDistance(
+                                            (r['distance_m'] as num).toDouble()))
+                                        : null,
+                                    onTap: () => _openSavedRoute(r),
+                                  ),
+                                if (account.savedRoutes.length > 3)
+                                  ListTile(
+                                    key: const ValueKey('saved-routes-all'),
+                                    dense: true,
+                                    leading: const Icon(Icons.more_horiz),
+                                    title: Text(
+                                      'See all ${account.savedRoutes.length} saved routes',
+                                    ),
+                                    onTap: () async {
+                                      _searchFocus.unfocus();
+                                      final picked = await Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) =>
+                                              const RidesScreen(initialTab: 1),
+                                        ),
+                                      );
+                                      if (!mounted) return;
+                                      if (picked is SavedRoutePick) {
+                                        await _openSavedRoute(picked.route);
+                                      } else if (picked is Ride) {
+                                        await _showRide(picked);
+                                      }
+                                    },
+                                  ),
                                 for (final r
                                     in state.recentSearches
                                         .where((r) => !state.isSaved(r))
                                         .take(5))
                                 ListTile(
+                                  key: ValueKey(
+                                    'recent-${r['label']}-${r['lat']},${r['lon']}',
+                                  ),
                                   dense: true,
                                   leading: const Icon(Icons.history),
                                   title: Text(r['label']?.toString() ?? ''),
@@ -3050,6 +3993,7 @@ class _MapScreenState extends State<MapScreen> {
                       _pickBanner(),
                     ],
                   ],
+                ),
                 ),
               ),
             ),
@@ -3078,7 +4022,7 @@ class _MapScreenState extends State<MapScreen> {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   _controlRail(),
-                  if (!_navigating && _navRoute == null) ...[
+                  if (!_navigating && _navRoute == null && !_toolOpen) ...[
                     const SizedBox(height: 10),
                     _reportFab(),
                   ],
@@ -3088,7 +4032,7 @@ class _MapScreenState extends State<MapScreen> {
                       alignment: Alignment.center,
                       child: FloatingActionButton.extended(
                         heroTag: 'recenter',
-                        backgroundColor: brandGreen,
+                        backgroundColor: brandGreenStrong,
                         foregroundColor: Colors.white,
                         icon: const Icon(Icons.navigation),
                         label: const Text('Re-center'),
@@ -3100,7 +4044,14 @@ class _MapScreenState extends State<MapScreen> {
                     const SizedBox(height: 10),
                     _planningChip(),
                   ],
-                  if (_navigating && _navRoute != null) ...[
+                  if (!_navigating &&
+                      (_routeDraft != null || _areaDraft != null)) ...[
+                    const SizedBox(height: 10),
+                    _drawBar(),
+                  ] else if (!_navigating && _trimming && _shownRide != null) ...[
+                    const SizedBox(height: 10),
+                    _trimPanel(),
+                  ] else if (_navigating && _navRoute != null) ...[
                     const SizedBox(height: 10),
                     _navTripBar(),
                   ] else if (_navRoute != null && !_planning) ...[
@@ -3171,7 +4122,8 @@ class _MapScreenState extends State<MapScreen> {
               onTap: _openHazardsSheet,
               icon: Badge(
                 label: Text('${hazards.length}'),
-                backgroundColor: warnAccent(context),
+                // warnFg/warnBg: the numeral on warnAccent was 3.6:1.
+                backgroundColor: warnFg(context),
                 textColor: warnBg(context),
                 child: Icon(
                   Icons.warning_amber_rounded,
@@ -3179,23 +4131,43 @@ class _MapScreenState extends State<MapScreen> {
                 ),
               ),
             ),
-          if (!_navigating || context.watch<RideRecorder>().recording)
-            Builder(
-              builder: (ctx) {
-                final recorder = ctx.watch<RideRecorder>();
-                final recording = recorder.recording;
-                return _railButton(
-                  tooltip: recorder.error ?? (recording ? (recorder.paused ? 'Resume ride' : 'Recording controls') : 'Record a ride'),
-                  onTap: _toggleRecording,
-                  icon: Icon(
-                    recorder.error != null ? Icons.error_outline : recording ? (recorder.paused ? Icons.pause_circle : Icons.stop_circle) : Icons.fiber_manual_record,
-                    color: recording
-                        ? const Color(0xFFC62828)
-                        : const Color(0xFF7B1FA2),
-                  ),
-                );
-              },
-            ),
+          Builder(
+            builder: (ctx) {
+              final recorder = ctx.watch<RideRecorder>();
+              final recording = recorder.recording;
+              return _railButton(
+                tooltip: recorder.error ?? (recording ? (recorder.paused ? 'Resume ride' : 'Recording controls') : 'Record a ride'),
+                onTap: _toggleRecording,
+                icon: recorder.error != null
+                    ? const Icon(Icons.error_outline, color: recordRed)
+                    : RecordIcon(
+                        state: !recording
+                            ? RecordState.idle
+                            : (recorder.paused
+                                  ? RecordState.paused
+                                  : RecordState.recording),
+                      ),
+              );
+            },
+          ),
+          Builder(
+            builder: (ctx) {
+              final group = ctx.watch<GroupRideClient>();
+              if (!group.active) return const SizedBox.shrink();
+              final n = group.members.length;
+              return _railButton(
+                tooltip: 'Group ride, $n ${n == 1 ? 'rider' : 'riders'}',
+                onTap: _openGroupRide,
+                icon: Badge(
+                  label: Text('$n'),
+                  isLabelVisible: n > 0,
+                  backgroundColor: groupRideBadge,
+                  textColor: Colors.white,
+                  child: const Icon(Icons.groups, color: groupRideColor),
+                ),
+              );
+            },
+          ),
           _railButton(
             tooltip: 'My location',
             onTap: _locateMe,
@@ -3235,14 +4207,14 @@ class _MapScreenState extends State<MapScreen> {
     icon: icon,
     tooltip: tooltip,
     onPressed: onTap,
-    visualDensity: VisualDensity.compact,
+    // Standard density: compact shrank the hit area to 40 dp (48 minimum).
   );
 
   /// The one prominent action on an otherwise empty map. Only offered when no
   /// route is drawn — with a trip on screen the bottom belongs to the trip.
   Widget _reportFab() => FloatingActionButton.extended(
     heroTag: 'report',
-    backgroundColor: brandGreen,
+    backgroundColor: brandGreenStrong,
     foregroundColor: Colors.white,
     icon: const Icon(Icons.add_location_alt_outlined),
     label: const Text('Report'),
@@ -3253,7 +4225,7 @@ class _MapScreenState extends State<MapScreen> {
   /// do nothing visible for a second or two).
   Widget _planningChip() => Align(
     alignment: Alignment.center,
-    child: Material(
+    child: Semantics(liveRegion: true, child: Material(
       elevation: 4,
       borderRadius: BorderRadius.circular(24),
       color: Theme.of(context).colorScheme.surface,
@@ -3273,12 +4245,13 @@ class _MapScreenState extends State<MapScreen> {
             SizedBox(width: 12),
             Text(
               'Finding your route…',
+              semanticsLabel: 'Finding your route',
               style: TextStyle(fontWeight: FontWeight.w600),
             ),
           ],
         ),
       ),
-    ),
+    )),
   );
 
   /// "Tap the map" banner while a trip endpoint is being picked.
@@ -3295,15 +4268,16 @@ class _MapScreenState extends State<MapScreen> {
             const Icon(Icons.touch_app, color: Colors.white, size: 20),
             const SizedBox(width: 10),
             Expanded(
-              child: Text(
+              child: Semantics(liveRegion: true, child: Text(
                 _pickField == 'from'
                     ? 'Tap the map to set your start point'
                     : 'Tap the map to set your destination',
                 style: const TextStyle(color: Colors.white),
-              ),
+              )),
             ),
             IconButton(
-              icon: const Icon(Icons.close, color: Colors.white70, size: 20),
+              tooltip: 'Stop picking on the map',
+              icon: const Icon(Icons.close, color: Colors.white, size: 20),
               onPressed: () => setState(() => _pickField = null),
             ),
           ],
@@ -3343,76 +4317,19 @@ class _MapScreenState extends State<MapScreen> {
         if (route.alternatives.isNotEmpty || _canAlt(route))
           _alternativesRow(route),
         if (!route.isTransit && route.plan != 'bcycle') _tripPrefsRow(),
-        Material(
-          elevation: 4,
-          borderRadius: BorderRadius.circular(16),
+        RoutePreviewCard(
           color: color,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(14, 8, 6, 8),
-            child: Row(
-              children: [
-                Icon(icon, color: Colors.white, size: 20),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Suggested route · use at your own risk',
-                        style: TextStyle(color: Colors.white, fontSize: 11),
-                      ),
-                      Text(
-                        // Distance and ETA only — the climb lives in the
-                        // hazards sheet with the elevation graph.
-                        '${formatDistance(route.distanceM)} · '
-                        '${formatDuration(route.durationMin)}',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 16,
-                        ),
-                      ),
-                      Text(
-                        subtitle,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white70,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                IconButton(
-                  tooltip: 'Copy a link to this trip',
-                  icon: const Icon(Icons.share_outlined, color: Colors.white),
-                  onPressed: _shareTrip,
-                ),
-                if (route.steps.isNotEmpty)
-                  IconButton(
-                    tooltip: 'Upcoming turns',
-                    icon: const Icon(Icons.list_alt, color: Colors.white),
-                    onPressed: _openStepsSheet,
-                  ),
-                if (route.steps.isNotEmpty)
-                  FilledButton.icon(
-                    style: FilledButton.styleFrom(
-                      backgroundColor: Colors.white,
-                      foregroundColor: color,
-                      visualDensity: VisualDensity.compact,
-                    ),
-                    icon: const Icon(Icons.navigation, size: 18),
-                    label: const Text('Start'),
-                    onPressed: _startNav,
-                  ),
-                IconButton(
-                  icon: const Icon(Icons.close, color: Colors.white, size: 20),
-                  onPressed: _clearRoute,
-                ),
-              ],
-            ),
-          ),
+          icon: icon,
+          // Distance and ETA only — the climb lives in the hazards sheet
+          // with the elevation graph.
+          title: '${formatDistance(route.distanceM)} · '
+              '${formatDuration(route.durationMin)}',
+          subtitle: subtitle,
+          onSave: _saveCurrentRoute,
+          onShare: _shareTrip,
+          onClear: _clearRoute,
+          onSteps: route.steps.isEmpty ? null : _openStepsSheet,
+          onStart: route.steps.isEmpty ? null : _startNav,
         ),
       ],
     );
@@ -3584,7 +4501,7 @@ class _MapScreenState extends State<MapScreen> {
                     fontWeight: FontWeight.w600,
                   ),
                 ),
-                backgroundColor: brandGreen,
+                backgroundColor: brandGreenStrong,
                 onPressed: _openStepsSheet,
               ),
             ),
@@ -3644,7 +4561,7 @@ class _MapScreenState extends State<MapScreen> {
               borderRadius: BorderRadius.circular(18),
               color: const Color(0xFF13322A),
               // Tapping the card lists every upcoming turn.
-              child: InkWell(
+              child: Semantics(onTapHint: 'list every turn', child: InkWell(
                 borderRadius: BorderRadius.circular(18),
                 onTap: _openStepsSheet,
                 child: Padding(
@@ -3671,15 +4588,22 @@ class _MapScreenState extends State<MapScreen> {
                                     height: 1.1,
                                   ),
                                 ),
-                                Text(
-                                  step.instruction,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.w600,
-                                    height: 1.15,
+                                // Live region on the instruction only: it
+                                // changes once per step, while the distance
+                                // above ticks every fix and stays silent.
+                                Semantics(
+                                  liveRegion: true,
+                                  container: true,
+                                  child: Text(
+                                    step.instruction,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.w600,
+                                      height: 1.15,
+                                    ),
                                   ),
                                 ),
                               ],
@@ -3776,7 +4700,7 @@ class _MapScreenState extends State<MapScreen> {
                     ],
                   ),
                 ),
-              ),
+              )),
             ),
           ),
           // Everything still to come, in order — the "upcoming turns" list Google
@@ -3801,7 +4725,13 @@ class _MapScreenState extends State<MapScreen> {
       color: Theme.of(context).colorScheme.surface,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 10, 10, 10),
-        child: Row(
+        // Wrap, not Row + Spacer: at large text the buttons drop below the
+        // ETA instead of overflowing the card.
+        child: Wrap(
+          alignment: WrapAlignment.spaceBetween,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 8,
+          runSpacing: 4,
           children: [
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -3822,26 +4752,55 @@ class _MapScreenState extends State<MapScreen> {
                   ),
                 ),
                 _gpsStatusLine(),
+                _recordingLine(),
               ],
             ),
-            const Spacer(),
-            TextButton.icon(
-              icon: const Icon(Icons.list_alt),
-              label: const Text('Steps'),
-              onPressed: _openStepsSheet,
-            ),
-            const SizedBox(width: 4),
-            FilledButton.icon(
-              style: FilledButton.styleFrom(
-                backgroundColor: Colors.red.shade700,
-                foregroundColor: Colors.white,
-              ),
-              icon: const Icon(Icons.close),
-              label: const Text('End'),
-              onPressed: () => _stopNav(),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextButton.icon(
+                  icon: const Icon(Icons.list_alt),
+                  label: const Text('Steps'),
+                  onPressed: _openStepsSheet,
+                ),
+                const SizedBox(width: 4),
+                FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Colors.red.shade700,
+                    foregroundColor: Colors.white,
+                  ),
+                  icon: const Icon(Icons.close),
+                  label: const Text('End'),
+                  onPressed: () => _stopNav(),
+                ),
+              ],
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// Small red dot + elapsed time in the nav card while a ride records.
+  Widget _recordingLine() {
+    final recorder = context.watch<RideRecorder>();
+    if (!recorder.recording) return const SizedBox.shrink();
+    final elapsed = formatDuration(recorder.liveDuration.inSeconds / 60);
+    final label = recorder.paused ? 'Recording paused' : 'Recording';
+    return Semantics(
+      label: '$label, $elapsed',
+      excludeSemantics: true,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.circle,
+            size: 10,
+            color: recorder.paused ? Colors.grey : recordRed,
+          ),
+          const SizedBox(width: 6),
+          Text(elapsed, style: const TextStyle(fontSize: 12)),
+        ],
       ),
     );
   }
@@ -3857,9 +4816,13 @@ class _MapScreenState extends State<MapScreen> {
     final fix = _lastNavFix;
     final age = DateTime.now().difference(_lastFixAt);
     if (fix == null || age > const Duration(seconds: 8)) {
-      return const Text(
-        'GPS lost — searching…',
-        style: TextStyle(color: Colors.red, fontSize: 12),
+      // colorScheme.error: Colors.red was 3.7:1 on the light card.
+      return Semantics(
+        liveRegion: true,
+        child: Text(
+          'GPS lost — searching…',
+          style: TextStyle(color: Theme.of(context).colorScheme.error, fontSize: 12),
+        ),
       );
     }
     final mph = fix.speed * 2.23694;
@@ -4006,7 +4969,8 @@ class _MapScreenState extends State<MapScreen> {
       if (step.warn != null)
         Text(
           '${formatDistance(step.warnM)} ${warnStepPhrase(step.warn)}',
-          style: const TextStyle(fontSize: 12, color: warnRed),
+          // colorScheme.error, not warnRed: 3.8:1 on the dark sheet.
+          style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.error),
         ),
       if (step.climbFt >= 20 || step.isSteepClimb)
         Text(
@@ -4016,7 +4980,7 @@ class _MapScreenState extends State<MapScreen> {
           style: TextStyle(
             fontSize: 12,
             color: step.isSteepClimb
-                ? warnRed
+                ? Theme.of(context).colorScheme.error
                 : Theme.of(context).colorScheme.onSurfaceVariant,
             fontWeight: step.isSteepClimb ? FontWeight.w600 : null,
           ),
@@ -4042,6 +5006,8 @@ class _MapScreenState extends State<MapScreen> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
                 child: Text(
+                  semanticsLabel: 'Map layers for '
+                      '${TravelMode.values.where(state.modes.contains).map(state.labelFor).join(' and ')}',
                   'Map layers — '
                   '${TravelMode.values.where(state.modes.contains).map(state.labelFor).join(' + ')}',
                   style: Theme.of(ctx).textTheme.titleMedium,
@@ -4075,7 +5041,23 @@ class _MapScreenState extends State<MapScreen> {
                   onSelectionChanged: (s) => state.setMapBase(s.first),
                 ),
               ),
-              for (final def in state.relevantLayers)
+              for (final group in LayerGroup.values)
+                if (state.relevantLayers.any((d) => d.group == group)) ...[
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                  child: Semantics(
+                    header: true,
+                    child: Text(
+                      layerGroupLabels[group]!,
+                      style: Theme.of(ctx).textTheme.labelLarge?.copyWith(
+                        color: brandOnSurface(ctx),
+                      ),
+                    ),
+                  ),
+                ),
+              for (final def in state.relevantLayers.where(
+                (d) => d.group == group,
+              ))
                 SwitchListTile(
                   dense: true,
                   secondary: def.colorByStress
@@ -4093,8 +5075,10 @@ class _MapScreenState extends State<MapScreen> {
                 ),
               // The stress legend only makes sense while its layer has a
               // toggle here (it's an opt-in advocacy layer now).
-              if (state.relevantLayers.any((d) => d.id == 'bike-stress'))
+              if (group == LayerGroup.biking &&
+                  state.relevantLayers.any((d) => d.id == 'bike-stress'))
                 _stressLegend(),
+              ],
             ],
           ),
         ),
@@ -4216,4 +5200,82 @@ class ContactRow extends StatelessWidget {
       onTap: () => launchUrlString(uri),
     );
   }
+}
+
+/// Thumbs up / down on a community contribution with live counts. Voting
+/// needs an account ([AuthGate]); the server's reply is the new truth.
+class VoteButtons extends StatefulWidget {
+  final String id;
+  final int up, down;
+  final String? mine;
+  final void Function(String? mine)? onVoted;
+  const VoteButtons({
+    super.key,
+    required this.id,
+    required this.up,
+    required this.down,
+    this.mine,
+    this.onVoted,
+  });
+
+  @override
+  State<VoteButtons> createState() => _VoteButtonsState();
+}
+
+class _VoteButtonsState extends State<VoteButtons> {
+  late int _up = widget.up, _down = widget.down;
+  late String? _mine = widget.mine;
+  bool _busy = false;
+
+  Future<void> _vote(bool up) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final r = await withAuth(context, () => api.vote(widget.id, up));
+      if (r == null || !mounted) return;
+      setState(() {
+        _up = (r['up'] as num?)?.toInt() ?? _up;
+        _down = (r['down'] as num?)?.toInt() ?? _down;
+        _mine = r['mine']?.toString();
+      });
+      widget.onVoted?.call(_mine);
+    } catch (e) {
+      if (mounted) toast(context, e.toString());
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Widget _button(bool up) {
+    final on = _mine == (up ? 'up' : 'down');
+    final count = up ? _up : _down;
+    final label = up ? 'Confirm this exists' : 'Report this is wrong or gone';
+    // excludeSemantics drops the button's own tap action, so the node
+    // declares it (without it TalkBack's double-tap did nothing).
+    return Semantics(
+      button: true,
+      selected: on,
+      enabled: !_busy,
+      label: '$label, $count',
+      onTap: _busy ? null : () => _vote(up),
+      excludeSemantics: true,
+      child: TextButton.icon(
+        key: ValueKey(up ? 'vote-up' : 'vote-down'),
+        style: TextButton.styleFrom(minimumSize: const Size(48, 48)),
+        onPressed: _busy ? null : () => _vote(up),
+        icon: Icon(
+          up
+              ? (on ? Icons.thumb_up_alt : Icons.thumb_up_alt_outlined)
+              : (on ? Icons.thumb_down_alt : Icons.thumb_down_alt_outlined),
+        ),
+        label: Text('$count'),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [_button(true), _button(false)],
+  );
 }

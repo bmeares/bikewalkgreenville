@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
+import 'package:provider/provider.dart';
 import '../api.dart';
+import '../auth.dart';
 import '../theme.dart';
 import '../widgets/app_sheet.dart';
 import '../widgets/safety_notice.dart';
@@ -32,6 +34,14 @@ const editKinds = <String, ({String label, IconData icon})>{
   'dismiss': (label: 'Dismissed report', icon: Icons.visibility_off_outlined),
 };
 
+/// Remove / undo is offered on live contributions the rider made (`mine`,
+/// from the signed-in history) — or on any of them for moderators.
+bool canRemoveRow(Map<String, dynamic> row, {required bool isAdmin}) =>
+    row['active'] == true &&
+    row['type'] != 'report' &&
+    row['id'] != null &&
+    (isAdmin || row['mine'] == true);
+
 class CommunityScreen extends StatefulWidget {
   const CommunityScreen({super.key});
   @override
@@ -46,8 +56,10 @@ class _CommunityScreenState extends State<CommunityScreen> {
   bool _selecting = false;
   final Set<String> _selected = {};
 
-  bool _removable(Map<String, dynamic> row) =>
-      row['active'] == true && row['type'] != 'report' && row['id'] != null;
+  bool _removable(Map<String, dynamic> row) => canRemoveRow(
+    row,
+    isAdmin: context.read<AuthState>().isAdmin,
+  );
 
   Future<void> _removeSelected() async {
     final ids = _selected.toList();
@@ -62,8 +74,11 @@ class _CommunityScreenState extends State<CommunityScreen> {
     if (reason == null || !mounted) return;
     setState(() => _busy = 'batch');
     try {
-      await api.rollbackContributions(ids, reason);
-      if (mounted) {
+      final done = await withAuth(context, () async {
+        await api.rollbackContributions(ids, reason);
+        return true;
+      });
+      if (done != null && mounted) {
         setState(() {
           _selected.clear();
           _selecting = false;
@@ -103,8 +118,11 @@ class _CommunityScreenState extends State<CommunityScreen> {
     if (reason == null || !mounted) return;
     setState(() => _busy = row['id']);
     try {
-      await api.rollbackContribution(row['id'], reason);
-      if (mounted) setState(() => _history = _load());
+      final done = await withAuth(context, () async {
+        await api.rollbackContribution(row['id'], reason);
+        return true;
+      });
+      if (done != null && mounted) setState(() => _history = _load());
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -127,7 +145,19 @@ class _CommunityScreenState extends State<CommunityScreen> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
+  Widget build(BuildContext context) {
+    final account = context.watch<AuthState>();
+    // `mine` is computed server-side from the Bearer: refetch when it changes.
+    if (account.token != _loadedAs) {
+      _loadedAs = account.token;
+      _history = _load();
+    }
+    return _scaffold(context);
+  }
+
+  late String? _loadedAs = context.read<AuthState>().token;
+
+  Widget _scaffold(BuildContext context) => Scaffold(
     appBar: AppBar(
       title: const Text('Community edits'),
       actions: [
@@ -185,8 +215,9 @@ class _CommunityScreenState extends State<CommunityScreen> {
                 '$routeDisclaimer\n\n'
                 'A shared map for biking, walking, rolling, and transit in Greenville. '
                 'Tap the map to add a place, correct information, or draw a local route. '
-                'Changes publish immediately. Roll back inaccurate contributions or '
-                'dismiss resolved reports with a public reason. Tap an entry to see it on the map.',
+                'Most changes publish immediately; photos and some text wait for BWG review. '
+                'Undo your own contributions or dismiss resolved reports with a public reason. '
+                'Tap an entry to see it on the map.',
               ),
             ),
             if (snapshot.data!.isEmpty)
@@ -194,7 +225,9 @@ class _CommunityScreenState extends State<CommunityScreen> {
                 title: Text('Be the first to share local knowledge.'),
               ),
             for (final row in snapshot.data!)
-              ListTile(
+              // Selecting: one node reads "name, kind, checked" instead of a
+              // tile and a separate, unlabeled checkbox.
+              MergeSemantics(child: ListTile(
                 isThreeLine: true,
                 leading: _GeometryThumb(
                   geometry: row['geometry'],
@@ -248,7 +281,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
                         onPressed: _busy == null ? () => _rollback(row) : null,
                       )
                     : null,
-              ),
+              )),
           ],
         );
       },

@@ -29,7 +29,8 @@ class AlternativeChip extends StatelessWidget {
     final delta = alternativeDelta(alt, selected);
     final extra = extraWarnings(alt, selected);
     return Semantics(
-      label: '$name, $delta'
+      label:
+          '$name, $delta'
           '${extra.isEmpty ? '' : ', ${extra.map((w) => w.label).join(', ')}'}',
       button: true,
       // excludeSemantics drops the chip's own node (and its tap), so the

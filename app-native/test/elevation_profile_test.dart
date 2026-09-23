@@ -34,10 +34,12 @@ void main() {
           body: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              ElevationProfile(profile: const [
-                [0.0, 900.0],
-                [1000.0, 900.0],
-              ]),
+              ElevationProfile(
+                profile: const [
+                  [0.0, 900.0],
+                  [1000.0, 900.0],
+                ],
+              ),
             ],
           ),
         ),

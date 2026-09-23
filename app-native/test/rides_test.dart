@@ -366,6 +366,56 @@ void main() {
     expect(ride.longestStretchWhere((_) => false), isNull);
   });
 
+  test('trim handles stay on their own leg of an out-and-back ride', () {
+    // 30 points north, then 30 back south 0.00005° east of the way out.
+    final out = [for (var i = 0; i < 30; i++) LatLng(34.85 + i * 0.001, -82.4)];
+    final back = [
+      for (var i = 29; i >= 0; i--) LatLng(34.85 + i * 0.001, -82.39995),
+    ];
+    final ride = Ride(
+      id: 'loop',
+      name: 'Ride',
+      startedAt: DateTime.utc(2026),
+      endedAt: DateTime.utc(2026, 1, 1, 1),
+      points: [...out, ...back],
+      segmentStarts: const [0],
+    );
+    // Dragged near point 4, but a hair closer to the return leg (index 55).
+    const dragged = LatLng(34.854, -82.39996);
+    expect(ride.nearestIndex(dragged), 55);
+    expect(ride.nearestIndexNear(dragged, 2), 4);
+    // The end handle, dragged from the return leg, stays there.
+    expect(ride.nearestIndexNear(const LatLng(34.854, -82.40004), 58), 55);
+  });
+
+  test('handles snap to the nearest ride point and keep an ordered range', () {
+    final ride = Ride(
+      id: 'snap',
+      name: 'Ride',
+      startedAt: DateTime.utc(2026),
+      endedAt: DateTime.utc(2026, 1, 1, 1),
+      points: [for (var i = 0; i < 10; i++) LatLng(34.85 + i * 0.001, -82.4)],
+      segmentStarts: const [0, 5],
+    );
+    expect(ride.nearestIndex(const LatLng(34.8531, -82.4002)), 3);
+    expect(ride.nearestIndex(const LatLng(40, -82.4)), 9);
+    expect(ride.trimRange(7, 2), (start: 2, end: 7));
+    expect(ride.trimRange(4, 4), (start: 4, end: 5));
+    expect(ride.trimRange(9, 9), (start: 8, end: 9));
+    expect(ride.trimRange(-3, 99), (start: 0, end: 9));
+    expect(ride.spansGap(1, 4), isFalse);
+    expect(ride.spansGap(3, 6), isTrue);
+    final parts = [
+      for (final f in ride.trimCollection(3, 6)['features'] as List)
+        f['properties']['part'],
+    ];
+    expect(parts.where((p) => p == 'gap'), hasLength(1));
+    expect(parts.where((p) => p == 'kept'), hasLength(2));
+    expect(parts.where((p) => p == 'rest'), hasLength(2));
+    // Ridden distance only: the jump across the gap is not counted.
+    expect(ride.keptDistanceM(3, 6), closeTo(222, 5));
+  });
+
   test(
     'ride deletion and undo persist the original order and are idempotent',
     () async {

@@ -33,16 +33,14 @@ class NavNotifier {
     try {
       await _plugin
           .resolvePlatformSpecificImplementation<
-              AndroidFlutterLocalNotificationsPlugin>()
+            AndroidFlutterLocalNotificationsPlugin
+          >()
           ?.requestNotificationsPermission();
     } catch (_) {}
     _ready = true;
   }
 
-  Future<void> update({
-    required String instruction,
-    required String detail,
-  }) =>
+  Future<void> update({required String instruction, required String detail}) =>
       _enqueue(() => _show(instruction, detail));
 
   Future<void> _show(String instruction, String detail) async {
@@ -76,9 +74,9 @@ class NavNotifier {
   }
 
   Future<void> cancel() => _enqueue(() async {
-        if (!_ready) return;
-        try {
-          await _plugin.cancel(id: _id);
-        } catch (_) {}
-      });
+    if (!_ready) return;
+    try {
+      await _plugin.cancel(id: _id);
+    } catch (_) {}
+  });
 }

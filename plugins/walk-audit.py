@@ -12,15 +12,23 @@ optional notification email goes to BWG staff only.
 
 Routes (mounted on the Meerschaum API FastAPI app, i.e. https://bwg.mrsm.io):
 
-  POST /walk-audit/submit           -> multipart: category, comment, lat, lon,
-                                       photo (optional)
+  POST /walk-audit/submit           -> (Bearer) multipart: category, comment,
+                                       lat, lon, photo (optional)
+                                       -> {..., status, photo_status}
   GET  /walk-audit/reports.geojson  -> FeatureCollection of submitted reports
-                                       (dismissed reports are excluded)
+                                       (dismissed, held and rejected excluded)
   GET  /walk-audit/categories.json  -> report categories for the app UI
-  POST /walk-audit/dismiss          -> json: id, reason. Removes a report from
-                                       the map; the report and the dismissal
-                                       both stay in public history.
+  POST /walk-audit/dismiss          -> (Bearer) json: id, reason. Removes a
+                                       report from the map (reporter or admin
+                                       only, else 403); the report and the
+                                       dismissal both stay in public history.
   GET  /walk-audit/history          -> every report and dismissal, newest first
+  GET  /walk-audit/photos/{name}    -> an admin-approved report photo (else 404)
+
+Every write needs a signed-in app user (`bwg-auth`). Text that trips
+`moderation_check` is stored `status='held'` and stays off the map until a
+moderator approves it. Photos are stored `photo_status='pending'` and are never
+served, linked or emailed until an admin approves them in /dash/moderation.
 
 Owner resolution: nearest segment in "Roads".roads (KNN, SRID 6570).
 
@@ -47,7 +55,7 @@ import meerschaum as mrsm
 from meerschaum.plugins import api_plugin
 from meerschaum.utils.warnings import warn
 
-__version__ = '0.3.0'
+__version__ = '0.4.0'
 
 CATEGORIES = [
     {'id': 'broken-sidewalk', 'label': 'Broken / uneven sidewalk'},
@@ -73,13 +81,17 @@ SERVICE_BOUNDS = (34.58, -82.65, 35.10, -82.10)  # min lat, min lon, max lat, ma
 SUBMIT_MAX_PER_HOUR = 10
 SUBMIT_MAX_COMMENT_CHARS = 2000
 SUBMIT_MAX_PHOTO_BYTES = 8 * 1024 * 1024
+PHOTO_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.webp')
+PHOTO_STATUSES = ('approved', 'rejected', 'pending')
+TEXT_STATUSES = ('published', 'rejected', 'held')
+MODERATION_URL = 'https://bwg.mrsm.io/dash/moderation'
 _SUBMIT_HITS: dict[str, list[float]] = {}
 _SUBMIT_HITS_LOCK = threading.Lock()
 
 
-def _submit_rate_limited(ip: str | None) -> bool:
-    """True when this client has used up its hourly walk-audit submissions."""
-    key = ip or 'unknown'
+def _submit_rate_limited(key: str | None) -> bool:
+    """True when this user has used up their hourly walk-audit submissions."""
+    key = key or 'unknown'
     now = time.time()
     with _SUBMIT_HITS_LOCK:
         hits = [t for t in _SUBMIT_HITS.get(key, []) if now - t < 3600]
@@ -118,6 +130,11 @@ REPORTS_PIPE: mrsm.Pipe = mrsm.Pipe(
             'forwarded_to': 'string',
             'ip': 'string',
             'user_agent': 'string',
+            # held | published | rejected (older rows: null = published).
+            'status': 'string',
+            # pending | approved | rejected (older rows with a photo: null = pending).
+            'photo_status': 'string',
+            'username': 'string',
         },
     },
 )
@@ -179,6 +196,7 @@ EDITS_PIPE: mrsm.Pipe = mrsm.Pipe(
             'action': 'string',
             'reason': 'string',
             'ip': 'string',
+            'username': 'string',
         },
     },
 )
@@ -203,6 +221,83 @@ def _rows(pipe, columns) -> list:
         return []
     # astype(object): `where` alone leaves NaN in float/all-null columns (not JSON).
     return df.astype(object).where(df.notna(), None).to_dict(orient='records')
+
+
+def _report_rows(columns) -> list:
+    """Report rows with the moderation columns backfilled for older rows."""
+    rows = _rows(REPORTS_PIPE, list(columns) + ['status', 'photo_filename', 'photo_status', 'username'])
+    for r in rows:
+        r['status'] = r.get('status') or 'published'
+        r['username'] = r.get('username')
+        if r.get('photo_filename') and not r.get('photo_status'):
+            r['photo_status'] = 'pending'
+        r.setdefault('photo_status', None)
+    return rows
+
+
+def _photo_url(r) -> str | None:
+    """Public photo URL, only once a moderator approved it."""
+    if r.get('photo_filename') and r.get('photo_status') == 'approved':
+        return f"/walk-audit/photos/{r['photo_filename']}"
+    return None
+
+
+def photo_path(filename: str, approved_only: bool = True):
+    """Path of a known report photo on disk (approved ones only unless
+    `approved_only=False`, which the admin moderation console uses), else None."""
+    from pathlib import Path
+    if Path(filename).name != filename or Path(filename).suffix.lower() not in PHOTO_EXTENSIONS:
+        return None
+    row = next((r for r in _report_rows(['id']) if r.get('photo_filename') == filename), None)
+    if row is None or (approved_only and row['photo_status'] != 'approved'):
+        return None
+    path = _photos_dir() / filename
+    return path if path.is_file() else None
+
+
+def _queue_rows(keep) -> list:
+    """Report rows for the moderation console where `keep(row)`."""
+    return [{
+        'id': r['id'], 'ts': r.get('ts'), 'date_display': _fmt_et(r.get('ts')),
+        'category': r.get('category'), 'name': CATEGORY_LABELS.get(r.get('category'), 'Issue')
+        + (f" near {r['road_name']}" if r.get('road_name') else ''),
+        'comment': r.get('comment'), 'status': r['status'], 'username': r['username'],
+        'photo_filename': r.get('photo_filename'),
+    } for r in _report_rows(['ts', 'id', 'category', 'comment', 'road_name']) if keep(r)]
+
+
+def pending_photos() -> list:
+    """Report photos awaiting review (moderation console)."""
+    return _queue_rows(lambda r: r['photo_status'] == 'pending')
+
+
+def held_reports() -> list:
+    """Reports whose text is held for review (moderation console)."""
+    return _queue_rows(lambda r: r['status'] == 'held')
+
+
+def set_status(ids, status: str) -> mrsm.SuccessTuple:
+    """Admin text decision (published | rejected | held), in place on the row."""
+    if status not in TEXT_STATUSES:
+        return False, 'Unknown moderation decision.'
+    wanted = set(ids)
+    targets = [r for r in _report_rows(['ts', 'id']) if r['id'] in wanted]
+    if not targets:
+        return False, 'No such report.'
+    success, msg = REPORTS_PIPE.sync([{'ts': r['ts'], 'id': r['id'], 'status': status} for r in targets])
+    return (True, f'Updated {len(targets)} report(s).') if success else (False, msg)
+
+
+def set_photo_status(ids, photo_status: str) -> mrsm.SuccessTuple:
+    """Admin photo decision, written in place on the report row."""
+    if photo_status not in PHOTO_STATUSES:
+        return False, 'Unknown moderation decision.'
+    wanted = set(ids)
+    targets = [r for r in _report_rows(['ts', 'id']) if r['id'] in wanted and r.get('photo_filename')]
+    if not targets:
+        return False, 'No such report photo.'
+    success, msg = REPORTS_PIPE.sync([{'ts': r['ts'], 'id': r['id'], 'photo_status': photo_status} for r in targets])
+    return (True, f'Updated {len(targets)} report photo(s).') if success else (False, msg)
 
 
 def _edit_rows() -> list:
@@ -241,9 +336,11 @@ def _notify_recipient() -> str | None:
     return _cfg('notify', 'recipient') or _cfg('smtp', 'username')
 
 
-def _send_report_email(report: dict, photo_path=None) -> str | None:
+def _send_report_email(report: dict) -> str | None:
     """Notify BWG staff from data@bikewalkgreenville.org. Reports are never
-    emailed to municipal offices. Returns the recipient used, or None."""
+    emailed to municipal offices. Photos are never attached (they are
+    unreviewed); the body points at the moderation console instead.
+    Returns the recipient used, or None."""
     host = _cfg('smtp', 'host')
     user = _cfg('smtp', 'username')
     password = _cfg('smtp', 'password')
@@ -262,7 +359,9 @@ def _send_report_email(report: dict, photo_path=None) -> str | None:
 
     lines = [
         "A walk audit report was submitted through the Bike Walk Greenville app.",
-        "It is now visible on the app's map; it has NOT been sent to any office.",
+        ("It is held for moderator review (flagged text)" if report.get('status') == 'held'
+         else "It is now visible on the app's map")
+        + "; it has NOT been sent to any office.",
         "",
         f"Issue: {category}",
         f"Nearest road: {road} ({report.get('road_type') or 'unknown type'})",
@@ -272,6 +371,8 @@ def _send_report_email(report: dict, photo_path=None) -> str | None:
         "",
         f"Reporter comment:\n{report.get('comment') or '(none)'}",
         "",
+        *([f"Photo attached — review it in the moderation console: {MODERATION_URL}", ""]
+          if report.get('photo_filename') else []),
         f"Report ID: {report['id']}",
         "-- Bike Walk Greenville Data Analytics",
     ]
@@ -284,19 +385,6 @@ def _send_report_email(report: dict, photo_path=None) -> str | None:
     msg['To'] = recipient
     msg.set_content('\n'.join(lines))
 
-    if photo_path is not None:
-        try:
-            data = photo_path.read_bytes()
-            if len(data) <= 10 * 1024 * 1024:
-                ext = photo_path.suffix.lstrip('.').lower() or 'jpeg'
-                msg.add_attachment(
-                    data, maintype='image',
-                    subtype='jpeg' if ext == 'jpg' else ext,
-                    filename=photo_path.name,
-                )
-        except Exception as e:
-            warn(f"walk-audit: could not attach photo: {e}")
-
     try:
         with smtplib.SMTP(host, port, timeout=30) as smtp:
             smtp.starttls()
@@ -308,13 +396,41 @@ def _send_report_email(report: dict, photo_path=None) -> str | None:
     return recipient
 
 
+def _auth():
+    """The shared `bwg-auth` plugin module (same pattern as map-layers)."""
+    global _BWG_AUTH
+    if _BWG_AUTH is None:
+        module = mrsm.Plugin('bwg-auth').module
+        if module is None:
+            import importlib.util
+            from pathlib import Path
+            spec = importlib.util.spec_from_file_location(
+                'bwg_auth', Path(__file__).resolve().parent / 'bwg-auth.py')
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        _BWG_AUTH = module
+    return _BWG_AUTH
+
+
+_BWG_AUTH = None
+
+
+def _signed_in(request):
+    """(user, None) for a signed-in writer, else (None, 401/403 response)."""
+    from fastapi import HTTPException
+    from fastapi.responses import JSONResponse
+    try:
+        return _auth().require_user(request, write=True), None
+    except HTTPException as e:
+        return None, JSONResponse({'error': e.detail}, status_code=e.status_code)
+
+
 @api_plugin
 def init_app(app):
     """Register the walk-audit HTTP routes on the Meerschaum API app."""
     import uuid
-    from pathlib import Path
-    from fastapi import Form, File, UploadFile, Request
-    from fastapi.responses import JSONResponse
+    from fastapi import Form, File, HTTPException, UploadFile, Request
+    from fastapi.responses import FileResponse, JSONResponse
 
     @app.get('/walk-audit/categories.json')
     def walk_audit_categories():
@@ -329,6 +445,9 @@ def init_app(app):
         lon: float = Form(...),
         photo: UploadFile = File(None),
     ):
+        user, denied = _signed_in(request)
+        if denied:
+            return denied
         if (
             not (math.isfinite(lat) and math.isfinite(lon))
             or not (SERVICE_BOUNDS[0] <= lat <= SERVICE_BOUNDS[2])
@@ -344,7 +463,7 @@ def init_app(app):
                 status_code=400,
             )
         client = request.client
-        if _submit_rate_limited(client.host if client else None):
+        if _submit_rate_limited(user['username']):
             return JSONResponse(
                 {'error': 'Too many submissions — please try again later.'},
                 status_code=429,
@@ -353,7 +472,10 @@ def init_app(app):
         photo_filename = None
         photo_path = None
         if photo is not None and photo.filename:
-            ext = Path(photo.filename).suffix or '.jpg'
+            try:
+                ext = _auth().validate_image(photo)
+            except HTTPException as e:
+                return JSONResponse({'error': e.detail}, status_code=e.status_code)
             photo_filename = f'{rec_id}{ext}'
             photo_path = _photos_dir() / photo_filename
             written = 0
@@ -371,6 +493,8 @@ def init_app(app):
                 )
 
         road = _nearest_road(lat, lon)
+        status = 'held' if _auth().moderation_check(comment, username=user['username']) == 'held' else 'published'
+        photo_status = 'pending' if photo_filename else None
         report = {
             'id': rec_id,
             'category': category if category in CATEGORY_LABELS else 'other',
@@ -388,6 +512,9 @@ def init_app(app):
             'forwarded_to': _notify_recipient(),
             'ip': client.host if client else None,
             'user_agent': request.headers.get('user-agent'),
+            'status': status,
+            'photo_status': photo_status,
+            'username': user['username'],
         }
 
         # Store synchronously so the app can refresh the reports layer and see
@@ -395,7 +522,7 @@ def init_app(app):
         REPORTS_PIPE.sync([report])
         threading.Thread(
             target=_send_report_email,
-            args=(report, photo_path),
+            args=(report,),
             daemon=True,
         ).start()
         return JSONResponse({
@@ -405,46 +532,47 @@ def init_app(app):
             'owner': road.get('owner'),
             'owner_email': road.get('owner_email'),
             'owner_form': road.get('owner_form'),
+            'status': status,
+            'photo_status': photo_status,
         })
 
     @app.get('/walk-audit/reports.geojson')
     def walk_audit_reports_geojson():
         features = []
         try:
-            if REPORTS_PIPE.exists():
-                df = REPORTS_PIPE.get_data(
-                    select_columns=[
-                        'ts', 'id', 'category', 'comment', 'lat', 'lon',
-                        'road_name', 'owner',
-                    ],
-                )
-                dismissed = _dismissed_ids()
-                for row in (df.to_dict(orient='records') if df is not None else []):
-                    lat, lon = row.get('lat'), row.get('lon')
-                    if lat is None or lon is None or row.get('id') in dismissed:
-                        continue
-                    features.append({
-                        'type': 'Feature',
-                        'geometry': {
-                            'type': 'Point',
-                            'coordinates': [float(lon), float(lat)],
-                        },
-                        'properties': {
-                            'id': row.get('id'),
-                            'category': row.get('category'),
-                            'label': CATEGORY_LABELS.get(row.get('category'), 'Issue'),
-                            'comment': row.get('comment') or '',
-                            'road_name': row.get('road_name') or '',
-                            'owner': row.get('owner') or '',
-                            'ts': str(row.get('ts') or ''),
-                        },
-                    })
+            rows = _report_rows(['ts', 'id', 'category', 'comment', 'lat', 'lon', 'road_name', 'owner'])
+            dismissed = _dismissed_ids() if rows else set()
+            for row in rows:
+                lat, lon = row.get('lat'), row.get('lon')
+                if (lat is None or lon is None or row.get('id') in dismissed
+                        or row['status'] != 'published'):
+                    continue
+                features.append({
+                    'type': 'Feature',
+                    'geometry': {
+                        'type': 'Point',
+                        'coordinates': [float(lon), float(lat)],
+                    },
+                    'properties': {
+                        'id': row.get('id'),
+                        'category': row.get('category'),
+                        'label': CATEGORY_LABELS.get(row.get('category'), 'Issue'),
+                        'comment': row.get('comment') or '',
+                        'road_name': row.get('road_name') or '',
+                        'owner': row.get('owner') or '',
+                        'ts': str(row.get('ts') or ''),
+                        'photo_url': _photo_url(row),
+                    },
+                })
         except Exception as e:
             warn(f"walk-audit: reports.geojson failed: {e}")
         return JSONResponse({'type': 'FeatureCollection', 'features': features})
 
     @app.post('/walk-audit/dismiss')
     async def dismiss_report(request: Request):
+        user, denied = _signed_in(request)
+        if denied:
+            return denied
         if len(await request.body()) > 4096:
             return JSONResponse({'error': 'Request too large.'}, status_code=413)
         try:
@@ -455,14 +583,20 @@ def init_app(app):
                 raise ValueError('Please explain the dismissal (up to 2000 characters).')
         except (ValueError, AttributeError):
             return JSONResponse({'error': 'Please explain the dismissal (up to 2000 characters).'}, status_code=400)
-        if not any(r.get('id') == report_id for r in _rows(REPORTS_PIPE, ['id'])):
+        report = next((r for r in _report_rows(['id']) if r['id'] == report_id
+                       and r['status'] == 'published'), None)
+        if report is None:
             return JSONResponse({'error': 'This report does not exist.'}, status_code=404)
+        # Only the reporter or a moderator (legacy anonymous rows: moderators only).
+        if not user['is_admin'] and (not report['username'] or report['username'] != user['username']):
+            return JSONResponse({'error': 'You can only dismiss your own reports.'}, status_code=403)
         if report_id in _dismissed_ids():
             return JSONResponse({'error': 'This report is already dismissed.'}, status_code=409)
         client = request.client
         success, _ = EDITS_PIPE.sync([{
             'id': uuid.uuid4().hex, 'report_id': report_id, 'action': 'dismiss',
             'reason': reason, 'ip': client.host if client else None,
+            'username': user['username'],
         }])
         if not success:
             return JSONResponse({'error': 'Dismissal was not saved. Please retry.'}, status_code=503)
@@ -470,11 +604,12 @@ def init_app(app):
 
     @app.get('/walk-audit/history')
     def walk_audit_history():
-        """Reports and dismissals as one public edit log (no ip / user agent)."""
-        reports = {r['id']: r for r in _rows(
-            REPORTS_PIPE, ['ts', 'id', 'category', 'comment', 'lat', 'lon', 'road_name'],
-        )}
-        edits = _edit_rows()
+        """Reports and dismissals as one public edit log (no ip / user agent /
+        username; held / rejected reports and unapproved photos stay out)."""
+        reports = {r['id']: r for r in _report_rows(
+            ['ts', 'id', 'category', 'comment', 'lat', 'lon', 'road_name'],
+        ) if r['status'] == 'published'}
+        edits = [e for e in _edit_rows() if e.get('report_id') in reports]
         dismissed = _dismissed_ids(edits)
         rows = []
         for r in reports.values():
@@ -485,6 +620,7 @@ def init_app(app):
                         + (f" near {r['road_name']}" if r.get('road_name') else ''),
                 'comment': r.get('comment') or '', 'active': r['id'] not in dismissed,
                 'geometry': {'type': 'Point', 'coordinates': [r.get('lon'), r.get('lat')]},
+                'photo_url': _photo_url(r),
             })
         for e in edits:
             r = reports.get(e.get('report_id'), {})
@@ -499,3 +635,12 @@ def init_app(app):
             })
         rows.sort(key=lambda x: x['ts'], reverse=True)
         return {'edits': rows}
+
+    @app.get('/walk-audit/photos/{filename}')
+    def walk_audit_photo(filename: str):
+        """An approved report photo; 404 for anything else."""
+        path = photo_path(filename)
+        if path is None:
+            return JSONResponse({'error': 'Photo not found.'}, status_code=404)
+        return FileResponse(path, headers={'Cache-Control': 'public, max-age=86400',
+                                           'X-Content-Type-Options': 'nosniff'})

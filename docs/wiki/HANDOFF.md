@@ -1,6 +1,6 @@
 # Handoff — work continues on host `omega` (repo at `~/projects/bikewalkgreenville`)
 
-Updated 2026-08-07 (twelfth session). Read this + `DATA.md` before touching
+Updated 2026-09-23 (release 1.22.0+65). Read this + `DATA.md` before touching
 anything.
 
 ## ⚠️ Repo is PUBLIC on GitHub
@@ -9,13 +9,106 @@ anything.
 
 ## State (all TESTED; backend DEPLOYED)
 
-- **`app-native/`** — native Flutter app (map-first, MapLibre GL), v**1.5.0+35**, applicationId `org.bikewalkgreenville.app`. `flutter analyze` clean, `flutter test` 27/27 green, signed release APK + AAB built on omega (signer SHA-1 `537F9A88…A843`, the shared SRA upload key).
+- **`app-native/`** — native Flutter app (map-first, MapLibre GL), v**1.22.0+65** (see the 2026-09-23 entry), applicationId `org.bikewalkgreenville.app`. `flutter analyze` clean, `flutter test` 27/27 green, signed release APK + AAB built on omega (signer SHA-1 `537F9A88…A843`, the shared SRA upload key).
   - `build/app/outputs/flutter-apk/app-release.apk`
   - `build/app/outputs/bundle/release/app-release.aab`
 - **Backend live on bwg.mrsm.io**: `plugins/walk-audit.py`, `plugins/map-layers.py` (v0.5.0 — edge-snap routing + multi-modal, see below), `plugins/bike-parking.py`, `plugins/gtfs.py`, `plugins/bcycle.py`.
 - **Prod jobs registered** inside `mrsm-api-bwg-1`: `transit` (daily GTFS sync) and `bike-parking` (daily Overpass sync), alongside `annex-watch`, `trails-output`, `duke`, `who-owns-the-roads`, `parking`. Both verified running with successful first syncs (`mrsm show logs <job>`).
 - **walk-audit config** moved off env vars onto Meerschaum config (`plugins:walk-audit:{smtp,notify}`). Prod values live in the container volume at `/meerschaum/config/plugins.json` (chmod 600); the `/meerschaum/.env` hack has been **deleted**.
 - `WalkAudit.reports` is empty (the deploy-check row was removed).
+
+### 2026-09-23 (omega) — app v1.22.0+65, backend 1.22 (DEPLOYED: prod + Play beta + TestFlight)
+
+Beta-tester round (18 items) shipped in one release. Design + orchestration by
+Fable 5.1, implementation by Opus 5.5 subagents; plan and API contract in
+`docs/planning/RELEASE-1.22-PLAN.md` (read its "As-built contract notes"),
+endpoint/table catalog in `DATA.md`, screen-reader checklist in
+`ACCESSIBILITY.md`. Tests: `pytest tests/` 137, `flutter test` 180, analyze
+clean. **Nothing has been exercised on a physical device yet** — the trim
+handles, group-ride pinging, sign-in and TalkBack flows need a device pass.
+
+**Backend (all live on bwg.mrsm.io, backups of the 64 plugins + web bundle in
+`/meerschaum/bwg-release-backups/64/`):**
+- `bwg-auth.py` 0.1.0 — passwordless email-code sign-in on Meerschaum users
+  (username == email, random password, scope `bwg`, 1-year token). Only
+  tokens bwg-auth minted are accepted (a `kind='token'` row in
+  `BwgAuth.login_codes`); admin users' tokens always work. Shared helpers
+  `bwg_user`/`require_user`/`moderation_check`/`validate_image`/`rate_limited`
+  are imported by the other plugins via `mrsm.Plugin('bwg-auth').module`.
+  Email goes through the existing `plugins:walk-audit:smtp` config.
+- `map-layers.py` 0.21.0 — every community write requires Bearer; `username`
+  stored; `POST /community/vote` (up/down toggle, `upvotes`/`downvotes`
+  replace `confirmations`; `/confirm` is an alias); `photo_status`
+  pending→approved gate on every read path + `/map-layers/photos/{f}`;
+  `status='held'` for text that trips the filter; `/bwg/routes` saved routes;
+  `POST /community/moderate`; transit walk reach 2000 m, both radii in
+  `plugins:map-layers:transit:*`; `_open_report_points` skips held reports.
+- `moderation.py` 0.2.0 — `/dash/moderation` (Meerschaum admin session):
+  Photos queue (all three sources), Held reports, Contributions, Users
+  (ban), Export GPX/OSM(.osm, `upload="false"`)/GeoJSON/CSV; admin Bearer
+  routes `/bwg/moderation/{pending-count,export.*,photo/*}`.
+- `walk-audit.py` 0.4.0 / `bike-parking.py` 0.3.0 — Bearer required, held
+  text, photos pending until approved (staff email no longer attaches the
+  photo), dismiss is owner/admin only. Ran once in prod:
+  `ALTER TABLE "WalkAudit".reports ADD COLUMN IF NOT EXISTS status/photo_status/username`.
+- `group-rides.py` 0.1.0 — anonymous; SQL tables `GroupRides.*`; create /
+  nearby (305 m) / join (code) / ping (push+pull, `route_rev` delta) / route /
+  leave / end; `bwg-app.py` 0.2.0 adds `/r/{code}` → `/bwg-app/?ride=CODE`.
+- `bwg-events.py` 0.1.0 — public ICS → `BwgApp.events`; `/bwg/events.json`.
+  Prod job `bwg-events` (hourly loop) registered and running; `icalendar`,
+  `python-dateutil` pip-installed in the container. Endpoint caches the pipe
+  object: after registering a NEW pipe, restart the API or it serves `[]`.
+- Prod `api.json` changes (backup `api.json.bak-65`):
+  `permissions.registration.users=false` (else anyone can register an
+  email-named user and mint a `bwg` token via core routes) and
+  `uvicorn.forwarded_allow_ips=172.19.0.1` (nginx appends
+  `$proxy_add_x_forwarded_for`; with `*` every per-IP limit was spoofable).
+- **Admins**: in-app admin = Meerschaum user of type `admin` whose username
+  is the email; promote after first sign-in (`mrsm edit users`). The web
+  console uses the existing admin dashboard login.
+- **All pre-existing photos are now `pending`** and must be approved in the
+  console before they reappear.
+
+**App 1.22.0+65:** record icon (red dot in ring, pulsing square while
+recording); record while navigating (nav card shows a red dot + elapsed);
+"Navigate here" for every mode; thumbs up/down replace "I rode this";
+passwordless sign-in sheet gating every public write (browsing, routing,
+recording, group rides stay anonymous), Account section in Settings,
+settings/saved-places sync via `/me`; saved routes (bookmark on the route
+card, tab in "My rides & routes", section in the search dropdown); recording
+rework — Pause/Stop → summary sheet (Save/Discard → Share a stretch / Export
+GPX / Done), trim by dragging two handles on the ride line (no slider), GPX
+via `share_plus` with interpolated timestamps; Draw route = tap waypoints
+snapped via `/route` (Straight-line toggle), No-entry = tap corners;
+`geometry_editor_screen.dart` DELETED; group rides (`group_ride.dart`,
+`group_ride_sheet.dart`: start/join nearby/code/link, 5 s ping, member dots +
+labels, leader route, Follow the leader, Catch up, resume after restart, 60 s
+nearby poll, no Bearer on `/group-rides/*`); menu: Group ride tile, Upcoming
+events card (Luma link, "Open full calendar" external), Donate card LAST;
+welcome tour (`welcome_seen`); disclaimer v2 (checkbox + I Agree once per
+version, compact line + link on the route card afterwards); layer groups;
+search spinner + web tap fix (`TextFieldTapRegion` — focus loss dismissed the
+list before the tap landed); bus-stop error surfaced with "Route without the
+bus"; accessibility pass (labels, live regions, 48 dp targets, contrast fixes
+— `brandGreenStrong` for white-on-green, two-row route/place cards in
+`widgets/map_cards.dart`, high-contrast line widths). New deps:
+`share_plus`, `flutter_secure_storage`. Release build needs `flutter clean`
+first (stale `GeneratedPluginRegistrant` referenced `integration_test`).
+
+**Release mechanics:** Play beta versionCode 65 live (`gplay release … --wait`,
+no reauth needed). iOS built + uploaded from `mac:~/projects/bwg-release-65`
+(`flutter build ipa` + `altool`). Web bundle deployed by rsync to
+`/tmp/bwg-app-web-65` → `docker cp`. Verified: `/bwg-app/version.json` = 65,
+`/dash/moderation` 200, `/r/ABCD` 302, community layer carries
+`upvotes`/`downvotes` and null `photo_url`, anonymous vote → 401,
+`/users/register` refused.
+
+**Open follow-ups:** device pass (above); Strava OAuth upload (GPX share
+ships now); moderator email nudge for pending photos; shared rollback helper
+(moderation.py copies ~15 lines of the admin branch); per-point ride
+timestamps (GPX times are interpolated); Android app links for
+`/r/{code}` (currently opens the web app); `amber` tap highlight fails
+contrast outside high-contrast mode; limiters are per-process memory.
 
 ### 2026-09-05 night (omega) — app v1.21.2+64, map chrome cleanup (no backend change)
 

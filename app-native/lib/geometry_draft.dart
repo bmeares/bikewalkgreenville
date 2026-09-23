@@ -1,115 +1,142 @@
 import 'dart:math' as math;
 import 'package:maplibre_gl/maplibre_gl.dart';
 
-/// Editable, unclosed vertices. GeoJSON closes polygon rings only on export.
-class GeometryDraft {
-  static const maxPoints = 200;
-  final bool polygon;
-  List<LatLng> points;
-  final List<List<LatLng>> _undo = [], _redo = [];
+import 'api.dart';
+import 'nav.dart';
 
-  GeometryDraft(Iterable<LatLng> points, {this.polygon = false})
-    : points = List.of(points) {
-    if (polygon &&
-        this.points.length > 1 &&
-        this.points.first == this.points.last) {
-      this.points.removeLast();
+/// Tap-the-corners polygon for a no-entry area. GeoJSON closes the ring only
+/// on export.
+class AreaDraft {
+  static const maxPoints = 200;
+  final List<LatLng> corners;
+  final String? name, comment, replaces;
+
+  AreaDraft({
+    Iterable<LatLng> corners = const [],
+    this.name,
+    this.comment,
+    this.replaces,
+  }) : corners = List.of(corners) {
+    if (this.corners.length > 1 && this.corners.first == this.corners.last) {
+      this.corners.removeLast();
     }
   }
 
-  bool get canPublish => points.length >= (polygon ? 3 : 2);
-  bool get canUndo => _undo.isNotEmpty;
-  bool get canRedo => _redo.isNotEmpty;
-  void checkpoint() {
-    _undo.add(List.of(points));
-    if (_undo.length > 60) _undo.removeAt(0);
-    _redo.clear();
+  bool get canPublish => corners.length >= 3;
+  bool add(LatLng p) {
+    if (corners.length >= maxPoints) return false;
+    corners.add(p);
+    return true;
   }
 
   void undo() {
-    if (!canUndo) return;
-    _redo.add(List.of(points));
-    points = _undo.removeLast();
-  }
-
-  void redo() {
-    if (!canRedo) return;
-    _undo.add(List.of(points));
-    points = _redo.removeLast();
-  }
-
-  void insert(int index, LatLng point) {
-    if (points.length >= maxPoints) {
-      throw StateError('Use at most 200 vertices.');
-    }
-    points.insert(index.clamp(0, points.length), point);
-  }
-
-  void extend(LatLng point, {bool fromStart = false}) =>
-      insert(fromStart ? 0 : points.length, point);
-
-  /// Replace one segment with a quadratic curve through a chosen control point.
-  /// Samples remain ordinary editable vertices on reopening a published path.
-  void curve(int segment, LatLng control) {
-    final end = (segment + 1) % points.length;
-    if (segment < 0 || segment >= points.length || (!polygon && end == 0)) {
-      return;
-    }
-    const samples = 12;
-    if (points.length + samples - 1 > maxPoints) {
-      throw StateError('Remove some vertices before adding a curve.');
-    }
-    final a = points[segment], b = points[end];
-    final curved = <LatLng>[];
-    for (var i = 1; i < samples; i++) {
-      final t = i / samples, u = 1 - t;
-      curved.add(
-        LatLng(
-          u * u * a.latitude +
-              2 * u * t * control.latitude +
-              t * t * b.latitude,
-          u * u * a.longitude +
-              2 * u * t * control.longitude +
-              t * t * b.longitude,
-        ),
-      );
-    }
-    points.insertAll(segment + 1, curved);
-  }
-
-  void addStroke(List<LatLng> stroke, {bool fromStart = false}) {
-    if (stroke.isEmpty) return;
-    var reduced = simplifyStroke(stroke, 1.5);
-    if (points.isNotEmpty) {
-      final join = fromStart ? points.first : points.last;
-      // A new stroke usually starts on the endpoint. Keep one numbered handle.
-      while (reduced.isNotEmpty &&
-          (reduced.first.latitude - join.latitude).abs() < .000001 &&
-          (reduced.first.longitude - join.longitude).abs() < .000001) {
-        reduced.removeAt(0);
-      }
-    }
-    final available = maxPoints - points.length;
-    // Never silently truncate a stroke and publish a different endpoint.
-    if (reduced.length > available) {
-      throw StateError(
-        'This stroke exceeds 200 vertices. Undo or draw a shorter section.',
-      );
-    }
-    if (fromStart) reduced = reduced.reversed.toList();
-    points.insertAll(fromStart ? 0 : points.length, reduced);
+    if (corners.isNotEmpty) corners.removeLast();
   }
 
   Map<String, dynamic> get geometry {
-    final coords = points.map((p) => [p.longitude, p.latitude]).toList();
-    return polygon
-        ? {
-            'type': 'Polygon',
-            'coordinates': [
-              [...coords, if (coords.isNotEmpty) coords.first],
-            ],
-          }
-        : {'type': 'LineString', 'coordinates': coords};
+    final coords = corners.map((p) => [p.longitude, p.latitude]).toList();
+    return {
+      'type': 'Polygon',
+      'coordinates': [
+        [...coords, if (coords.isNotEmpty) coords.first],
+      ],
+    };
+  }
+}
+
+/// A route drawn by tapping waypoints. Each leg between consecutive
+/// waypoints is routed along the network via `/route`, or drawn straight
+/// when the rider asks for it (paths the map does not know) or the router
+/// fails.
+class RouteDraft {
+  final List<LatLng> waypoints = [];
+
+  /// legs[i] joins waypoints[i] to waypoints[i + 1], endpoints included.
+  final List<List<LatLng>> legs = [];
+  final String? name, comment, category, replaces;
+  final Set<String> modes;
+  final String? stress;
+
+  RouteDraft({
+    this.modes = const {'bike'},
+    this.stress,
+    this.name,
+    this.comment,
+    this.category,
+    this.replaces,
+  });
+
+  /// Reopen an existing line: its vertices become waypoints with straight legs.
+  RouteDraft.seeded(
+    List<LatLng> vertices, {
+    this.modes = const {'bike'},
+    this.stress,
+    this.name,
+    this.comment,
+    this.category,
+    this.replaces,
+  }) {
+    for (final p in vertices) {
+      if (waypoints.isNotEmpty) legs.add([waypoints.last, p]);
+      waypoints.add(p);
+    }
+  }
+
+  bool get canPublish => line.length >= 2;
+
+  /// Append a waypoint. Returns true when the leg fell back to a straight
+  /// line because the router failed (so the caller can say so).
+  Future<bool> add(LatLng p, {bool straight = false}) async {
+    if (waypoints.isEmpty) {
+      waypoints.add(p);
+      return false;
+    }
+    final from = waypoints.last;
+    var leg = [from, p];
+    var fellBack = false;
+    if (!straight) {
+      try {
+        final routed = NavRoute.fromFeature(
+          await api.route(
+            from.latitude,
+            from.longitude,
+            p.latitude,
+            p.longitude,
+            modes: modes,
+            stress: stress,
+          ),
+        ).points;
+        if (routed.length >= 2) {
+          // Pin the leg to the tapped points so undo/redo stays exact.
+          leg = [from, ...routed, p];
+        } else {
+          fellBack = true;
+        }
+      } catch (_) {
+        fellBack = true;
+      }
+    }
+    waypoints.add(p);
+    legs.add(leg);
+    return fellBack;
+  }
+
+  void undo() {
+    if (waypoints.isEmpty) return;
+    waypoints.removeLast();
+    if (legs.isNotEmpty) legs.removeLast();
+  }
+
+  /// All legs joined, without repeating the shared waypoint between legs.
+  List<LatLng> get line {
+    if (legs.isEmpty) return List.of(waypoints);
+    final out = <LatLng>[];
+    for (final leg in legs) {
+      for (final p in leg) {
+        if (out.isEmpty || out.last != p) out.add(p);
+      }
+    }
+    return out;
   }
 }
 

@@ -6,7 +6,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:bwg_app_native/app_state.dart';
 
 void main() {
-  final home = {'label': 'Home', 'sublabel': 'McHan St', 'lat': 34.83716, 'lon': -82.40463};
+  final home = {
+    'label': 'Home',
+    'sublabel': 'McHan St',
+    'lat': 34.83716,
+    'lon': -82.40463,
+  };
 
   test('save, rename, remove with undo keeps one row per place', () {
     final state = AppState();

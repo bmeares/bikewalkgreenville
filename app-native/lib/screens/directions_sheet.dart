@@ -361,7 +361,7 @@ class _DirectionsSheetState extends State<DirectionsSheet> {
                   width: double.infinity,
                   child: FilledButton.icon(
                     style: FilledButton.styleFrom(
-                      backgroundColor: brandGreen,
+                      backgroundColor: brandGreenStrong,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 14),
                     ),
@@ -416,7 +416,6 @@ class _DirectionsSheetState extends State<DirectionsSheet> {
           children: [
             IconButton(
               tooltip: 'Use my location',
-              visualDensity: VisualDensity.compact,
               icon: Icon(Icons.my_location,
                   size: 18,
                   // Theme-aware: Colors.black45 vanished on the navy theme.
@@ -427,7 +426,6 @@ class _DirectionsSheetState extends State<DirectionsSheet> {
             ),
             IconButton(
               tooltip: 'Pick on the map',
-              visualDensity: VisualDensity.compact,
               icon: const Icon(Icons.touch_app_outlined, size: 18),
               onPressed: () => Navigator.pop(
                 context,

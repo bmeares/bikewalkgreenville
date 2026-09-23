@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
+import '../auth.dart';
 import '../theme.dart';
 import '../widgets/safety_notice.dart';
 
@@ -18,6 +19,9 @@ class SettingsScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.symmetric(vertical: 8),
         children: [
+          _header(context, 'Account'),
+          const _AccountSection(),
+          const Divider(),
           const SafetyNotice(),
           const Divider(),
           _header(context, 'Riding'),
@@ -188,12 +192,105 @@ class SettingsScreen extends StatelessWidget {
 
   Widget _header(BuildContext context, String text) => Padding(
     padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-    child: Text(
-      text,
-      style: Theme.of(context).textTheme.titleSmall?.copyWith(
-        color: brandGreen,
-        fontWeight: FontWeight.w700,
+    child: Semantics(
+      header: true,
+      child: Text(
+        text,
+        // brandOnSurface: brandGreen text was 3.4:1 on white.
+        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+          color: brandOnSurface(context),
+          fontWeight: FontWeight.w700,
+        ),
       ),
     ),
   );
+}
+
+/// Signed out: one "Sign in" tile. Signed in: email, display name, sign out.
+class _AccountSection extends StatelessWidget {
+  const _AccountSection();
+
+  Future<void> _editName(BuildContext context, AuthState account) async {
+    final ctl = TextEditingController(text: account.displayName ?? '');
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Display name'),
+        content: TextField(
+          controller: ctl,
+          autofocus: true,
+          maxLength: 40,
+          decoration: const InputDecoration(
+            helperText: 'Shown with your public contributions',
+          ),
+          onSubmitted: (v) => Navigator.pop(ctx, v),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, ctl.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    Future<void>.delayed(const Duration(seconds: 1), ctl.dispose);
+    if (name == null || !context.mounted) return;
+    try {
+      await withAuth(context, () => account.setDisplayName(name));
+    } catch (e) {
+      if (context.mounted) toast(context, e.toString());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final account = context.watch<AuthState>();
+    if (!account.signedIn) {
+      return ListTile(
+        leading: const Icon(Icons.login),
+        title: const Text('Sign in'),
+        subtitle: const Text(
+          'Only needed to add to the community map, vote, and save routes '
+          'and settings across devices',
+        ),
+        onTap: () => AuthGate.require(context),
+      );
+    }
+    return Column(
+      children: [
+        ListTile(
+          leading: const Icon(Icons.account_circle_outlined),
+          title: Text(account.email ?? 'Signed in'),
+          subtitle: Text(
+            account.isAdmin
+                ? 'Moderator · saved places and preferences sync'
+                : 'Saved places and preferences sync to this account',
+          ),
+        ),
+        ListTile(
+          leading: const Icon(Icons.badge_outlined),
+          title: const Text('Display name'),
+          subtitle: Text(
+            (account.displayName ?? '').isEmpty
+                ? 'Not set'
+                : account.displayName!,
+          ),
+          trailing: const Icon(Icons.edit_outlined),
+          onTap: () => _editName(context, account),
+        ),
+        ListTile(
+          leading: const Icon(Icons.logout),
+          title: const Text('Sign out'),
+          onTap: () async {
+            await account.signOut();
+            if (context.mounted) toast(context, 'Signed out on this device.');
+          },
+        ),
+      ],
+    );
+  }
 }

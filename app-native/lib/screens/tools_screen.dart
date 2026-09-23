@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
+import '../api.dart';
+import '../auth.dart';
 import '../theme.dart';
+import '../widgets/events_card.dart';
 import 'settings_screen.dart';
 import 'community_screen.dart';
 import 'rides_screen.dart';
@@ -86,7 +90,8 @@ class ToolsScreen extends StatelessWidget {
       appBar: AppBar(
         title: Row(
           children: [
-            Image.asset('assets/logo.png', width: 32),
+            // Decorative: the title beside it says what this is.
+            Image.asset('assets/logo.png', width: 32, excludeFromSemantics: true),
             const SizedBox(width: 10),
             const Text('Dashboards & Tools'),
           ],
@@ -121,6 +126,16 @@ class ToolsScreen extends StatelessWidget {
           ),
           Card(
             child: ListTile(
+              leading: const Icon(Icons.groups, color: brandGreen, size: 32),
+              title: const Text('Group ride'),
+              subtitle: const Text('Ride together and follow the leader'),
+              trailing: const Icon(Icons.chevron_right),
+              // The map owns the group ride sheet; hand it the request.
+              onTap: () => Navigator.pop(context, 'group-ride'),
+            ),
+          ),
+          Card(
+            child: ListTile(
               leading: const Icon(Icons.settings, color: brandGreen, size: 32),
               title: const Text('Settings'),
               subtitle: const Text(
@@ -132,6 +147,8 @@ class ToolsScreen extends StatelessWidget {
               ),
             ),
           ),
+          if (context.watch<AuthState>().isAdmin) const _ModerationTile(),
+          const EventsCard(),
           for (final t in _tools)
             Card(
               child: t.links.isEmpty
@@ -178,8 +195,76 @@ class ToolsScreen extends StatelessWidget {
               ),
             ),
           ),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Semantics(
+                    header: true,
+                    child: Text(
+                      'Help Us Build a More Bikeable and Walkable Greenville',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'By donating to Bike Walk Greenville, you support this free '
+                    'community tool and our broader work to make walking and '
+                    'biking safer, easier, and more accessible for everyone.',
+                  ),
+                  const SizedBox(height: 12),
+                  FilledButton.icon(
+                    onPressed: () =>
+                        _open('https://bikewalkgreenville.org/donate'),
+                    icon: const Icon(Icons.volunteer_activism),
+                    label: const Text('Donate'),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
+}
+
+/// Moderators only: pending counts, opens the web console.
+class _ModerationTile extends StatefulWidget {
+  const _ModerationTile();
+  @override
+  State<_ModerationTile> createState() => _ModerationTileState();
+}
+
+class _ModerationTileState extends State<_ModerationTile> {
+  late final Future<Map<String, dynamic>> _counts = api.moderationPendingCount();
+
+  @override
+  Widget build(BuildContext context) => Card(
+    child: ListTile(
+      leading: const Icon(Icons.shield_outlined, color: brandGreen, size: 32),
+      title: const Text('Moderation'),
+      subtitle: FutureBuilder<Map<String, dynamic>>(
+        future: _counts,
+        builder: (_, snap) {
+          if (snap.hasError) return const Text('Review photos and held posts');
+          final c = snap.data;
+          if (c == null) return const Text('Checking the queue…');
+          final photos = (c['photos'] as num?)?.toInt() ?? 0;
+          final held = (c['held'] as num?)?.toInt() ?? 0;
+          return Text(
+            '$photos photo${photos == 1 ? '' : 's'} · '
+            '$held held awaiting review',
+          );
+        },
+      ),
+      trailing: const Icon(Icons.open_in_new, size: 18),
+      onTap: () => launchUrlString(
+        'https://bwg.mrsm.io/dash/moderation',
+        mode: LaunchMode.externalApplication,
+      ),
+    ),
+  );
 }

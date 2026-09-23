@@ -4,6 +4,21 @@ import 'package:flutter/material.dart';
 const brandGreen = Color(0xFF6F9920);
 const brandDark = Color(0xFF33470D);
 
+/// Brand green dark enough to carry white text (5.0:1; [brandGreen] is only
+/// 3.4:1, fine for icons and line work but under WCAG AA 4.5:1 for text).
+/// Use it for filled buttons and cards with white labels.
+const brandGreenStrong = Color(0xFF557A18);
+
+/// Group rides: members (teal) and the leader + their route (deep orange) —
+/// distinct from the route blue, bike-lane greens and the recording purple.
+const groupRideColor = Color(0xFF00897B);
+const groupLeaderColor = Color(0xFFE65100);
+const groupRideHex = '#00897B';
+
+/// Teal dark enough for white badge numerals (6.6:1; [groupRideColor] 4.3:1).
+const groupRideBadge = Color(0xFF00695C);
+const groupLeaderHex = '#E65100';
+
 /// Free, keyless vector basemap (OpenFreeMap, OpenMapTiles schema).
 const basemapStyleUrl = 'https://tiles.openfreemap.org/styles/liberty';
 
@@ -65,11 +80,12 @@ const modeApiNames = {
   TravelMode.transit: 'transit',
 };
 
-/// "Bike here" / "Walk here" / "Bus here" — directions verb per mode.
+/// Directions verb per mode. One label for every mode: the mode itself is
+/// already on the rail, so the button just says what it does.
 const modeVerbs = {
-  TravelMode.cyclist: 'Bike here',
-  TravelMode.pedestrian: 'Walk here',
-  TravelMode.transit: 'Bus here',
+  TravelMode.cyclist: 'Navigate here',
+  TravelMode.pedestrian: 'Navigate here',
+  TravelMode.transit: 'Navigate here',
 };
 
 /// Route preview subtitle per mode.
@@ -116,6 +132,11 @@ const routeLegColors = <String, String>{
   'bcycle': '#E2231A',
 };
 
+/// Recorded ride / trim line. The purple is 8.2:1 on white but only 2.6:1 on
+/// the dark basemap, so dark and satellite bases draw a light orchid instead.
+const rideLineHex = '#7B1FA2';
+const rideLineOnDarkHex = '#CE93D8';
+
 /// Hill severity → route overlay color: moderate (5–8%) amber, steep (8–12%)
 /// deep orange, very steep (>12%) red. Matches the elevation preview's idea
 /// of "steep" at the 8% (ADA 1:12) boundary.
@@ -143,6 +164,18 @@ const stressLabels = {
   'M': 'Medium',
   'ML': 'Medium-low',
   'L': 'Low stress',
+};
+
+/// Section of the layers sheet a layer is listed under, in display order.
+enum LayerGroup { community, biking, walking, transit, parking, safety }
+
+const layerGroupLabels = {
+  LayerGroup.community: 'Community',
+  LayerGroup.biking: 'Biking',
+  LayerGroup.walking: 'Walking',
+  LayerGroup.transit: 'Transit',
+  LayerGroup.parking: 'Parking',
+  LayerGroup.safety: 'Safety & advocacy',
 };
 
 /// One map overlay. `path` is relative to the API base (see Api.layerUrl).
@@ -215,8 +248,12 @@ class LayerDef {
   /// tuned for dark (streetlight amber vanished on white).
   final String? lightBaseColor;
 
+  /// Layers-sheet section.
+  final LayerGroup group;
+
   const LayerDef({
     required this.id,
+    required this.group,
     required this.label,
     required this.path,
     required this.color,
@@ -251,6 +288,7 @@ class LayerDef {
 const layerDefs = <LayerDef>[
   LayerDef(
     id: 'community',
+    group: LayerGroup.community,
     label: 'Community paths & corrections',
     path: '/map-layers/community.geojson',
     color: '#7B1FA2',
@@ -261,6 +299,7 @@ const layerDefs = <LayerDef>[
   ),
   LayerDef(
     id: 'community-areas',
+    group: LayerGroup.community,
     label: 'Community no-entry areas',
     path: '/map-layers/community.geojson',
     color: '#C62828',
@@ -287,6 +326,7 @@ const layerDefs = <LayerDef>[
   ),
   LayerDef(
     id: 'community-points',
+    group: LayerGroup.community,
     label: 'Community places & notes',
     path: '/map-layers/community.geojson',
     color: '#7B1FA2',
@@ -302,6 +342,7 @@ const layerDefs = <LayerDef>[
   ),
   LayerDef(
     id: 'bike-stress',
+    group: LayerGroup.biking,
     label: 'Bike stress',
     path: '/map-layers/bike-stress.geojson',
     color: '#1a9850',
@@ -315,6 +356,7 @@ const layerDefs = <LayerDef>[
   ),
   LayerDef(
     id: 'bike-lanes',
+    group: LayerGroup.biking,
     label: 'Bike lanes & sharrows',
     path: '/map-layers/bike-lanes.geojson',
     color: '#2E7D32',
@@ -325,6 +367,7 @@ const layerDefs = <LayerDef>[
   ),
   LayerDef(
     id: 'srt',
+    group: LayerGroup.biking,
     label: 'Prisma Health Swamp Rabbit Trail',
     path: '/map-layers/srt.geojson',
     color: '#FF6F00',
@@ -340,6 +383,7 @@ const layerDefs = <LayerDef>[
   // from mapped streets.
   LayerDef(
     id: 'custom-paths',
+    group: LayerGroup.biking,
     label: 'Shortcuts & tunnels',
     path: '/map-layers/custom-paths.geojson',
     color: '#AD1457',
@@ -356,6 +400,7 @@ const layerDefs = <LayerDef>[
   // Always shown (no toggle): they're how locals talk about the trail.
   LayerDef(
     id: 'landmarks',
+    group: LayerGroup.biking,
     label: 'Trail landmarks',
     path: '/map-layers/landmarks.geojson',
     color: '#5D4037',
@@ -373,6 +418,7 @@ const layerDefs = <LayerDef>[
   // was indistinguishable from the blue route line drawn over it.
   LayerDef(
     id: 'sidewalks',
+    group: LayerGroup.walking,
     label: 'Sidewalks',
     path: '/map-layers/sidewalks.geojson',
     color: '#7BAFDE',
@@ -386,6 +432,7 @@ const layerDefs = <LayerDef>[
   ),
   LayerDef(
     id: 'bus-routes',
+    group: LayerGroup.transit,
     label: 'Greenlink bus routes',
     path: '/map-layers/bus-routes.geojson',
     color: '#7B1FA2',
@@ -399,6 +446,7 @@ const layerDefs = <LayerDef>[
   ),
   LayerDef(
     id: 'bus-stops',
+    group: LayerGroup.transit,
     label: 'Bus stops',
     path: '/map-layers/bus-stops.geojson',
     color: '#7B1FA2',
@@ -410,6 +458,7 @@ const layerDefs = <LayerDef>[
   ),
   LayerDef(
     id: 'bike-parking',
+    group: LayerGroup.parking,
     label: 'Bike parking',
     path: '/bike-parking/data.geojson',
     color: '#00695C',
@@ -422,6 +471,7 @@ const layerDefs = <LayerDef>[
   // rather than left at whatever it was when the style loaded.
   LayerDef(
     id: 'bcycle',
+    group: LayerGroup.biking,
     label: 'BCycle bike share',
     path: '/bcycle/stations.geojson',
     color: bcycleRed,
@@ -437,6 +487,7 @@ const layerDefs = <LayerDef>[
   ),
   LayerDef(
     id: 'repair-stations',
+    group: LayerGroup.biking,
     label: 'Bike repair stations',
     path: '/bike-parking/repair-stations.geojson',
     color: '#BF360C',
@@ -450,6 +501,7 @@ const layerDefs = <LayerDef>[
   // makes the map feel like Greenville's, not a generic basemap.
   LayerDef(
     id: 'bike-businesses',
+    group: LayerGroup.biking,
     label: 'Bike friendly businesses',
     path: '/map-layers/bike-businesses.geojson',
     color: '#00897B',
@@ -462,6 +514,7 @@ const layerDefs = <LayerDef>[
   // default — it's context for a car-adjacent trip, not core to the map.
   LayerDef(
     id: 'parking-garages',
+    group: LayerGroup.parking,
     label: 'Parking garages',
     path: '/map-layers/parking-garages.geojson',
     color: '#5C6BC0',
@@ -478,6 +531,7 @@ const layerDefs = <LayerDef>[
   // Grafana dashboard's split.
   LayerDef(
     id: 'parking-landuse',
+    group: LayerGroup.parking,
     // The pavement inventory only covers downtown — say so in the label.
     label: 'Downtown parking land use',
     path: '/map-layers/parking-landuse.geojson',
@@ -497,6 +551,7 @@ const layerDefs = <LayerDef>[
   // street edge.
   LayerDef(
     id: 'vulnerable-heat',
+    group: LayerGroup.safety,
     label: 'Vulnerable road users — heatmap',
     path: '/map-layers/vulnerable-crashes.geojson',
     color: '#D32F2F',
@@ -508,6 +563,7 @@ const layerDefs = <LayerDef>[
   ),
   LayerDef(
     id: 'vulnerable-crashes',
+    group: LayerGroup.safety,
     label: 'Vulnerable road users — crashes',
     path: '/map-layers/vulnerable-crashes.geojson',
     color: '#EF6C00',
@@ -530,6 +586,7 @@ const layerDefs = <LayerDef>[
   ),
   LayerDef(
     id: 'vulnerable-fatalities',
+    group: LayerGroup.safety,
     label: 'Vulnerable road users — fatalities',
     path: '/map-layers/vulnerable-crashes.geojson',
     color: '#B71C1C',
@@ -554,6 +611,7 @@ const layerDefs = <LayerDef>[
   // vanished on the light basemap, hence the darker light-base color.
   LayerDef(
     id: 'street-lights',
+    group: LayerGroup.safety,
     label: 'Street lights',
     path: '/map-layers/street-lights.geojson',
     color: '#FFD54F',
@@ -568,6 +626,7 @@ const layerDefs = <LayerDef>[
   // Community reports are the point of the app — always on, always drawn.
   LayerDef(
     id: 'reports',
+    group: LayerGroup.community,
     label: 'Reported issues',
     path: '/walk-audit/reports.geojson',
     color: '#F9A825',
@@ -592,6 +651,9 @@ ThemeData buildTheme({bool highContrast = false}) => ThemeData(
     outline: highContrast ? const Color(0xFF4B5563) : null,
   ),
   useMaterial3: true,
+  // 48 dp hit areas everywhere, web included (Flutter shrink-wraps desktop
+  // and web targets by default; this app is used on phones either way).
+  materialTapTargetSize: MaterialTapTargetSize.padded,
   // Floating, so toasts ride above the system navigation bar instead of
   // hiding behind 3-button nav.
   snackBarTheme: const SnackBarThemeData(behavior: SnackBarBehavior.floating),
@@ -628,6 +690,7 @@ ThemeData buildDarkTheme({bool highContrast = false}) {
     colorScheme: scheme,
     scaffoldBackgroundColor: scheme.surface,
     useMaterial3: true,
+    materialTapTargetSize: MaterialTapTargetSize.padded,
     snackBarTheme: const SnackBarThemeData(behavior: SnackBarBehavior.floating),
   );
 }

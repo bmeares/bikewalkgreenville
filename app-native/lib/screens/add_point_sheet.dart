@@ -3,8 +3,11 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
+import 'package:provider/provider.dart';
 
 import '../api.dart';
+import '../app_state.dart';
+import '../auth.dart';
 import '../theme.dart';
 import '../widgets/safety_notice.dart';
 
@@ -111,7 +114,7 @@ class _AddPointSheetState extends State<AddPointSheet> {
       _error = null;
     });
     try {
-      await api.submitPoint(
+      final reply = await withAuth(context, () => api.submitPoint(
         category: _category,
         name: _nameCtl.text.trim(),
         comment: _commentCtl.text.trim(),
@@ -130,8 +133,16 @@ class _AddPointSheetState extends State<AddPointSheet> {
                         .map((p) => [p.longitude, p.latitude])
                         .toList(),
                   }),
-      );
-      if (mounted) Navigator.pop(context, true);
+      ));
+      if (!mounted) return;
+      if (reply == null) {
+        setState(() => _busy = false);
+        return;
+      }
+      final id = reply['id']?.toString();
+      if (id != null) context.read<AppState>().rememberContribution(id);
+      // Pops the server reply (`status`, `photo_status`) for the toast.
+      Navigator.pop(context, reply);
     } on Exception catch (e) {
       if (mounted) {
         setState(() {
@@ -164,7 +175,11 @@ class _AddPointSheetState extends State<AddPointSheet> {
                 'Share local knowledge. Contributions publish immediately and can be rolled back. '
                 '(${widget.latLng.latitude.toStringAsFixed(5)}, '
                 '${widget.latLng.longitude.toStringAsFixed(5)})',
-                style: const TextStyle(color: Colors.black54, fontSize: 12),
+                // Theme-aware: black54 vanished on the dark theme.
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  fontSize: 12,
+                ),
               ),
               if (widget.geometry?['type'] == 'Polygon')
                 const Padding(
@@ -241,9 +256,12 @@ class _AddPointSheetState extends State<AddPointSheet> {
               if (_error != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
-                  child: Text(
-                    _error!,
-                    style: const TextStyle(color: Colors.red),
+                  child: Semantics(
+                    liveRegion: true,
+                    child: Text(
+                      _error!,
+                      style: TextStyle(color: Theme.of(context).colorScheme.error),
+                    ),
                   ),
                 ),
               const SizedBox(height: 12),
@@ -252,7 +270,7 @@ class _AddPointSheetState extends State<AddPointSheet> {
               SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
-                  style: FilledButton.styleFrom(backgroundColor: brandGreen),
+                  style: FilledButton.styleFrom(backgroundColor: brandGreenStrong),
                   icon: _busy
                       ? const SizedBox(
                           width: 18,

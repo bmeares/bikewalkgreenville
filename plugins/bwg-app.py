@@ -21,14 +21,25 @@ from bikewalkgreenville.org exactly like Who Owns The Roads.
 import meerschaum as mrsm
 from meerschaum.plugins import api_plugin, web_page, dash_plugin
 
-__version__ = '0.1.0'
+__version__ = '0.2.0'
 
 
 @api_plugin
 def init_app(app):
-    """Mount the Flutter web bundle as static files at `/bwg-app/`."""
+    """Mount the Flutter web bundle as static files at `/bwg-app/`,
+    plus the short group-ride share link `/r/{code}`."""
+    import re
+    from fastapi import HTTPException
+    from fastapi.responses import RedirectResponse
     from fastapi.staticfiles import StaticFiles
     from meerschaum.config.paths import ROOT_DIR_PATH
+
+    @app.get('/r/{code}')
+    def group_ride_link(code: str):
+        code = code.upper()
+        if not re.fullmatch('[A-Z]{4}', code):
+            raise HTTPException(404, 'Unknown ride code')
+        return RedirectResponse(f'https://bwg.mrsm.io/bwg-app/?ride={code}', status_code=302)
 
     web_dir = ROOT_DIR_PATH / 'bwg-app-web'
     if web_dir.is_dir():
