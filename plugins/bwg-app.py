@@ -50,7 +50,7 @@ def init_app(app):
         )
 
 
-@dash_plugin
+@dash_plugin(public=True)
 def init_dash(dash_app):
     """Add `/dash/app`: a full-viewport iframe over the static bundle."""
     import dash.html as html

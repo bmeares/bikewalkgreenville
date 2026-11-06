@@ -116,7 +116,7 @@ LOG_PIPE: mrsm.Pipe = mrsm.Pipe(
 )
 
 
-@dash_plugin
+@dash_plugin(public=True)
 def init_dash(dash_app):
     """Initialize the Plotly Dash application."""
     import json
