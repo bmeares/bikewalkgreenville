@@ -1,6 +1,6 @@
 ### See https://meerschaum.io/reference/compose/ for the compose schema.
 ###
-### Greenville County property tax per acre (Urban3-style).
+### Greenville County property tax per acre.
 ### The `taxmap` plugin (plugins/taxmap.py) serves the 3D map at /dash/tax-per-acre
 ### (embed: /taxmap/map) on bwg.mrsm.io. Docs: docs/wiki/TAX-PER-ACRE.md.
 ###

@@ -3,15 +3,13 @@
 # vim:fenc=utf-8
 
 """
-Urban3-style property tax per acre for Greenville County, SC.
+Property tax per acre for Greenville County, SC.
 
-Each parcel's current tax bill (Greenville County GIS parcel layer, TAX_YEAR) divided by
-its land area, drawn as 3D extrusions whose height is tax per acre.
+Each lot's current tax bill (Greenville County GIS parcel layer, TAX_YEAR) divided by its land
+area, drawn as 3D extrusions whose height is tax per acre.
 
-Two views:
-- Parcels: every parcel exactly as the county draws it. Condo, garage and "building only" units
-  are drawn as small symbols (some just 30 sq ft), so their per-acre values are inflated.
-- Lots: those units are stacked onto the land they sit on, the way Urban3 stacks condos:
+Lots: condo, garage and "building only" units are drawn by the county as small symbols (some just
+30 sq ft), which would inflate their per-acre values, so they are stacked onto the land they sit on:
     1. contained: a unit drawn inside a land parcel's outline joins that parcel;
     2. pin: otherwise it joins its PIN base lot (lot 00800 <- units 00801-00899) within ~300 ft;
     3. cluster: otherwise neighboring units are grouped into a building that joins the land
@@ -22,14 +20,16 @@ Two views:
 
 Pipes:
 - `plugin:taxmap` / `parcels` / `greenville`: the parcels from the county's public parcel layer, in EPSG:3857.
-- `sql:main` / `parcel_taxes` / `greenville`: each parcel's tax by year (one row per PIN and tax year).
+- `sql:bwg` / `parcel_taxes` / `greenville`: each parcel's tax by year (one row per PIN and tax year).
 - `plugin:taxmap` / `lots` / `greenville`: the stacked lots.
 
 Routes:
 - `/dash/tax-per-acre`: the page (map + comparisons).
 - `/taxmap/map`: the standalone 3D map (embeddable).
-- `/taxmap/tiles/{view}/{z}/{x}/{y}.pbf`: vector tiles (`view` is `lots` or `parcels`).
-- `/taxmap/feature/{view}/{id}`: details for a clicked lot or parcel.
+- `/taxmap/tiles/lots/{z}/{x}/{y}.pbf`: vector tiles.
+- `/taxmap/feature/lots/{id}`: details for a clicked lot.
+- `/taxmap/equivalent/lots/{id}`: the nearest houses paying the same tax.
+- `/taxmap/breakdown/{by}`, `/taxmap/srt.geojson`.
 """
 
 import functools
@@ -60,7 +60,8 @@ PARCEL_FIELDS: list[str] = [
     'PIN', 'SHEET', 'BLOCK', 'LOT', 'STRNUM', 'LOCATE', 'DESCR', 'SUBDIV', 'LANDUSE', 'PROPTYPE',
     'DIST', 'OWNAM1', 'TOTTAX', 'TAXMKTVAL', 'FAIRMKTVAL', 'LANDVAL', 'BLDGVAL',
 ]
-VIEWS: tuple = ('lots', 'parcels')
+### Only the stacked-lots view is served (the as-drawn parcels view was retired).
+VIEWS: tuple = ('lots',)
 
 UNIT_SQFT_ACRES: float = 0.015
 SMALL_ACRES: float = 0.05
@@ -69,6 +70,8 @@ UNIT_DESCR_REGEX: str = '(UNIT|FLOOR|FLR|BLDG|BUILDING|SUITE|STE |GARAGE|PARKING
 MAPLIBRE_JS_URL: str = 'https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/5.24.0/maplibre-gl.min.js'
 MAPLIBRE_CSS_URL: str = 'https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/5.24.0/maplibre-gl.min.css'
 MAPLIBRE_STYLE_URL: str = 'https://tiles.openfreemap.org/styles/dark'
+### Swamp Rabbit Trail overlay: a muted green, so the reference line doesn't outshine the data.
+SRT_COLOR: str = '#4f8f74'
 
 ### Zoning: Greenville County GIS public MapServer, layer 3 'Zoning'. Countywide: each polygon's
 ### JCODE is the FIPS code of the government whose zoning it is (45045 = Greenville County,
@@ -81,15 +84,16 @@ MIN_ZONE_SHARE: float = 0.05
 UNINCORPORATED: str = 'UNINCORPORATED'
 NO_ZONE_LABEL: str = '(no zoning polygon)'
 
-### Use class: the county's property type split by land-use code. Code names aren't published;
-### these were read from the data (1180-1182: no building value on 85-100% of parcels;
-### 120/122: complexes with a median of 4-6.5 acres; 110-113: small buildings).
+### Use class: the county's property type split by land-use code. Code names aren't in the layer;
+### these were read from the data, and the county recoded some for 2025: apartment complexes were
+### 120/122 in 2024 and are 1182/1183 (type MULTI-FAMILY, median 6-7 acres) in 2025. 1180/1181 are
+### vacant lots (no building value on 86-93%); 110-113 are small multi-family buildings.
 ### `landuse` and `proptype` exist on both the lots and parcels tables.
 USE_CLASS_SQL: str = """(CASE
+    WHEN landuse IN ('120', '122', '1182', '1183') THEN 'Apartments'
     WHEN landuse IN ('1100', '1101') THEN 'Single-family'
-    WHEN landuse IN ('1180', '1181', '1182') THEN 'Vacant residential'
+    WHEN landuse IN ('1180', '1181') AND proptype IS DISTINCT FROM 'MULTI-FAMILY' THEN 'Vacant residential'
     WHEN landuse IN ('1170', '1171') OR proptype = 'MOBILE HOME' THEN 'Mobile home'
-    WHEN landuse IN ('120', '122') THEN 'Apartments'
     WHEN proptype = 'MULTI-FAMILY' THEN 'Small multi-family'
     WHEN proptype = 'COMMERCIAL' THEN 'Commercial'
     WHEN proptype = 'INDUSTRIAL' THEN 'Industrial'
@@ -770,6 +774,7 @@ def _tables(settings_key: str) -> dict[str, Any]:
     parcels = get_parcels_pipe(lots)
     zone_families = mrsm.Pipe('plugin:taxmap', 'zone_families', settings['location'], instance=settings['instance'])
     millage = mrsm.Pipe('plugin:taxmap', 'millage', settings['location'], instance=settings['instance'])
+    parcel_taxes = mrsm.Pipe('sql:bwg', 'parcel_taxes', settings['location'], instance=settings['instance'])
     conn = lots.instance_connector
     for table in (lots.target, parcels.target, grid.target):
         try:
@@ -778,7 +783,8 @@ def _tables(settings_key: str) -> dict[str, Any]:
             warn(f"taxmap: could not index {table}: {e}", stack=False)
     return {
         'lots': lots.target, 'parcels': parcels.target, 'grid': grid.target,
-        'zone_families': zone_families.target, 'millage': millage.target, 'conn': conn,
+        'zone_families': zone_families.target, 'millage': millage.target,
+        'parcel_taxes': parcel_taxes.target, 'conn': conn,
     }
 
 
@@ -844,9 +850,8 @@ def _tile(view: str, z: int, x: int, y: int, version: str) -> bytes:
     id_col = 'lot_id' if view == 'lots' else 'pin'
     stacked = 'stacked' if view == 'lots' else '0'
     tax_per_acre = 'tax_per_acre' if view == 'lots' else 'tax / NULLIF(acres, 0)'
-    ### Category attributes for the map's color-by and filter (pt, lu, td: both views;
-    ### mu, zn: lots only, since zone and municipality are assigned per lot).
-    ### uc (use class) on both views; zf (zoning family) on lots only.
+    ### Category attributes for the map's color-by and filter: pt (property type), lu (land-use
+    ### code), td (tax district), uc (use class), mu (municipality), zn (zone), zf (zoning family).
     categories = f""",
                    COALESCE(d.proptype, '(none)') AS pt,
                    COALESCE(d.landuse, '(none)') AS lu,
@@ -1448,7 +1453,7 @@ MAP_HTML = r"""<!doctype html>
     border-radius: 6px; padding: 4px 6px; font: inherit; font-size: 12.5px; }
   label.row select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   label.row .lbl { width: 42px; }
-  .srt-key { display: inline-block; width: 18px; height: 4px; border-radius: 2px; background: #5fd38d;
+  .srt-key { display: inline-block; width: 18px; height: 4px; border-radius: 2px; background: %(srt_color)s;
     box-shadow: 0 0 0 1.5px #0d0d0d; margin-right: 2px; }
   #filter-stats { margin-top: 6px; color: var(--ink2); font-variant-numeric: tabular-nums; }
   .equiv-key { display: inline-block; width: 10px; height: 10px; border-radius: 2px; background: #f2d16b; margin-right: 2px; }
@@ -1470,10 +1475,6 @@ MAP_HTML = r"""<!doctype html>
     background: linear-gradient(90deg, %(gradient)s); }
   #legend .ticks { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; }
   #legend .title { color: var(--ink2); font-size: 12px; }
-  .maplibregl-popup-content { background: var(--surface); color: var(--ink); border: 1px solid var(--line);
-    border-radius: 8px; padding: 10px 12px; font-size: 12.5px; min-width: 220px; }
-  .maplibregl-popup-tip { border-top-color: var(--surface) !important; border-bottom-color: var(--surface) !important; }
-  .maplibregl-popup-close-button { color: var(--ink2); font-size: 16px; }
   .pop h3 { margin: 0 0 2px; font-size: 13.5px; }
   .pop .big { font-size: 18px; font-weight: 600; margin: 4px 0 2px; font-variant-numeric: tabular-nums; }
   .pop table { border-collapse: collapse; width: 100%%; margin-top: 4px; font-variant-numeric: tabular-nums; }
@@ -1481,28 +1482,49 @@ MAP_HTML = r"""<!doctype html>
   .pop td.v { text-align: right; color: var(--ink); }
   .pop .members { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 4px; color: var(--muted); }
   .pop .note { color: var(--muted); margin-top: 6px; }
-  @media (max-width: 600px) { #controls { max-width: calc(100%% - 40px); } #legend { width: 210px; bottom: 34px; } }
+  /* Lot details: docked beside the map (right) or as a bottom sheet on phones, never over the
+     highlighted houses; the camera moves them into the uncovered part of the map. */
+  #info { top: 10px; right: 50px; width: 320px; max-height: calc(100%% - 20px); overflow-y: auto;
+    z-index: 3; font-size: 12.5px; padding-top: 8px; overscroll-behavior: contain; }
+  #info[hidden] { display: none; }
+  #info-close { position: sticky; top: 0; float: right; margin: -4px -6px 0 6px; background: #232321; color: var(--ink2);
+    border: 1px solid var(--line); border-radius: 6px; width: 28px; height: 28px; font-size: 16px; line-height: 1; cursor: pointer; }
+  #info-close:focus-visible, #controls-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  #controls .hd { display: flex; align-items: flex-start; gap: 8px; }
+  #controls .hd h1 { flex: 1; }
+  #controls-toggle { background: #232321; color: var(--ink2); border: 1px solid var(--line); border-radius: 6px;
+    font: inherit; font-size: 11.5px; padding: 2px 8px; cursor: pointer; white-space: nowrap; }
+  #controls.collapsed .body { display: none; }
+  #controls.collapsed .sub { margin-bottom: 0; }
+  @media (max-width: 600px) {
+    #controls { max-width: calc(100%% - 60px); }
+    #legend { width: 210px; bottom: 34px; }
+    #info { top: auto; left: 0; right: 0; bottom: 0; width: auto; max-height: 45%%; border-radius: 12px 12px 0 0;
+      padding: 8px 14px 14px; background: var(--surface); }
+  }
 </style>
 </head>
 <body>
 <div id="map" role="region" aria-label="3D map of property tax per acre"></div>
 <div id="controls" class="panel">
-  <h1>Property tax per acre</h1>
-  <div class="sub">Greenville County, %(tax_year)s tax bills. Height and color show tax dollars per acre.</div>
-  <div class="seg" id="view-seg" role="radiogroup" aria-label="View">
-    <button type="button" data-view="lots" role="radio">Lots (units stacked)</button>
-    <button type="button" data-view="parcels" role="radio">Parcels (as drawn)</button>
-  </div>
-  <div class="hint" id="view-hint"></div>
+  <div class="hd"><h1>Property tax per acre</h1>
+    <button type="button" id="controls-toggle" aria-expanded="true" aria-controls="controls-body">Hide</button></div>
+  <div class="sub">Greenville County · %(tax_year)s tax bills</div>
+  <div class="body" id="controls-body">
   <div class="hint" id="zoom-hint" style="margin-top:4px;color:#c3c2b7"></div>
   <label class="row"><span class="lbl">Height</span> <input id="height" type="range" min="-2" max="2" step="0.25" value="0" aria-label="Height exaggeration"><span id="height-label">1×</span></label>
   <label class="row"><span class="lbl">Color</span> <select id="colorby" aria-label="Color by">
     <option value="tpa">Tax per acre</option><option value="uc">Use class</option>
-    <option value="zf">Zoning family (lots)</option></select></label>
+    <option value="zf">Zoning family</option></select></label>
   <label class="row"><span class="lbl">Show</span> <select id="filter" aria-label="Show only"><option value="">Everything</option></select></label>
   <div class="hint" id="filter-stats" aria-live="polite"></div>
   <label class="row"><input id="srt-toggle" type="checkbox" checked style="flex:0"> <span class="srt-key"></span>Swamp Rabbit Trail</label>
-  <label class="row"><input id="equiv-toggle" type="checkbox" checked style="flex:0"> <span class="equiv-key"></span>On click, show houses paying the same tax</label>
+  <label class="row"><input id="equiv-toggle" type="checkbox" checked style="flex:0"> <span class="equiv-key"></span>Equal-tax houses on click</label>
+  </div>
+</div>
+<div id="info" class="panel" hidden role="dialog" aria-label="Lot details">
+  <button type="button" id="info-close" aria-label="Close details">×</button>
+  <div id="info-body"></div>
 </div>
 <div id="legend" class="panel">
   <div class="title" id="legend-title">Tax per acre (height is linear)</div>
@@ -1511,16 +1533,13 @@ MAP_HTML = r"""<!doctype html>
   <div class="cats" id="legend-cats" hidden></div>
 </div>
 <script>
-const VIEW_HINTS = {
-  lots: "Condo, garage and building-only units are stacked onto the land they sit on, as Urban3 does.",
-  parcels: "Every parcel as the county draws it. Condo units are tiny symbols, so their towers are inflated."
-};
 const COLOR_STOPS = %(color_stops)s;
 // Categorical modes: tile property -> [[class, color], ...]. Classes sharing a color are a family;
 // the legend checkboxes hide and show each class.
 const CATEGORIES = %(categories)s;
 const CAT_TITLES = { uc: 'Use class', zf: 'Zoning family' };
 const HIGHLIGHT = '#f2d16b';     // houses paying the same tax as the clicked lot
+const SRT_COLOR = %(srt_color_js)s;  // muted green: a reference line, not data
 // Greenville County GIS property report for one PIN (owner, deed, land-use name, values).
 const GCGIS_REPORT = 'https://www.gcgis.org/Apps/Property_Report_NJ/Default.aspx?pin=';
 const pinLink = (pin) => '<a href="' + GCGIS_REPORT + encodeURIComponent(pin) + '" target="_blank" rel="noopener"'
@@ -1530,7 +1549,7 @@ const VERSION = %(version)s;
 const GRID_MAX_ZOOM = %(grid_max_zoom)s;
 const BASE_HEIGHT = 0.00025;  // meters of height per dollar of tax per acre ($1M/acre = 250 m)
 const params = new URLSearchParams(location.search);
-let view = params.get('view') === 'parcels' ? 'parcels' : 'lots';
+const view = 'lots';
 let heightScale = 1;
 let colorBy = { pt: 'uc', uc: 'uc', zf: 'zf' }[params.get('color')] || 'tpa';
 let filter = params.get('filter') || '';
@@ -1542,7 +1561,6 @@ for (const item of (params.get('hide') || '').split(',')) {
   const [k, ...rest] = item.split(':');
   if (hidden[k] && rest.length) { hidden[k].add(rest.join(':')); }
 }
-if (colorBy === 'zf' && view !== 'lots') { view = 'lots'; }
 const stats = {};                // 'key:value' -> breakdown row, for the filter summary
 
 const map = new maplibregl.Map({
@@ -1557,6 +1575,37 @@ const map = new maplibregl.Map({
   attributionControl: { compact: true, customAttribution: 'Parcels &amp; tax: Greenville County GIS' }
 });
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
+if (document.fullscreenEnabled) {
+  // The whole page goes full screen, so the panels come along.
+  map.addControl(new maplibregl.FullscreenControl({ container: document.body }), 'top-right');
+} else if (window.self !== window.top) {
+  // Embedded without allow="fullscreen": open the map on its own instead.
+  map.addControl({
+    onAdd() {
+      const box = document.createElement('div');
+      box.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+      const b = document.createElement('button');
+      b.type = 'button'; b.textContent = '⤢'; b.style.fontSize = '17px';
+      b.title = 'Open the map full screen in a new tab'; b.setAttribute('aria-label', b.title);
+      b.addEventListener('click', () => window.open(location.href, '_blank', 'noopener'));
+      box.appendChild(b);
+      return box;
+    },
+    onRemove() {},
+  }, 'top-right');
+}
+
+// The control panel folds away (folded from the start on small screens) to free the map.
+const controlsEl = document.getElementById('controls');
+function setControlsOpen(open) {
+  controlsEl.classList.toggle('collapsed', !open);
+  const b = document.getElementById('controls-toggle');
+  b.textContent = open ? 'Hide' : 'Controls';
+  b.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+setControlsOpen(!(window.innerWidth <= 600 || window.innerHeight <= 520));
+document.getElementById('controls-toggle').addEventListener('click',
+  () => setControlsOpen(controlsEl.classList.contains('collapsed')));
 
 function rampExpr() {
   const expr = ['interpolate', ['linear'], ['get', 'tpa']];
@@ -1611,8 +1660,7 @@ document.getElementById('legend-cats').addEventListener('click', (e) => {
   applyStyle();
 });
 function applyStyle() {
-  if (colorBy === 'zf' && view !== 'lots') { setView('lots'); }
-  for (const id of ['lots', 'parcels']) {
+  for (const id of ['lots']) {
     if (!map.getLayer(id)) { continue; }
     map.setPaintProperty(id, 'fill-extrusion-color', colorExpr());
     map.setFilter(id, filterExpr());
@@ -1632,7 +1680,7 @@ function applyStyle() {
   updateZoomHint();
 }
 // Zoomed out, area-averaged grid cells are short, so heights are exaggerated there
-// (as Urban3's county views are) and ease to true scale by zoom 13.
+// and ease to true scale by zoom 13.
 const ZOOM_EXAGGERATION = [[9, 100], [10, 60], [11, 24], [12, 6], [13, 1]];
 function exaggeration(z) {
   const s = ZOOM_EXAGGERATION;
@@ -1656,7 +1704,7 @@ map.on('load', () => {
   for (const layer of map.getStyle().layers) {
     if (layer.type === 'fill-extrusion') { map.setLayoutProperty(layer.id, 'visibility', 'none'); }
   }
-  for (const v of ['lots', 'parcels']) {
+  for (const v of ['lots']) {
     map.addSource(v, {
       type: 'vector',
       tiles: [location.origin + '/taxmap/tiles/' + v + '/{z}/{x}/{y}.pbf?v=' + VERSION],
@@ -1691,12 +1739,12 @@ map.on('load', () => {
   map.addLayer({
     id: 'srt', type: 'line', source: 'srt', filter: ['!=', ['get', 'kind'], 'access'],
     layout: { 'line-cap': 'round', 'line-join': 'round', visibility: srtVis },
-    paint: { 'line-color': '#5fd38d', 'line-width': srtWidth },
+    paint: { 'line-color': SRT_COLOR, 'line-width': srtWidth },
   });
   map.addLayer({
     id: 'srt-access', type: 'line', source: 'srt', filter: ['==', ['get', 'kind'], 'access'],
     layout: { 'line-join': 'round', visibility: srtVis },
-    paint: { 'line-color': '#5fd38d', 'line-width': srtWidth, 'line-dasharray': [1.5, 1.5] },
+    paint: { 'line-color': SRT_COLOR, 'line-width': srtWidth, 'line-dasharray': [1.5, 1.5] },
   });
   // Houses paying the same tax as the clicked lot (filled on click; see showEquivalent()).
   map.addSource('equiv', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
@@ -1723,7 +1771,7 @@ let equivOn = new URL(location.href).searchParams.get('equiv') !== '0';
 let equivRequest = 0;
 function setDimmed(ids) {
   equivIds = ids;
-  for (const id of ['lots', 'parcels']) {
+  for (const id of ['lots']) {
     if (!map.getLayer(id)) { continue; }
     map.setPaintProperty(id, 'fill-extrusion-opacity', ids.length ? 0.2 : 0.92);
     map.setFilter(id, filterExpr());
@@ -1751,6 +1799,7 @@ async function showEquivalent(v, id, d) {
   const features = e.geojson.features.concat(target);
   map.getSource('equiv').setData({ type: 'FeatureCollection', features });
   setDimmed(features.map((f) => String(f.properties.id)));
+  fitToFeatures(features);
   if (el()) {
     const times = e.target_acres ? e.acres / e.target_acres : null;
     const miles = (e.radius_m || 0) / 1609.34;
@@ -1782,53 +1831,17 @@ document.getElementById('srt-toggle').addEventListener('change', (e) => {
   history.replaceState(null, '', url);
 });
 
-function setView(v) {
-  view = v;
-  // Zone and municipality filters exist only on lots.
-  document.querySelectorAll('#filter optgroup').forEach((g) => {
-    g.disabled = v === 'parcels' && LOTS_ONLY.includes(g.dataset.key);
-  });
-  if (v === 'parcels' && LOTS_ONLY.includes(splitFilter(filter)[0])) {
-    filter = '';
-    document.getElementById('filter').value = '';
-    applyStyle();
-  }
-  if (v === 'parcels' && colorBy === 'zf') {  // parcels carry no zoning
-    colorBy = 'tpa';
-    document.getElementById('colorby').value = colorBy;
-    applyStyle();
-  }
-  clearEquivalent();
-  for (const id of ['lots', 'parcels']) {
-    if (map.getLayer(id)) { map.setLayoutProperty(id, 'visibility', id === v ? 'visible' : 'none'); }
-  }
-  document.querySelectorAll('#view-seg button').forEach((b) => {
-    const on = b.dataset.view === v;
-    b.classList.toggle('on', on);
-    b.setAttribute('aria-checked', on ? 'true' : 'false');
-  });
-  document.getElementById('view-hint').textContent = VIEW_HINTS[v];
-  const url = new URL(location.href);
-  url.searchParams.set('view', v);
-  history.replaceState(null, '', url);
-  if (popup) { popup.remove(); }
-}
-document.querySelectorAll('#view-seg button').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
+function setView(v) { closeInfo(); }
 
 function updateZoomHint() {
   const z = map.getZoom();
   const f = exaggeration(z);
   const zoomedOut = z < GRID_MAX_ZOOM + 1;
   let text = zoomedOut
-    ? 'Zoomed out: both views show a ' + (z < 11 ? '~400 m' : z < 12 ? '~200 m' : '~100 m')
-      + ' grid, heights ×' + (Math.round(f * 10) / 10) + '. Zoom in to see lots and parcels.'
+    ? (z < 11 ? '~400 m' : z < 12 ? '~200 m' : '~100 m') + ' grid, heights ×' + (Math.round(f * 10) / 10)
+      + '. Zoom in for lots.'
     : '';
-  if (zoomedOut && filter) {
-    text = 'The zoomed-out grid isn\'t split by category, so it is hidden while filtering. Zoom in to see matching '
-      + (view === 'lots' ? 'lots' : 'parcels') + '.';
-  } else if (zoomedOut && isCat()) {
-    text += ' The grid stays colored by tax per acre and ignores the class checkboxes.';
-  }
+  if (zoomedOut && filter) { text = 'Zoom in to see matching lots.'; }
   document.getElementById('zoom-hint').textContent = text;
 }
 map.on('zoom', updateZoomHint);
@@ -1837,7 +1850,7 @@ map.on('load', updateZoomHint);
 document.getElementById('height').addEventListener('input', (e) => {
   heightScale = Math.pow(2, Number(e.target.value));
   document.getElementById('height-label').textContent = (heightScale >= 1 ? heightScale : heightScale.toFixed(2)) + '×';
-  for (const id of ['lots', 'parcels', 'equiv', 'equiv-target']) {
+  for (const id of ['lots', 'equiv', 'equiv-target']) {
     if (map.getLayer(id)) { map.setPaintProperty(id, 'fill-extrusion-height', heightExpr()); }
   }
 });
@@ -1847,7 +1860,6 @@ document.getElementById('colorby').value = colorBy;
 document.getElementById('colorby').addEventListener('change', (e) => { colorBy = e.target.value; applyStyle(); });
 document.getElementById('filter').addEventListener('change', (e) => {
   filter = e.target.value;
-  if (LOTS_ONLY.includes(splitFilter(filter)[0]) && view !== 'lots') { setView('lots'); }
   applyStyle();
 });
 function updateFilterStats() {
@@ -1861,10 +1873,10 @@ function updateFilterStats() {
 // Filter choices and their totals come from the same breakdowns as the page's table.
 const FILTER_GROUPS = [
   ['uc', 'use_class', 'Use class', (r) => r.key],
-  ['zf', 'zone_family', 'Zoning family (lots)', (r) => r.key],
+  ['zf', 'zone_family', 'Zoning family', (r) => r.key],
   ['pt', 'proptype', 'Property type', (r) => typeLabel(r.key)],
-  ['mu', 'municipality', 'Municipality (lots)', (r) => r.key === 'UNINCORPORATED' ? 'Unincorporated' : typeLabel(r.key)],
-  ['zn', 'zone_code', 'Zoning code (lots)', (r) => r.key + ' · ' + r.lots.toLocaleString('en-US') + ' lots'],
+  ['mu', 'municipality', 'Municipality', (r) => r.key === 'UNINCORPORATED' ? 'Unincorporated' : typeLabel(r.key)],
+  ['zn', 'zone_code', 'Zoning code', (r) => r.key + ' · ' + r.lots.toLocaleString('en-US') + ' lots'],
   ['td', 'tax_district', 'Tax district', (r) => 'DIST ' + r.key + (r.detail ? ' · ' + r.detail : '')],
 ];
 (async () => {
@@ -1876,7 +1888,6 @@ const FILTER_GROUPS = [
     const group = document.createElement('optgroup');
     group.label = title;
     group.dataset.key = key;
-    group.disabled = view === 'parcels' && LOTS_ONLY.includes(key);
     const rows = by === 'zone_code' ? [...data.rows].sort((a, b) => a.key.localeCompare(b.key)) : data.rows;
     for (const r of rows) {
       const opt = document.createElement('option');
@@ -1894,32 +1905,87 @@ const FILTER_GROUPS = [
 const money = (v) => v === null || v === undefined ? '–' : '$' + Math.round(v).toLocaleString('en-US');
 const acres = (v) => v === null || v === undefined ? '–' : (v < 0.1 ? v.toFixed(3) : v.toFixed(2)) + ' ac';
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let popup = null;
+// Lot details live in a docked panel (#info), not a popup at the click, so they never sit on top
+// of the highlighted houses: the camera moves the lot and its houses into the uncovered area.
+const infoEl = document.getElementById('info');
+let infoId = null;
+function openInfo(html, id) {
+  infoId = id;
+  document.getElementById('info-body').innerHTML = html;
+  infoEl.hidden = false;
+  infoEl.scrollTop = 0;
+}
+function closeInfo() {
+  if (infoEl.hidden) { return; }
+  infoEl.hidden = true;
+  document.getElementById('info-body').innerHTML = '';
+  infoId = null;
+  clearEquivalent();
+}
+document.getElementById('info-close').addEventListener('click', closeInfo);
+// A click on empty map (no lot, parcel or highlighted house) closes the details, as a popup would.
+map.on('click', (e) => {
+  const layers = ['lots', 'equiv', 'equiv-target'].filter((id) => map.getLayer(id));
+  if (!map.queryRenderedFeatures(e.point, { layers }).length) { closeInfo(); }
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeInfo(); } });
+
+// Map padding that keeps a fitted area clear of the panels (sides on wide screens; top and bottom
+// on phones, where the controls sit on top and the details are a bottom sheet).
+function overlayPadding() {
+  const W = map.getContainer().clientWidth, H = map.getContainer().clientHeight;
+  const pad = { top: 40, right: 40, bottom: 40, left: 40 };
+  const narrow = W <= 600;
+  if (!infoEl.hidden) {
+    const r = infoEl.getBoundingClientRect();
+    if (narrow) { pad.bottom += r.height; } else { pad.right += r.width + 50; }
+  }
+  const c = controlsEl.getBoundingClientRect();
+  if (narrow) { pad.top += c.height; } else { pad.left += c.width + 10; }
+  const fit = (a, b, size) => {  // leave at least 120 px of map between the panels
+    const room = size - 120;
+    if (pad[a] + pad[b] > room) { const k = room / (pad[a] + pad[b]); pad[a] *= k; pad[b] *= k; }
+  };
+  fit('left', 'right', W); fit('top', 'bottom', H);
+  return pad;
+}
+function fitToFeatures(features) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  const visit = (c) => {
+    if (typeof c[0] === 'number') {
+      x0 = Math.min(x0, c[0]); y0 = Math.min(y0, c[1]); x1 = Math.max(x1, c[0]); y1 = Math.max(y1, c[1]);
+    } else { c.forEach(visit); }
+  };
+  for (const f of features) { if (f.geometry) { visit(f.geometry.coordinates); } }
+  if (!isFinite(x0)) { return; }
+  const cam = map.cameraForBounds([[x0, y0], [x1, y1]], { padding: overlayPadding(), bearing: map.getBearing() });
+  if (!cam) { return; }
+  // A tilted camera sees less of the far side than a top-down one, so back off a little.
+  const zoom = Math.min(cam.zoom - (map.getPitch() > 30 ? 0.4 : 0), 17.5);
+  map.easeTo({ center: cam.center, zoom, bearing: map.getBearing(), pitch: map.getPitch(), duration: 900 });
+}
 
 async function showPopup(v, e) {
   const f = e.features && e.features[0];
   if (!f) { return; }
   const id = f.properties.id;
-  if (popup) { popup.remove(); }
-  clearEquivalent();
+  closeInfo();
   if (f.properties.grid) {
-    popup = new maplibregl.Popup({ maxWidth: '300px' }).setLngLat(e.lngLat).setHTML(
+    openInfo(
       '<div class="pop"><h3>Grid cell</h3><div class="big">' + money(f.properties.tpa) + ' / acre</div>'
       + '<table><tr><td>Tax billed</td><td class="v">' + money(f.properties.tax) + '</td></tr>'
       + '<tr><td>Parcel land</td><td class="v">' + acres(f.properties.acres) + '</td></tr></table>'
       + '<div class="note">Area-weighted average of the lots in this cell. Zoom in to see each '
-      + (v === 'lots' ? 'lot' : 'parcel') + '.</div></div>').addTo(map);
+      + (v === 'lots' ? 'lot' : 'parcel') + '.</div></div>', id);
     return;
   }
-  popup = new maplibregl.Popup({ maxWidth: '320px' }).setLngLat(e.lngLat)
-    .setHTML('<div class="pop"><div class="big">' + money(f.properties.tpa) + ' / acre</div><div class="note">Loading…</div></div>')
-    .addTo(map);
+  openInfo('<div class="pop"><div class="big">' + money(f.properties.tpa) + ' / acre</div><div class="note">Loading…</div></div>', id);
   let d;
   try {
     const r = await fetch('/taxmap/feature/' + v + '/' + encodeURIComponent(id));
     d = await r.json();
   } catch (err) { return; }
-  if (!d || d.error) { return; }
+  if (!d || d.error || infoId !== id) { return; }  // failed, or another click since
   const title = esc(d.site_address || d.subdivision || d.descr || ('PIN ' + d.id));
   let html = '<div class="pop"><h3>' + title + '</h3>'
     + '<div class="big">' + money(d.tax_per_acre) + ' / acre</div>'
@@ -1945,20 +2011,13 @@ async function showPopup(v, e) {
     if (d.parcels > 6) { html += '<br>…'; }
     html += '</div>';
   }
-  if (v === 'parcels' && d.lot) {
-    html += '<div class="note">Part of a stacked lot: ' + d.lot.parcels + ' parcels, '
-      + money(d.lot.tax / d.lot.acres) + ' / acre in the Lots view.</div>';
-  }
   html += compareHtml(d);
   html += '<div class="cmp" id="equiv-line">' + (equivOn ? 'Finding houses that pay the same tax…' : '') + '</div>';
   html += '</div>';
-  popup.setHTML(html);
+  openInfo(html, id);
   if (!equivOn) { document.getElementById('equiv-line').remove(); }
-  popup.on('close', () => { if (popupId === id) { clearEquivalent(); } });
-  popupId = id;
   showEquivalent(v, id, d);
 }
-let popupId = null;
 
 const times = (x) => x === null || x === undefined ? '–'
   : x >= 10 ? Math.round(x).toLocaleString('en-US') + '×' : x >= 1 ? x.toFixed(1) + '×' : x.toFixed(2) + '×';
@@ -1997,6 +2056,8 @@ def render_map_html(view: str) -> str:
         }),
         'no_zone': json.dumps(NO_ZONE_LABEL),
         'tax_year': TAX_YEAR,
+        'srt_color': SRT_COLOR,
+        'srt_color_js': json.dumps(SRT_COLOR),
         'version': json.dumps(data_version()),
         'grid_max_zoom': GRID_MAX_ZOOM,
     }
@@ -2017,7 +2078,7 @@ SERIES_TAX: str = '#d95926'
 
 @functools.lru_cache(maxsize=2)
 def _comparisons(bucket: int) -> dict[str, Any]:
-    """Urban3-style benchmarks and land-vs-revenue shares, from the lots and parcels tables."""
+    """Benchmarks and land-vs-revenue shares, from the lots and parcels tables."""
     sqlalchemy = mrsm.attempt_import('sqlalchemy', lazy=False)
     tables = get_tables()
     lots, parcels = tables['lots'], tables['parcels']
@@ -2081,56 +2142,319 @@ def comparisons() -> dict[str, Any]:
     return _comparisons(int(time.time() // DATA_VERSION_SECONDS))
 
 
+### Chart colors: the validated eight-hue dark palette (bars are adjacent marks, and every bar is
+### labeled on its axis, so identity never rests on color alone). Each group keeps one color on
+### every chart: Greenville and single-family are blue, commercial orange, and so on; the map's
+### three hues (blue, orange, aqua) mean the same things here.
+C_BLUE, C_ORANGE, C_AQUA, C_YELLOW = '#3987e5', '#d95926', '#199e70', '#c98500'
+C_MAGENTA, C_GREEN, C_VIOLET, C_RED, C_NEUTRAL = '#d55181', '#008300', '#9085e9', '#e66767', '#6b6a64'
+GROUP_COLORS: dict[str, dict[str, str]] = {
+    'use_class': {
+        'Single-family': C_BLUE, 'Commercial': C_ORANGE, 'Apartments': C_AQUA, 'Industrial': C_YELLOW,
+        'Mobile home': C_MAGENTA, 'Small multi-family': C_GREEN, 'Vacant residential': C_VIOLET,
+        'Agricultural': C_RED, 'Other': C_NEUTRAL,
+    },
+    'zone_family': {
+        'Residential': C_BLUE, 'Commercial & office': C_ORANGE, 'Mixed-use': C_AQUA,
+        'Industrial & services': C_YELLOW, 'Civic, parks & special': C_MAGENTA, 'Agricultural': C_GREEN,
+        'Planned development': C_VIOLET, 'Unzoned': C_NEUTRAL, 'Unclassified': C_NEUTRAL,
+    },
+    'proptype': {
+        'RESIDENTIAL': C_BLUE, 'COMMERCIAL': C_ORANGE, 'MULTI-FAMILY': C_AQUA, 'INDUSTRIAL': C_YELLOW,
+        'MOBILE HOME': C_MAGENTA, 'AGRICULTURAL': C_GREEN, 'OTHER': C_NEUTRAL,
+    },
+    'municipality': {
+        'GREENVILLE': C_BLUE, 'GREER': C_ORANGE, 'MAULDIN': C_AQUA, 'SIMPSONVILLE': C_YELLOW,
+        'FOUNTAIN INN': C_MAGENTA, 'TRAVELERS REST': C_VIOLET, UNINCORPORATED: C_NEUTRAL,
+    },
+}
+### Benchmarks on the comparison chart, by their label's start.
+BENCH_COLORS: list[tuple[str, str]] = [
+    ('Densest', C_ORANGE), ('Downtown', C_AQUA), ('Haywood', C_VIOLET), ('Walmart', C_YELLOW),
+    ('Typical', C_BLUE), ('County', C_NEUTRAL),
+]
+
+
+@functools.lru_cache(maxsize=2)
+def _zone_family_lookup(bucket: int) -> dict[str, str]:
+    """{'JURISDICTION · ZONE': family} for coloring zone bars by their family."""
+    sqlalchemy = mrsm.attempt_import('sqlalchemy', lazy=False)
+    tables = get_tables()
+    with tables['conn'].engine.connect() as c:
+        rows = c.execute(sqlalchemy.text(
+            f'SELECT zf_jurisdiction, zf_zone, family FROM "{tables["zone_families"]}"'
+        )).fetchall()
+    return {f"{j} · {z}": fam for j, z, fam in rows}
+
+
+def group_color(by: str, row: dict[str, Any]) -> str:
+    """The chart color of one breakdown group (see GROUP_COLORS)."""
+    key = str(row.get('key'))
+    if by in GROUP_COLORS:
+        return GROUP_COLORS[by].get(key, C_NEUTRAL)
+    if by == 'tax_district':
+        label = str(row.get('detail') or '').upper()
+        return GROUP_COLORS['municipality'].get(label, C_NEUTRAL)
+    if by == 'landuse':
+        first = str(row.get('detail') or '').split(',')[0].strip()
+        return GROUP_COLORS['proptype'].get(first, C_NEUTRAL)
+    families = _zone_family_lookup(int(time.time() // DATA_VERSION_SECONDS))
+    if by == 'zone':
+        return GROUP_COLORS['zone_family'].get(families.get(key, ''), C_NEUTRAL)
+    if by == 'zone_code':
+        fams = {fam for k, fam in families.items() if k.endswith(f" · {key}")}
+        return GROUP_COLORS['zone_family'].get(fams.pop(), C_NEUTRAL) if len(fams) == 1 else C_NEUTRAL
+    return C_NEUTRAL
+
+
+### (name, lots filter, line color, dash): unincorporated is neutral grey everywhere, so it is
+### dashed here to stay distinct from the light countywide line.
+CONCENTRATION_GROUPS: list[tuple[str, str, str, str]] = [
+    ('Countywide', 'TRUE', '#c3c2b7', 'solid'),
+    ('City of Greenville', "municipality = 'GREENVILLE'", C_BLUE, 'solid'),
+    ('Unincorporated', f"municipality = '{UNINCORPORATED}'", '#8f8d86', 'dash'),
+]
+
+
+@functools.lru_cache(maxsize=2)
+def _concentration(bucket: int) -> dict[str, Any]:
+    """
+    Lorenz-style curves: lots sorted from the highest tax per acre down, cumulative share of land
+    (x) against cumulative share of tax (y), each within its own group. ~400 points per curve.
+    """
+    sqlalchemy = mrsm.attempt_import('sqlalchemy', lazy=False)
+    tables = get_tables()
+    out = []
+    with tables['conn'].engine.connect() as c:
+        for name, where, color, dash in CONCENTRATION_GROUPS:
+            rows = c.execute(sqlalchemy.text(f"""
+                WITH l AS (
+                    SELECT acres, tax,
+                           SUM(acres) OVER (ORDER BY tax_per_acre DESC NULLS LAST, lot_id) AS ca,
+                           SUM(tax) OVER (ORDER BY tax_per_acre DESC NULLS LAST, lot_id) AS ct,
+                           ROW_NUMBER() OVER (ORDER BY tax_per_acre DESC NULLS LAST, lot_id) AS rn,
+                           COUNT(*) OVER () AS n
+                    FROM "{tables['lots']}" WHERE acres > 0 AND {where}
+                ), t AS (SELECT SUM(acres) AS a, SUM(tax) AS x FROM "{tables['lots']}" WHERE acres > 0 AND {where})
+                SELECT 100 * ca / t.a AS land, 100 * ct / NULLIF(t.x, 0) AS tax
+                FROM l, t WHERE MOD(rn, GREATEST(n / 400, 1)) = 0 OR rn = n OR rn <= 50
+                ORDER BY rn
+            """)).fetchall()
+            pts = [(0.0, 0.0)] + [(float(r[0]), float(r[1] or 0)) for r in rows]
+            at = lambda pct: next((t for l, t in pts if l >= pct), 100.0)
+            out.append({'name': name, 'color': color, 'dash': dash, 'points': pts, 'top1': at(1.0), 'top10': at(10.0)})
+    return {'curves': out}
+
+
+def concentration() -> dict[str, Any]:
+    return _concentration(int(time.time() // DATA_VERSION_SECONDS))
+
+
+YEAR_GROUPS: dict[str, dict[str, str]] = {
+    'municipality': {
+        'title': 'Municipality (by tax district)',
+        'key': "COALESCE(NULLIF(upper(trim(m.city_name)), ''), CASE WHEN m.dist IS NULL THEN '(unlabeled district)' ELSE 'UNINCORPORATED' END)",
+    },
+    ### Classified by each parcel's current code in every year, so the county's recoding between
+    ### years (e.g. apartments 120 -> 1182) doesn't show up as change.
+    'use_class': {
+        'title': 'Use class',
+        'key': USE_CLASS_SQL.replace('landuse', 'COALESCE(p.landuse, t.landuse)')
+                            .replace('proptype', 'COALESCE(p.proptype, t.proptype)'),
+    },
+}
+
+
+@functools.lru_cache(maxsize=4)
+def _year_change(by: str, bucket: int) -> dict[str, Any]:
+    """Tax by group in each tax year of `parcel_taxes`, and the change between the last two."""
+    sqlalchemy = mrsm.attempt_import('sqlalchemy', lazy=False)
+    tables = get_tables()
+    key = YEAR_GROUPS[by]['key']
+    with tables['conn'].engine.connect() as c:
+        rows = c.execute(sqlalchemy.text(f"""
+            SELECT t.tax_year AS year, {key} AS g, SUM(t.tax) AS tax, COUNT(*) AS parcels
+            FROM "{tables['parcel_taxes']}" t
+            LEFT JOIN "{tables['millage']}" m ON m.year = t.tax_year AND m.dist = t.tax_district
+            LEFT JOIN "{tables['parcels']}" p ON p.pin = t.pin
+            GROUP BY 1, 2
+        """)).mappings().fetchall()
+    years = sorted({int(r['year']) for r in rows})
+    if len(years) < 2:
+        return {'years': years, 'rows': []}
+    y0, y1 = years[-2], years[-1]
+    by_group: dict[str, dict[int, dict[str, float]]] = {}
+    for r in rows:
+        by_group.setdefault(str(r['g']), {})[int(r['year'])] = {'tax': float(r['tax'] or 0), 'parcels': int(r['parcels'])}
+    out = []
+    for g, ys in by_group.items():
+        a, b = ys.get(y0, {}).get('tax', 0.0), ys.get(y1, {}).get('tax', 0.0)
+        out.append({
+            'key': g, 'before': a, 'after': b, 'change': b - a, 'pct': (100 * (b - a) / a) if a else None,
+            'parcels_before': ys.get(y0, {}).get('parcels', 0), 'parcels_after': ys.get(y1, {}).get('parcels', 0),
+        })
+    out.sort(key=lambda r: -r['after'])
+    total_a, total_b = sum(r['before'] for r in out), sum(r['after'] for r in out)
+    return {
+        'years': years, 'y0': y0, 'y1': y1, 'rows': out,
+        'total': {'before': total_a, 'after': total_b, 'pct': 100 * (total_b - total_a) / total_a if total_a else None},
+    }
+
+
+def year_change(by: str) -> dict[str, Any]:
+    if by not in YEAR_GROUPS:
+        raise ValueError(f"Unknown grouping '{by}'.")
+    return _year_change(by, int(time.time() // DATA_VERSION_SECONDS))
+
+
+def _layout(fig: Any, height: int, margin: Optional[dict[str, int]] = None, **kwargs: Any) -> Any:
+    """Shared dark chart styling: transparent surface, recessive grid, readable ink."""
+    fig.update_layout(
+        height=height,
+        margin=margin or {'l': 10, 'r': 90, 't': 10, 'b': 30},
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+        font={'color': INK_SECONDARY, 'size': 12},
+        hoverlabel={'bgcolor': SURFACE, 'bordercolor': HAIRLINE, 'font': {'color': INK_PRIMARY}},
+        **kwargs,
+    )
+    return fig
+
+
+EMPTY_FIGURE: dict[str, Any] = {'data': [], 'layout': {'paper_bgcolor': 'rgba(0,0,0,0)', 'plot_bgcolor': 'rgba(0,0,0,0)'}}
+DOLLARS_PER_ACRE_AXIS: dict[str, Any] = {
+    'gridcolor': HAIRLINE, 'zeroline': True, 'zerolinecolor': '#383835', 'tickprefix': '$',
+    'tickformat': '~s', 'title': {'text': 'Property tax per acre', 'font': {'size': 12}},
+}
+
+
+def _bench_color(label: str) -> str:
+    return next((color for prefix, color in BENCH_COLORS if label.startswith(prefix)), C_NEUTRAL)
+
+
 def _bench_figure(bench: list[tuple[str, float]]) -> Any:
     go = mrsm.attempt_import('plotly.graph_objects', lazy=False)
     labels = [label for label, _ in bench][::-1]
     values = [value for _, value in bench][::-1]
     fig = go.Figure(go.Bar(
         x=values, y=labels, orientation='h',
-        marker={'color': SERIES_TAX, 'cornerradius': 4},
+        marker={'color': [_bench_color(label) for label in labels], 'cornerradius': 4,
+                'line': {'color': SURFACE, 'width': 2}},
         text=[f"${v:,.0f}" for v in values], textposition='outside', cliponaxis=False,
         textfont={'color': INK_PRIMARY, 'size': 12},
         hovertemplate='%{y}<br><b>$%{x:,.0f}</b> per acre<extra></extra>',
     ))
-    fig.update_layout(
-        height=60 + 48 * len(bench),
-        margin={'l': 10, 'r': 90, 't': 10, 'b': 30},
-        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-        font={'color': INK_SECONDARY, 'size': 12},
-        xaxis={'gridcolor': HAIRLINE, 'zeroline': True, 'zerolinecolor': '#383835', 'tickprefix': '$',
-               'tickformat': '~s', 'title': {'text': 'Property tax per acre', 'font': {'size': 12}}},
-        yaxis={'automargin': True, 'tickfont': {'color': INK_PRIMARY}},
-        bargap=0.35,
-        hoverlabel={'bgcolor': SURFACE, 'bordercolor': HAIRLINE, 'font': {'color': INK_PRIMARY}},
-    )
-    return fig
+    return _layout(fig, 60 + 48 * len(bench), xaxis=DOLLARS_PER_ACRE_AXIS,
+                   yaxis={'automargin': True, 'tickfont': {'color': INK_PRIMARY}}, bargap=0.35)
 
 
-def _shares_figure(shares: list[dict[str, Any]]) -> Any:
+SHARE_GROUPINGS: list[tuple[str, str]] = [
+    ('use_class', 'Use class'), ('municipality', 'Municipality'), ('zone_family', 'Zoning family'),
+    ('proptype', 'Property type'),
+]
+SHARES_TOP_N: int = 7
+
+
+def _shares_figure(data: dict[str, Any]) -> Any:
+    """Two 100% bars, land and tax revenue, split by group: who has the land vs. who pays."""
     go = mrsm.attempt_import('plotly.graph_objects', lazy=False)
-    types = [row['type'] for row in shares][::-1]
+    by = data['by']
+    rows = sorted(data['rows'], key=lambda r: -(r['tax'] or 0))
+    top, rest = rows[:SHARES_TOP_N], rows[SHARES_TOP_N:]
+    groups = [(_breakdown_label(by, r), group_color(by, r), r['acre_share'] or 0, r['tax_share'] or 0) for r in top]
+    if rest:
+        groups.append((f"{len(rest)} more", C_NEUTRAL, sum(r['acre_share'] or 0 for r in rest),
+                       sum(r['tax_share'] or 0 for r in rest)))
     fig = go.Figure()
-    for key, name, color in (('land', 'Share of land', SERIES_LAND), ('tax', 'Share of tax revenue', SERIES_TAX)):
-        values = [row[key] for row in shares][::-1]
+    for name, color, land, tax in groups:
+        values = [100 * land, 100 * tax]
         fig.add_trace(go.Bar(
-            x=values, y=types, orientation='h', name=name,
-            marker={'color': color, 'cornerradius': 3, 'line': {'color': SURFACE, 'width': 2}},
-            text=[f"{v:.0f}%" if v >= 1 else f"{v:.1f}%" for v in values], textposition='outside',
-            cliponaxis=False, textfont={'color': INK_SECONDARY, 'size': 11},
-            hovertemplate='%{y}: %{x:.1f}% ' + name.lower() + '<extra></extra>',
+            name=name, y=['Land', 'Tax revenue'], x=values, orientation='h',
+            marker={'color': color, 'line': {'color': SURFACE, 'width': 2}},
+            text=[f"{v:.0f}%" if v >= 6 else '' for v in values], textposition='inside',
+            insidetextanchor='middle', textfont={'color': '#ffffff', 'size': 12},
+            hovertemplate=f'{name}<br>%{{y}}: <b>%{{x:.1f}}%%</b><extra></extra>'.replace('%%', '%'),
         ))
-    fig.update_layout(
-        barmode='group', bargap=0.3, bargroupgap=0.08,
-        height=80 + 46 * len(shares),
-        margin={'l': 10, 'r': 50, 't': 30, 'b': 30},
-        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-        font={'color': INK_SECONDARY, 'size': 12},
-        xaxis={'gridcolor': HAIRLINE, 'zeroline': False, 'ticksuffix': '%'},
-        yaxis={'automargin': True, 'tickfont': {'color': INK_PRIMARY}},
-        legend={'orientation': 'h', 'y': 1.08, 'x': 0, 'font': {'color': INK_SECONDARY}},
-        hoverlabel={'bgcolor': SURFACE, 'bordercolor': HAIRLINE, 'font': {'color': INK_PRIMARY}},
+    return _layout(
+        fig, 250, {'l': 10, 'r': 10, 't': 10, 'b': 10}, barmode='stack', bargap=0.25,
+        xaxis={'range': [0, 100], 'showgrid': False, 'zeroline': False, 'ticksuffix': '%', 'visible': False},
+        yaxis={'automargin': True, 'tickfont': {'color': INK_PRIMARY, 'size': 13}, 'autorange': 'reversed'},
+        legend={'orientation': 'h', 'y': -0.08, 'x': 0, 'yanchor': 'top', 'font': {'color': INK_SECONDARY},
+                'traceorder': 'normal'},
     )
-    return fig
+
+
+def _concentration_figure(data: dict[str, Any]) -> Any:
+    """Cumulative share of tax against cumulative share of land, most productive land first."""
+    go = mrsm.attempt_import('plotly.graph_objects', lazy=False)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=[0, 100], y=[0, 100], mode='lines', name='Even (every acre pays the same)',
+        line={'color': '#4a4a46', 'width': 1.5, 'dash': 'dot'}, hoverinfo='skip',
+    ))
+    for curve in data['curves']:
+        xs = [x for x, _ in curve['points']]
+        ys = [y for _, y in curve['points']]
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, mode='lines', name=curve['name'],
+            line={'color': curve['color'], 'width': 2.5, 'dash': curve.get('dash', 'solid')},
+            hovertemplate=(
+                f"{curve['name']}<br>Top %{{x:.1f}}% of land pays <b>%{{y:.1f}}%</b> of the tax<extra></extra>"
+            ),
+        ))
+    county = data['curves'][0]
+    fig.add_annotation(
+        x=1, y=county['top1'], xref='x', yref='y', ax=60, ay=10, showarrow=True, arrowcolor=INK_MUTED,
+        arrowwidth=1, text=f"1% of land: {county['top1']:.0f}% of tax", font={'color': INK_PRIMARY, 'size': 12},
+        bgcolor=SURFACE,
+    )
+    return _layout(
+        fig, 360, {'l': 10, 'r': 20, 't': 10, 'b': 40},
+        xaxis={'range': [0, 100], 'gridcolor': HAIRLINE, 'zeroline': False, 'ticksuffix': '%',
+               'title': {'text': 'Share of land (highest tax per acre first)', 'font': {'size': 12}}},
+        yaxis={'range': [0, 101], 'gridcolor': HAIRLINE, 'zeroline': False, 'ticksuffix': '%',
+               'title': {'text': 'Share of property tax', 'font': {'size': 12}}},
+        legend={'orientation': 'h', 'y': -0.2, 'x': 0, 'yanchor': 'top', 'font': {'color': INK_SECONDARY}},
+        hovermode='closest',
+    )
+
+
+YEAR_MIN_TAX: float = 1_000_000.0
+
+
+def _year_label(by: str, key: str) -> str:
+    if by == 'municipality':
+        return 'Unincorporated' if key == UNINCORPORATED else key.title() if not key.startswith('(') else key
+    return key
+
+
+def _year_figure(data: dict[str, Any], by: str) -> Any:
+    """Percent change in tax by group between the last two tax years, colored by group."""
+    go = mrsm.attempt_import('plotly.graph_objects', lazy=False)
+    ### Groups under $1M swing by large percents on small dollars, so they're left out.
+    rows = [r for r in data['rows'] if r['pct'] is not None and r['before'] >= YEAR_MIN_TAX][::-1]
+    lo = min([0.0] + [r['pct'] for r in rows]); hi = max([0.0] + [r['pct'] for r in rows])
+    span = max(hi - lo, 1.0)
+    x_range = [lo - (0.45 * span if lo < 0 else 0.02 * span), hi + 0.45 * span]
+    color_by = 'municipality' if by == 'municipality' else 'use_class'
+    fig = go.Figure(go.Bar(
+        x=[r['pct'] for r in rows], y=[_year_label(by, r['key']) for r in rows], orientation='h',
+        marker={'color': [GROUP_COLORS[color_by].get(r['key'], C_NEUTRAL) for r in rows], 'cornerradius': 4,
+                'line': {'color': SURFACE, 'width': 2}},
+        text=[f"{r['pct']:+.1f}% ({'+' if r['change'] >= 0 else '−'}${abs(r['change']) / 1e6:,.1f}M)" for r in rows],
+        textposition='outside', cliponaxis=False, textfont={'color': INK_PRIMARY, 'size': 12},
+        customdata=[[r['before'], r['after']] for r in rows],
+        hovertemplate=(
+            f"%{{y}}<br>{data['y0']}: $%{{customdata[0]:,.0f}}<br>{data['y1']}: $%{{customdata[1]:,.0f}}"
+            "<br><b>%{x:+.1f}%</b><extra></extra>"
+        ),
+    ))
+    return _layout(
+        fig, 60 + 34 * max(len(rows), 1), {'l': 10, 'r': 20, 't': 10, 'b': 30},
+        xaxis={'gridcolor': HAIRLINE, 'zeroline': True, 'zerolinecolor': '#5a5a55', 'ticksuffix': '%',
+               'range': x_range,
+               'title': {'text': f"Change in property tax, {data['y0']} to {data['y1']}", 'font': {'size': 12}}},
+        yaxis={'automargin': True, 'tickfont': {'color': INK_PRIMARY}}, bargap=0.3,
+    )
 
 
 BREAKDOWN_TOP_N: int = 15
@@ -2156,13 +2480,14 @@ def _breakdown_label(by: str, row: dict[str, Any]) -> str:
 
 
 def _breakdown_figure(data: dict[str, Any]) -> Any:
-    """Tax per acre of the top groups by revenue (one series, so one hue and no legend)."""
+    """Tax per acre of the top groups by revenue, each bar in its group's color."""
     go = mrsm.attempt_import('plotly.graph_objects', lazy=False)
     rows = [r for r in data['rows'] if r['tax_per_acre'] is not None][:BREAKDOWN_TOP_N][::-1]
     labels = [_breakdown_label(data['by'], r) for r in rows]
     fig = go.Figure(go.Bar(
         x=[r['tax_per_acre'] for r in rows], y=labels, orientation='h',
-        marker={'color': SERIES_TAX, 'cornerradius': 4},
+        marker={'color': [group_color(data['by'], r) for r in rows], 'cornerradius': 4,
+                'line': {'color': SURFACE, 'width': 2}},
         text=[f"${r['tax_per_acre']:,.0f}" for r in rows], textposition='outside', cliponaxis=False,
         textfont={'color': INK_PRIMARY, 'size': 12},
         customdata=[[r['tax'], r['acres'], 100 * (r['tax_share'] or 0)] for r in rows],
@@ -2171,18 +2496,8 @@ def _breakdown_figure(data: dict[str, Any]) -> Any:
             '<br>%{customdata[1]:,.0f} acres<extra></extra>'
         ),
     ))
-    fig.update_layout(
-        height=60 + 30 * max(len(rows), 1),
-        margin={'l': 10, 'r': 90, 't': 10, 'b': 30},
-        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-        font={'color': INK_SECONDARY, 'size': 12},
-        xaxis={'gridcolor': HAIRLINE, 'zeroline': True, 'zerolinecolor': '#383835', 'tickprefix': '$',
-               'tickformat': '~s', 'title': {'text': 'Property tax per acre', 'font': {'size': 12}}},
-        yaxis={'automargin': True, 'tickfont': {'color': INK_PRIMARY}},
-        bargap=0.3,
-        hoverlabel={'bgcolor': SURFACE, 'bordercolor': HAIRLINE, 'font': {'color': INK_PRIMARY}},
-    )
-    return fig
+    return _layout(fig, 60 + 30 * max(len(rows), 1), xaxis=DOLLARS_PER_ACRE_AXIS,
+                   yaxis={'automargin': True, 'tickfont': {'color': INK_PRIMARY}}, bargap=0.3)
 
 
 def _breakdown_records(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -2210,107 +2525,93 @@ def _breakdown_records(data: dict[str, Any]) -> list[dict[str, Any]]:
 
 @web_page(PAGE_PATH, login_required=False, page_group='Taxes')
 def tax_per_acre_page():
-    """Urban3-style property tax per acre: 3D map plus comparisons."""
+    """Property tax per acre: 3D map plus comparisons."""
     dcc = mrsm.attempt_import('dash.dcc', lazy=False)
     html = mrsm.attempt_import('dash.html', lazy=False)
     dbc = mrsm.attempt_import('dash_bootstrap_components', lazy=False)
     card_style = {'backgroundColor': SURFACE, 'border': f'1px solid {HAIRLINE}'}
+    sub_style = {'color': INK_SECONDARY, 'fontSize': '0.85rem'}
+    note_style = {'color': INK_MUTED, 'fontSize': '0.8rem'}
+    graph = lambda gid, color=SERIES_TAX: dcc.Loading(
+        dcc.Graph(id=gid, config={'displayModeBar': False}), type='dot', color=color,
+    )
+    radios = lambda rid, options, value: dbc.RadioItems(
+        id=rid, inline=True, value=value, options=[{'label': t, 'value': k} for k, t in options],
+        style={'fontSize': '0.85rem'}, className='mb-1',
+    )
+    card = lambda body, **kw: dbc.Card(dbc.CardBody(body), style=card_style, **kw)
     return html.Div(
         [
             dcc.Location(id='taxmap-location', refresh=False),
             html.H3('Greenville County property tax per acre', className='mb-1'),
             html.Div(
-                [
-                    f"Every lot's {TAX_YEAR} property tax bill divided by its land area, in the style of ",
-                    html.A('Urban3', href='https://www.urbanthree.com/', target='_blank'),
-                    "'s value-per-acre maps. Taller and brighter means more tax per acre. Use the toggle on "
-                    "the map to switch between stacked lots and parcels as the county draws them. Source: "
-                    f"Greenville County GIS parcels ({TAX_YEAR} tax bills, checked against the County Auditor's millage).",
-                ],
-                style={'color': INK_SECONDARY, 'fontSize': '0.9rem', 'maxWidth': '980px'},
-                className='mb-3',
+                f"Every lot's {TAX_YEAR} property tax divided by its land area. "
+                "Source: Greenville County GIS.",
+                style={'color': INK_SECONDARY, 'fontSize': '0.9rem'}, className='mb-2',
             ),
             html.Iframe(
-                id='taxmap-frame',
-                src='/taxmap/map',
-                title='3D map of property tax per acre',
+                id='taxmap-frame', src='/taxmap/map', title='3D map of property tax per acre',
                 style={
                     'width': '100%', 'height': '76vh', 'minHeight': '480px', 'border': f'1px solid {HAIRLINE}',
                     'borderRadius': '8px', 'backgroundColor': '#0d0d0d',
                 },
                 allow='fullscreen',
             ),
-            html.Div(
+            dbc.Row(
                 [
-                    html.A('Open the map full screen', href='/taxmap/map', target='_blank'),
-                    html.Span('  ·  drag with right-click or two fingers to tilt and rotate',
-                              style={'color': INK_MUTED}),
+                    dbc.Col(card([
+                        html.H5('Tax per acre, compared', className='mb-1'),
+                        html.Div(
+                            [
+                                html.Span('Compare'),
+                                dcc.Dropdown(
+                                    id='taxmap-bench-lot', clearable=False, searchable=False,
+                                    style={'minWidth': '220px', 'flex': '1 1 220px', 'color': '#111'},
+                                ),
+                                html.Span('with a Walmart acre and a typical house in'),
+                                dcc.Dropdown(
+                                    id='taxmap-bench-zone', clearable=False, value='', placeholder='Countywide',
+                                    style={'minWidth': '220px', 'flex': '1 1 220px', 'color': '#111'},
+                                ),
+                            ],
+                            style={'display': 'flex', 'flexWrap': 'wrap', 'alignItems': 'center', 'gap': '6px',
+                                   'fontSize': '0.85rem', 'color': INK_SECONDARY},
+                            className='mb-1',
+                        ),
+                        html.Div(id='taxmap-bench-sub', style=sub_style, **{'aria-live': 'polite'}),
+                        html.Div('Typical house: the median single-family lot of 0.1–2 acres.', style=note_style),
+                        graph('taxmap-bench'),
+                    ]), lg=7, className='mb-3'),
+                    dbc.Col(card([
+                        html.H5('Who has the land, who pays the tax', className='mb-1'),
+                        radios('taxmap-shares-by', SHARE_GROUPINGS, 'use_class'),
+                        html.Div(id='taxmap-shares-sub', style=sub_style),
+                        graph('taxmap-shares', SERIES_LAND),
+                    ]), lg=5, className='mb-3'),
                 ],
-                className='mt-1 mb-4', style={'fontSize': '0.85rem'},
+                className='g-3 mt-2',
             ),
             dbc.Row(
                 [
-                    dbc.Col(
-                        dbc.Card(dbc.CardBody([
-                            html.H5('Tax per acre, compared', className='mb-1'),
-                            html.Div(
-                                [
-                                    html.Span('Compare'),
-                                    dcc.Dropdown(
-                                        id='taxmap-bench-lot', clearable=False, searchable=False,
-                                        style={'minWidth': '220px', 'flex': '1 1 220px', 'color': '#111'},
-                                    ),
-                                    html.Span('with a Walmart acre and a typical house in'),
-                                    dcc.Dropdown(
-                                        id='taxmap-bench-zone', clearable=False, value='',
-                                        placeholder='Countywide',
-                                        style={'minWidth': '220px', 'flex': '1 1 220px', 'color': '#111'},
-                                    ),
-                                ],
-                                style={
-                                    'display': 'flex', 'flexWrap': 'wrap', 'alignItems': 'center', 'gap': '6px',
-                                    'fontSize': '0.85rem', 'color': INK_SECONDARY,
-                                },
-                                className='mb-1',
-                            ),
-                            html.Div(id='taxmap-bench-sub', style={'color': INK_SECONDARY, 'fontSize': '0.85rem'},
-                                     **{'aria-live': 'polite'}),
-                            html.Div(
-                                'A typical house is the median tax per acre of single-family lots (land use 1100) '
-                                'of 0.1–2 acres; zones with at least 25 of them are listed. Click any lot on the map '
-                                'for the same comparison against its own zone. Stacked lots, linear scale.',
-                                style={'color': INK_MUTED, 'fontSize': '0.8rem'},
-                            ),
-                            dcc.Loading(dcc.Graph(id='taxmap-bench', config={'displayModeBar': False}),
-                                        type='dot', color=SERIES_TAX),
-                        ]), style=card_style),
-                        lg=7, className='mb-3',
-                    ),
-                    dbc.Col(
-                        dbc.Card(dbc.CardBody([
-                            html.H5('Land vs. tax revenue', className='mb-1'),
-                            html.Div(id='taxmap-shares-sub', style={'color': INK_MUTED, 'fontSize': '0.85rem'}),
-                            dcc.Loading(dcc.Graph(id='taxmap-shares', config={'displayModeBar': False}),
-                                        type='dot', color=SERIES_LAND),
-                        ]), style=card_style),
-                        lg=5, className='mb-3',
-                    ),
+                    dbc.Col(card([
+                        html.H5('How concentrated the tax base is', className='mb-1'),
+                        html.Div(id='taxmap-concentration-sub', style=sub_style),
+                        graph('taxmap-concentration', SERIES_LAND),
+                    ]), lg=6, className='mb-3'),
+                    dbc.Col(card([
+                        html.H5(id='taxmap-year-title', children='Change from last year', className='mb-1'),
+                        radios('taxmap-year-by', [(k, v['title']) for k, v in YEAR_GROUPS.items()], 'municipality'),
+                        html.Div(id='taxmap-year-sub', style=sub_style),
+                        graph('taxmap-year'),
+                    ]), lg=6, className='mb-3'),
                 ],
                 className='g-3',
             ),
-            dbc.Card(dbc.CardBody([
+            card([
                 html.H5('Tax revenue by land use, zone and jurisdiction', className='mb-1'),
-                html.Div(
-                    "Stacked lots grouped by the county's property type and land-use code, by the zoning "
-                    "district each lot mostly sits in (Greenville County GIS zoning, which carries each "
-                    "town's own districts), by municipal limits, and by tax district (DIST). Every grouping "
-                    "covers all lots, so each adds up to the county total. A property-type filter narrows "
-                    "any grouping.",
-                    style={'color': INK_MUTED, 'fontSize': '0.85rem', 'maxWidth': '980px'}, className='mb-2',
-                ),
                 dbc.Row([
                     dbc.Col(dbc.RadioItems(
-                        id='taxmap-breakdown-by', inline=True, value='proptype',
+                        id='taxmap-breakdown-by', inline=True, value='use_class',
                         options=[{'label': spec['title'], 'value': key} for key, spec in BREAKDOWNS.items()],
                         style={'fontSize': '0.9rem'},
                     ), md=9),
@@ -2323,13 +2624,12 @@ def tax_per_acre_page():
                         style={'fontSize': '0.9rem', 'color': '#111'},
                     ), md=3),
                 ], className='g-2 mb-2'),
-                html.Div(id='taxmap-breakdown-sub', style={'color': INK_SECONDARY, 'fontSize': '0.85rem'}),
+                html.Div(id='taxmap-breakdown-sub', style=sub_style),
                 dbc.Row([
-                    dbc.Col(dcc.Loading(dcc.Graph(id='taxmap-breakdown-chart', config={'displayModeBar': False}),
-                                        type='dot', color=SERIES_TAX), lg=5),
+                    dbc.Col(graph('taxmap-breakdown-chart'), lg=5),
                     dbc.Col(dcc.Loading(html.Div(id='taxmap-breakdown-table'), type='dot', color=SERIES_TAX), lg=7),
                 ], className='g-3'),
-            ]), style=card_style, className='mb-3'),
+            ], className='mb-3'),
         ],
         style={'padding': '16px', 'maxWidth': '1500px', 'margin': '0 auto'},
     )
@@ -2337,7 +2637,7 @@ def tax_per_acre_page():
 
 @dash_plugin(public=True)
 def init_dash(dash_app):
-    """The page's comparison charts (public, to match the public page)."""
+    """The page's charts (public, to match the public page)."""
     from dash import Input, Output
 
     @dash_app.callback(
@@ -2345,8 +2645,8 @@ def init_dash(dash_app):
         Output('taxmap-bench-lot', 'options'),
         Output('taxmap-bench-lot', 'value'),
         Output('taxmap-bench-zone', 'options'),
-        Output('taxmap-shares', 'figure'),
-        Output('taxmap-shares-sub', 'children'),
+        Output('taxmap-concentration', 'figure'),
+        Output('taxmap-concentration-sub', 'children'),
         Input('taxmap-location', 'pathname'),
     )
     def render_comparisons(_pathname):
@@ -2355,8 +2655,7 @@ def init_dash(dash_app):
             bench = benchmarks()
         except Exception as e:
             warn(f"taxmap: comparisons failed: {e}", stack=False)
-            empty = {'data': [], 'layout': {'paper_bgcolor': 'rgba(0,0,0,0)', 'plot_bgcolor': 'rgba(0,0,0,0)'}}
-            return empty, [], None, [], empty, 'Data unavailable.'
+            return EMPTY_FIGURE, [], None, [], EMPTY_FIGURE, 'Data unavailable.'
         ### Anything on the chart except the two yardsticks themselves can be compared.
         lots = [
             {'label': label, 'value': label} for label, _ in data['bench']
@@ -2370,13 +2669,19 @@ def init_dash(dash_app):
             }
             for key, z in sorted(bench['house_by_zone'].items(), key=lambda kv: -kv[1]['n'])
         ]
-        sub = (
-            f"Share of the county's {data['total_acres']:,.0f} parcel acres and "
-            f"${data['total_tax'] / 1e6:,.0f}M in property tax, by property type."
-        )
+        try:
+            conc = concentration()
+            county = conc['curves'][0]
+            conc_sub = (
+                f"The most productive 1% of the county's land pays {county['top1']:.0f}% of its property tax, "
+                f"and 10% pays {county['top10']:.0f}%."
+            )
+            conc_fig = _concentration_figure(conc)
+        except Exception as e:
+            warn(f"taxmap: concentration failed: {e}", stack=False)
+            conc_fig, conc_sub = EMPTY_FIGURE, 'Data unavailable.'
         return (
-            _bench_figure(data['bench']), lots, (lots[0]['value'] if lots else None), zones,
-            _shares_figure(data['shares']), sub,
+            _bench_figure(data['bench']), lots, (lots[0]['value'] if lots else None), zones, conc_fig, conc_sub,
         )
 
     @dash_app.callback(
@@ -2400,20 +2705,55 @@ def init_dash(dash_app):
         else:
             house = typical_house()
         where = (
-            f"in {house['zone']} ({house['jurisdiction'].title()} zoning, "
-            f"${house['tpa']:,.0f}/acre, median of {house['n']:,})"
+            f"in {house['zone']} ({house['jurisdiction'].title()} zoning, ${house['tpa']:,.0f}/acre)"
             if house['scope'] == 'zone'
-            else f"countywide (${house['tpa']:,.0f}/acre, median of {house['n']:,})"
+            else f"countywide (${house['tpa']:,.0f}/acre)"
         )
         parts = [f"{lot} pays ${tpa:,.0f} per acre: "]
         if walmart['tpa']:
-            parts.append(
-                f"{tpa / walmart['tpa']:,.1f}× a Walmart acre "
-                f"(${walmart['tpa']:,.0f}/acre, {walmart['stores']} lots over 10 acres combined)"
-            )
+            parts.append(f"{tpa / walmart['tpa']:,.1f}× a Walmart acre (${walmart['tpa']:,.0f})")
         if house['tpa']:
             parts.append(f" and {tpa / house['tpa']:,.1f}× a typical house {where}.")
         return ''.join(parts)
+
+    @dash_app.callback(
+        Output('taxmap-shares', 'figure'),
+        Output('taxmap-shares-sub', 'children'),
+        Input('taxmap-shares-by', 'value'),
+    )
+    def render_shares(by):
+        by = by if by in dict(SHARE_GROUPINGS) else 'use_class'
+        try:
+            data = breakdown(by)
+        except Exception as e:
+            warn(f"taxmap: shares failed: {e}", stack=False)
+            return EMPTY_FIGURE, 'Data unavailable.'
+        t = data['total']
+        return _shares_figure(data), f"{t['acres']:,.0f} acres and ${t['tax'] / 1e6:,.0f}M in property tax."
+
+    @dash_app.callback(
+        Output('taxmap-year', 'figure'),
+        Output('taxmap-year-sub', 'children'),
+        Output('taxmap-year-title', 'children'),
+        Input('taxmap-year-by', 'value'),
+    )
+    def render_year(by):
+        by = by if by in YEAR_GROUPS else 'municipality'
+        try:
+            data = year_change(by)
+        except Exception as e:
+            warn(f"taxmap: year change failed: {e}", stack=False)
+            return EMPTY_FIGURE, 'Data unavailable.', 'Change from last year'
+        if not data['rows']:
+            return EMPTY_FIGURE, 'Only one tax year so far.', 'Change from last year'
+        t = data['total']
+        sub = (
+            f"Countywide: ${t['before'] / 1e6:,.1f}M → ${t['after'] / 1e6:,.1f}M ({t['pct']:+.1f}%), "
+            "including new parcels."
+        )
+        if by == 'use_class':
+            sub += ' Both years use each parcel’s current land-use code.'
+        return _year_figure(data, by), sub, f"Change from {data['y0']} to {data['y1']}"
 
     @dash_app.callback(
         Output('taxmap-breakdown-chart', 'figure'),
@@ -2424,42 +2764,19 @@ def init_dash(dash_app):
     )
     def render_breakdown(by, proptype):
         dash_table = mrsm.attempt_import('dash.dash_table', lazy=False)
-        empty = {'data': [], 'layout': {'paper_bgcolor': 'rgba(0,0,0,0)', 'plot_bgcolor': 'rgba(0,0,0,0)'}}
-        by = by if by in BREAKDOWNS else 'proptype'
+        by = by if by in BREAKDOWNS else 'use_class'
         try:
             data = breakdown(by, {'proptype': proptype} if proptype else None)
         except Exception as e:
             warn(f"taxmap: breakdown failed: {e}", stack=False)
-            return empty, None, 'Data unavailable.'
+            return EMPTY_FIGURE, None, 'Data unavailable.'
         county = data['county']
         scope = f"{proptype.title()} lots" if proptype else 'All lots'
         sub = (
-            f"{scope}: ${data['total']['tax'] / 1e6:,.1f}M of ${county['tax'] / 1e6:,.1f}M in county property tax "
-            f"on {data['total']['acres']:,.0f} acres, {len(data['rows']):,} groups. "
-            f"Chart: tax per acre of the {min(BREAKDOWN_TOP_N, len(data['rows']))} groups with the most revenue."
+            f"{scope}: ${data['total']['tax'] / 1e6:,.1f}M of ${county['tax'] / 1e6:,.1f}M "
+            f"on {data['total']['acres']:,.0f} acres. Chart: the {min(BREAKDOWN_TOP_N, len(data['rows']))} "
+            "groups with the most revenue."
         )
-        if by in ('zone', 'zone_code'):
-            sub += (
-                f" A zoning polygon covers {100 * county['zoned_lots'] / county['lots']:.1f}% of lots "
-                f"({100 * (county['zoned_tax'] or 0) / county['tax']:.1f}% of revenue); "
-                "'UNZONED' is the county's own designation for unincorporated land without zoning. "
-                "Districts are grouped by the government whose zoning code it is, since codes like R-12 "
-                "mean different things in different towns."
-            )
-        if by == 'tax_district':
-            sources = {v.get('label_source') for v in district_labels().values()} - {None}
-            if sources == {'millage'}:
-                sub += (
-                    f" Districts are named by the city millage they carry in the County Auditor's {MILLAGE_YEAR} "
-                    "millage sheet ('Unincorporated' where there is none); codes not in the sheet are unlabeled."
-                )
-            else:
-                sub += (
-                    " Districts are labeled with a place only where at least "
-                    f"{DISTRICT_LABEL_SHARE:.0%} of their lots lie inside that municipality's limits (or outside all)."
-                )
-        if by == 'landuse':
-            sub += ' Land-use codes have no published descriptions; the property type is shown beside each.'
         money_fmt = {'specifier': '$,.0f'}
         table = dash_table.DataTable(
             data=_breakdown_records(data),
