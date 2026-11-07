@@ -1,0 +1,638 @@
+year,dist,county,school_name,school,fire_name,fire,other_name,other,sewer_name,sewer,city_name,city,sanitation_name,sanitation,arena,total
+2021,005,63.3,Greenville,194.2,Dunklin,31.9,,,,,,,,,,289.4
+2021,025,63.3,Anderson,251.5,Dunklin,31.9,,,,,,,,,,346.7
+2021,026,63.3,Anderson,251.5,,,,,South Greenville,40.9,,,,,,355.7
+2021,046,63.3,Greenville,194.2,,,,,South Greenville,40.9,,,,,,298.4
+2021,047,63.3,Greenville,194.2,,,,,South Greenville,40.9,,,,,,298.4
+2021,048,63.3,Greenville,194.2,,,Canterbury,0.1,South Greenville,40.9,,,,,,298.5
+2021,052,63.3,Greenville,194.2,Canebrake,35.0,,,,,,,,,,292.5
+2021,065,63.3,Greenville,194.2,,,,,,,,,,,0.4,257.9
+2021,066,63.3,Greenville,194.2,Greenville,31.9,,,,,,,,,0.4,289.8
+2021,090,63.3,Greenville,194.2,Piedmont,66.2,Piedmont Light,5.8,,,,,,,0.4,329.9
+2021,091,63.3,Greenville,194.2,Piedmont,66.2,,,,,,,,,0.4,324.1
+2021,092,63.3,Greenville,194.2,Piedmont,66.2,,,,,,,GGSD,14.9,0.4,339.0
+2021,100,63.3,Greenville,194.2,,,,,South Greenville,40.9,,,,,0.4,298.8
+2021,101,63.3,Greenville,194.2,,,,,South Greenville,40.9,,,GGSD,14.9,0.4,313.7
+2021,105,63.3,Greenville,194.2,Piedmont,66.2,,,,,,,,,,323.7
+2021,137,63.3,Greenville,194.2,,,,,Pelham-Batesville,26.0,,,,,,283.5
+2021,145,63.3,Greenville,194.2,Donaldson,72.2,,,,,,,,,0.4,330.1
+2021,150,63.3,Greenville,194.2,,,,,,,,,,,0.4,257.9
+2021,151,63.3,Greenville,194.2,Gantt,68.7,,,,,,,,,0.4,326.6
+2021,153,63.3,Greenville,194.2,Gantt,68.7,Chanticleer,17.7,,,,,GGSD,14.9,0.4,359.2
+2021,155,63.3,Greenville,194.2,Belmont,71.2,,,,,,,GGSD,14.9,0.4,344.0
+2021,156,63.3,Greenville,194.2,Gantt,68.7,,,,,,,GGSD,14.9,0.4,341.5
+2021,158,63.3,Greenville,194.2,Belmont,71.2,,,,,,,,,0.4,329.1
+2021,163,63.3,Greenville,194.2,,,,,,,,,,,0.4,257.9
+2021,166,63.3,Greenville,194.2,Parker,92.6,,,,,,,,,0.4,350.5
+2021,186,63.3,Greenville,194.2,,,,,Wade Hampton,50.2,,,GGSD,14.9,0.4,323.0
+2021,187,63.3,Greenville,194.2,,,,,Wade Hampton,50.2,,,GGSD,14.9,0.4,323.0
+2021,190,63.3,Greenville,194.2,,,,,,,Greer,99.0,,,0.4,356.9
+2021,193,63.3,Greenville,194.2,,,Brookfield,9.1,Boiling Springs,30.0,,,,,0.4,297.0
+2021,194,63.3,Greenville,194.2,,,Devenger,6.6,Boiling Springs,30.0,,,,,0.4,294.5
+2021,195,63.3,Greenville,194.2,,,,,Boiling Springs,30.0,,,,,0.4,287.9
+2021,196,63.3,Greenville,194.2,,,,,Boiling Springs,30.0,,,GGSD,14.9,0.4,302.8
+2021,197,63.3,Greenville,194.2,,,Devenger Point,3.9,Boiling Springs,30.0,,,,,0.4,291.8
+2021,198,63.3,Greenville,194.2,,,,,,,Greer,99.0,,,0.4,356.9
+2021,200,63.3,Greenville,194.2,,,,,Wade Hampton,50.2,,,,,0.4,308.1
+2021,201,63.3,Greenville,194.2,,,,,Wade Hampton,50.2,,,,,0.4,308.1
+2021,203,63.3,Greenville,194.2,,,,,Wade Hampton,50.2,,,,,0.4,308.1
+2021,204,63.3,Greenville,194.2,,,Brookfield,9.1,Wade Hampton,50.2,,,,,0.4,317.2
+2021,206,63.3,Greenville,194.2,,,,,Wade Hampton,50.2,,,GGSD,14.9,0.4,323.0
+2021,207,63.3,Greenville,194.2,,,,,Pelham-Batesville,26.0,,,,,0.4,283.9
+2021,208,63.3,Greenville,194.2,,,Devenger,6.6,Wade Hampton,50.2,,,,,0.4,314.7
+2021,209,63.3,Greenville,194.2,,,Ashwick,12.1,Wade Hampton,50.2,,,,,0.4,320.2
+2021,210,63.3,Greenville,194.2,,,Windstone,7.0,Wade Hampton,50.2,,,,,0.4,315.1
+2021,212,63.3,Greenville,194.2,Wade Hampton,50.2,,,Taylors,22.1,,,,,0.4,330.2
+2021,230,63.3,Greenville,194.2,Parker,92.6,Sterling,12.4,,,,,GGSD,14.9,0.4,377.8
+2021,233,63.3,Greenville,194.2,Parker,92.6,Woodside,8.2,,,,,GGSD,14.9,0.4,373.6
+2021,234,63.3,Greenville,194.2,Parker,92.6,Buxton,12.0,,,,,GGSD,14.9,0.4,377.4
+2021,235,63.3,Greenville,194.2,Parker,92.6,,,,,,,GGSD,14.9,0.4,365.4
+2021,236,63.3,Greenville,194.2,Parker,92.6,Monaghan,0.1,,,,,GGSD,14.9,0.4,365.5
+2021,237,63.3,Greenville,194.2,Parker,92.6,Freetown,14.4,,,,,GGSD,14.9,0.4,379.8
+2021,238,63.3,Greenville,194.2,Parker,92.6,Dunean,0.1,,,,,GGSD,14.9,0.4,365.5
+2021,239,63.3,Greenville,194.2,Parker,92.6,City View Lights,11.3,,,,,GGSD,14.9,0.4,376.7
+2021,259,63.3,Greenville,194.2,Wade Hampton,50.2,,,Taylors,22.1,,,GGSD,14.9,0.4,345.1
+2021,260,63.3,Greenville,194.2,Taylors,62.4,,,Taylors,22.1,,,GGSD,14.9,0.4,357.3
+2021,263,63.3,Greenville,194.2,Duncan Chapel,50.1,,,,,,,,,0.4,308.0
+2021,266,63.3,Greenville,194.2,,,,,,,,,,,0.4,257.9
+2021,268,63.3,Greenville,194.2,Piedmont Park,65.9,,,,,,,,,0.4,323.8
+2021,269,63.3,Greenville,194.2,Piedmont Park,65.9,,,,,,,GGSD,14.9,0.4,338.7
+2021,271,63.3,Greenville,194.2,Wade Hampton,50.2,,,,,,,GGSD,14.9,0.4,323.0
+2021,272,63.3,Greenville,194.2,Piedmont Park,65.9,Linkside,5.1,,,,,,,0.4,328.9
+2021,273,63.3,Greenville,194.2,Piedmont Park,65.9,,,,,,,,,0.4,323.8
+2021,275,63.3,Greenville,194.2,Taylors,62.4,Old Mill Estates,7.9,Taylors,22.1,,,,,0.4,350.3
+2021,276,63.3,Greenville,194.2,Taylors,62.4,,,Taylors,22.1,,,,,0.4,342.4
+2021,277,63.3,Greenville,194.2,Piedmont Park,65.9,,,,,,,GGSD,14.9,0.4,338.7
+2021,278,63.3,Greenville,194.2,Taylors,62.4,,,Taylors,22.1,,,,,0.4,342.4
+2021,279,63.3,Greenville,194.2,Piedmont Park,65.9,,,,,,,,,0.4,323.8
+2021,280,63.3,Greenville,194.2,,,,,,,,,,,0.4,257.9
+2021,281,63.3,Greenville,194.2,Berea,70.5,,,,,,,,,0.4,328.4
+2021,283,63.3,Greenville,194.2,Greer,23.5,,,,,,,,,0.4,281.4
+2021,285,63.3,Greenville,194.2,,,,,,,Greer,99.0,,,0.4,356.9
+2021,287,63.3,Greenville,194.2,Greer,23.5,,,,,,,,,0.4,281.4
+2021,288,63.3,Greenville,194.2,,,,,,,Greer,99.0,,,0.4,356.9
+2021,289,63.3,Greenville,194.2,Lake Cunningham,35.5,,,,,,,,,0.4,293.4
+2021,290,63.3,Greenville,194.2,,,,,,,,,,,0.4,257.9
+2021,291,63.3,Greenville,194.2,Pelham-Batesville,26.0,,,,,,,,,0.4,283.9
+2021,294,63.3,Greenville,194.2,Lake Cunningham,35.5,,,Taylors,22.1,,,,,0.4,315.5
+2021,295,63.3,Greenville,194.2,,,,,,,,,,,0.4,257.9
+2021,297,63.3,Greenville,194.2,,,,,,,,,GGSD,14.9,0.4,272.8
+2021,302,63.3,Greenville,194.2,Parker,92.6,,,,,,,,,0.4,350.5
+2021,308,63.3,Greenville,194.2,Berea,70.5,,,,,,,GGSD,14.9,0.4,343.3
+2021,309,63.3,Greenville,194.2,Berea,70.5,,,,,,,GGSD,14.9,0.4,343.3
+2021,311,63.3,Greenville,194.2,Duncan Chapel,50.1,,,,,,,GGSD,14.9,0.4,322.9
+2021,312,63.3,Greenville,194.2,Duncan Chapel,50.1,,,,,,,,,0.4,308.0
+2021,316,63.3,Greenville,194.2,Lake Cunningham,35.5,,,,,,,,,,293.0
+2021,317,63.3,Greenville,194.2,Gowensville,30.2,,,,,,,,,,287.7
+2021,351,63.3,Greenville,194.2,Tigerville,43.7,,,,,,,,,,301.2
+2021,352,63.3,Greenville,194.2,,,,,Glassy Mountain,26.0,,,,,,283.5
+2021,354,63.3,Greenville,194.2,River Falls,27.5,,,,,,,,,,285.0
+2021,355,63.3,Greenville,194.2,,,,,,,,,,,,257.5
+2021,356,63.3,Greenville,194.2,,,,,North Greenville,39.7,,,,,,297.2
+2021,358,63.3,Greenville,194.2,,,,,Piedmont Park,65.9,,,,,,323.4
+2021,359,63.3,Greenville,194.2,Berea,70.5,,,,,,,,,,328.0
+2021,360,63.3,Greenville,194.2,,,,,Ceasars Head,20.9,,,,,,278.4
+2021,361,63.3,Greenville,194.2,,,,,,,Travelers Rest,88.9,,,0.4,346.8
+2021,364,63.3,Greenville,194.2,,,,,North Greenville,39.7,,,,,0.4,297.6
+2021,366,63.3,Greenville,194.2,,,,,,,Travelers Rest,88.9,,,0.4,346.8
+2021,367,63.3,Greenville,194.2,,,,,North Greenville,39.7,,,,,0.4,297.6
+2021,368,63.3,Greenville,194.2,,,,,Lake Cunningham,35.5,,,,,0.4,293.4
+2021,371,63.3,Greenville,194.2,,,,,Slater-Marietta,36.4,,,,,,293.9
+2021,373,63.3,Greenville,194.2,,,,,Slater-Marietta,36.4,,,,,,293.9
+2021,375,63.3,Greenville,194.2,,,Marietta Water,6.6,Slater-Marietta,36.4,,,,,0.4,300.9
+2021,376,63.3,Greenville,194.2,,,,,Slater-Marietta,36.4,,,,,0.4,294.3
+2021,377,63.3,Greenville,194.2,,,,,Slater-Marietta,36.4,,,,,0.4,294.3
+2021,399,63.3,Greenville,194.2,,,Marietta Water,6.6,Slater-Marietta,36.4,,,,,0.4,300.9
+2021,432,63.3,Spartanburg,308.3,,,,,Glassy Mountain,26.0,,,,,,397.6
+2021,435,63.3,Spartanburg,308.3,Foothills,19.5,,,,,,,,,,391.1
+2021,437,63.3,Spartanburg,308.3,Gowensville,30.2,,,,,,,,,,401.8
+2021,438,63.3,Spartanburg,308.3,Landrum,45.9,,,,,,,,,,417.5
+2021,500,63.3,Greenville,194.2,,,,,,,Greenville,81.4,,,0.4,339.3
+2021,501,63.3,Greenville,194.2,,,,,,,Greenville,81.4,,,0.4,339.3
+2021,502,63.3,Greenville,194.2,,,,,,,Greenville,81.4,,,0.4,339.3
+2021,511,63.3,Greenville,194.2,,,,,,,Greenville,81.4,,,0.4,339.3
+2021,512,63.3,Greenville,194.2,,,,,,,Greenville,81.4,,,0.4,339.3
+2021,515,63.3,Greenville,194.2,,,,,,,Greenville,81.4,,,0.4,339.3
+2021,696,63.3,Greenville,194.2,Fountain Inn,34.4,,,,,,,,,,291.9
+2021,697,63.3,Greenville,194.2,Fountain Inn,34.4,,,,,,,,,0.4,292.3
+2021,698,63.3,Greenville,194.2,,,,,,,Fountain Inn,68.7,,,0.4,326.6
+2021,699,63.3,Greenville,194.2,,,,,,,Fountain Inn,68.7,,,0.4,326.6
+2021,790,63.3,Greenville,194.2,Mauldin,29.0,,,,,,,,,0.4,286.9
+2021,795,63.3,Greenville,194.2,,,,,,,Mauldin,53.9,,,0.4,311.8
+2021,796,63.3,Greenville,194.2,,,,,,,Mauldin,53.9,,,0.4,311.8
+2021,799,63.3,Greenville,194.2,,,,,,,Mauldin,53.9,,,0.4,311.8
+2021,889,63.3,Greenville,194.2,Simpsonville,36.6,,,,,,,,,,294.1
+2021,890,63.3,Greenville,194.2,,,,,Clear Springs,27.4,,,,,0.4,285.3
+2021,891,63.3,Greenville,194.2,,,,,Clear Springs,27.4,,,,,,284.9
+2021,892,63.3,Greenville,194.2,,,,,Clear Springs,27.4,,,,,,284.9
+2021,893,63.3,Greenville,194.2,Simpsonville,36.6,,,,,,,,,,294.1
+2021,894,63.3,Greenville,194.2,Simpsonville,36.6,,,,,,,,,0.4,294.5
+2021,895,63.3,Greenville,194.2,Simpsonville,36.6,,,,,,,,,0.4,294.5
+2021,896,63.3,Greenville,194.2,Simpsonville,36.6,,,,,,,,,,294.1
+2021,897,63.3,Greenville,194.2,Simpsonville,36.6,,,,,,,,,0.4,294.5
+2021,898,63.3,Greenville,194.2,,,,,,,Simpsonville,59.8,,,0.4,317.7
+2021,899,63.3,Greenville,194.2,,,,,,,Simpsonville,59.8,,,0.4,317.7
+2022,005,63.2,Greenville,198.7,Dunklin,31.9,,,,,,,,,,293.8
+2022,025,63.2,Anderson,247.2,Dunklin,31.9,,,,,,,,,,342.3
+2022,026,63.2,Anderson,247.2,,,,,South Greenville,43.6,,,,,,354.0
+2022,046,63.2,Greenville,198.7,,,,,South Greenville,43.6,,,,,,305.5
+2022,047,63.2,Greenville,198.7,,,,,South Greenville,43.6,,,,,,305.5
+2022,048,63.2,Greenville,198.7,,,Canterbury,0.1,South Greenville,43.6,,,,,,305.6
+2022,049,63.2,Greenville,198.7,,,,,South Greenville,43.6,,,GGSD,14.9,,320.4
+2022,052,63.2,Greenville,198.7,Canebrake,40.7,,,,,,,,,,302.6
+2022,065,63.2,Greenville,198.7,,,,,,,,,,,0.4,262.3
+2022,066,63.2,Greenville,198.7,Greenville,31.9,,,,,,,,,0.4,294.2
+2022,090,63.2,Greenville,198.7,Piedmont,68.7,Piedmont Light,6.0,,,,,,,0.4,337.0
+2022,091,63.2,Greenville,198.7,Piedmont,68.7,,,,,,,,,0.4,331.0
+2022,092,63.2,Greenville,198.7,Piedmont,68.7,,,,,,,GGSD,14.9,0.4,345.9
+2022,100,63.2,Greenville,198.7,,,,,South Greenville,43.6,,,,,0.4,305.9
+2022,101,63.2,Greenville,198.7,,,,,South Greenville,43.6,,,GGSD,14.9,0.4,320.8
+2022,105,63.2,Greenville,198.7,Piedmont,68.7,,,,,,,,,,330.6
+2022,137,63.2,Greenville,198.7,,,,,Pelham-Batesville,27.0,,,,,,288.9
+2022,145,63.2,Greenville,198.7,Donaldson,94.7,,,,,,,,,0.4,357.0
+2022,150,63.2,Greenville,198.7,,,,,,,,,,,0.4,262.3
+2022,151,63.2,Greenville,198.7,Gantt,71.7,,,,,,,,,0.4,334.0
+2022,153,63.2,Greenville,198.7,Gantt,71.7,Chanticleer,17.7,,,,,GGSD,14.9,0.4,366.6
+2022,155,63.2,Greenville,198.7,Belmont,75.1,,,,,,,GGSD,14.9,0.4,352.3
+2022,156,63.2,Greenville,198.7,Gantt,71.7,,,,,,,GGSD,14.9,0.4,348.9
+2022,158,63.2,Greenville,198.7,Belmont,75.1,,,,,,,,,0.4,337.4
+2022,163,63.2,Greenville,198.7,,,,,,,,,,,0.4,262.3
+2022,166,63.2,Greenville,198.7,Parker,92.6,,,,,,,,,0.4,354.9
+2022,186,63.2,Greenville,198.7,,,,,Wade Hampton,53.2,,,GGSD,14.9,0.4,330.4
+2022,187,63.2,Greenville,198.7,,,,,Wade Hampton,53.2,,,GGSD,14.9,0.4,330.4
+2022,190,63.2,Greenville,198.7,,,,,,,Greer,99.0,,,0.4,361.3
+2022,193,63.2,Greenville,198.7,,,Brookfield,9.1,Boiling Springs,30.0,,,,,0.4,301.4
+2022,194,63.2,Greenville,198.7,,,Devenger,6.6,Boiling Springs,30.0,,,,,0.4,298.9
+2022,195,63.2,Greenville,198.7,,,,,Boiling Springs,30.0,,,,,0.4,292.3
+2022,196,63.2,Greenville,198.7,,,,,Boiling Springs,30.0,,,GGSD,14.9,0.4,307.2
+2022,197,63.2,Greenville,198.7,,,Devenger Point,3.9,Boiling Springs,30.0,,,,,0.4,296.2
+2022,198,63.2,Greenville,198.7,,,,,,,Greer,99.0,,,0.4,361.3
+2022,200,63.2,Greenville,198.7,,,,,Wade Hampton,53.2,,,,,0.4,315.5
+2022,201,63.2,Greenville,198.7,,,,,Wade Hampton,53.2,,,,,0.4,315.5
+2022,203,63.2,Greenville,198.7,,,,,Wade Hampton,53.2,,,,,0.4,315.5
+2022,204,63.2,Greenville,198.7,,,Brookfield,9.1,Wade Hampton,53.2,,,,,0.4,324.6
+2022,206,63.2,Greenville,198.7,,,,,Wade Hampton,53.2,,,GGSD,14.9,0.4,330.4
+2022,207,63.2,Greenville,198.7,,,,,Pelham-Batesville,27.0,,,,,0.4,289.3
+2022,208,63.2,Greenville,198.7,,,Devenger,6.6,Wade Hampton,53.2,,,,,0.4,322.1
+2022,209,63.2,Greenville,198.7,,,Ashwick,12.1,Wade Hampton,53.2,,,,,0.4,327.6
+2022,210,63.2,Greenville,198.7,,,Windstone,4.4,Wade Hampton,53.2,,,,,0.4,319.9
+2022,212,63.2,Greenville,198.7,,,,,Wade Hampton,53.2,,,,,0.4,315.5
+2022,230,63.2,Greenville,198.7,Parker,92.6,Sterling,11.2,,,,,GGSD,14.9,0.4,381.0
+2022,233,63.2,Greenville,198.7,Parker,92.6,Woodside,8.2,,,,,GGSD,14.9,0.4,378.0
+2022,234,63.2,Greenville,198.7,Parker,92.6,Buxton,12.0,,,,,GGSD,14.9,0.4,381.8
+2022,235,63.2,Greenville,198.7,Parker,92.6,,,,,,,GGSD,14.9,0.4,369.8
+2022,236,63.2,Greenville,198.7,Parker,92.6,Monaghan,0.1,,,,,GGSD,14.9,0.4,369.9
+2022,237,63.2,Greenville,198.7,Parker,92.6,Freetown,14.4,,,,,GGSD,14.9,0.4,384.2
+2022,238,63.2,Greenville,198.7,Parker,92.6,Dunean,0.1,,,,,GGSD,14.9,0.4,369.9
+2022,239,63.2,Greenville,198.7,Parker,92.6,City View Lights,11.3,,,,,GGSD,14.9,0.4,381.1
+2022,259,63.2,Greenville,198.7,,,,,Wade Hampton,53.2,,,GGSD,14.9,0.4,330.4
+2022,260,63.2,Greenville,198.7,Taylors,74.5,,,,,,,GGSD,14.9,0.4,351.7
+2022,263,63.2,Greenville,198.7,,,,,Duncan Chapel,51.7,,,,,0.4,314.0
+2022,266,63.2,Greenville,198.7,,,,,,,,,,,0.4,262.3
+2022,268,63.2,Greenville,198.7,,,,,Piedmont Park,69.4,,,,,0.4,331.7
+2022,269,63.2,Greenville,198.7,,,,,Piedmont Park,69.4,,,GGSD,14.9,0.4,346.6
+2022,271,63.2,Greenville,198.7,,,,,Wade Hampton,53.2,,,GGSD,14.9,0.4,330.4
+2022,272,63.2,Greenville,198.7,,,Linkside,5.1,Piedmont Park,69.4,,,,,0.4,336.8
+2022,273,63.2,Greenville,198.7,,,,,Piedmont Park,69.4,,,,,0.4,331.7
+2022,275,63.2,Greenville,198.7,Taylors,74.5,Old Mill Estates,7.9,,,,,,,0.4,344.7
+2022,276,63.2,Greenville,198.7,Taylors,74.5,,,,,,,,,0.4,336.8
+2022,277,63.2,Greenville,198.7,,,,,Piedmont Park,69.4,,,GGSD,14.9,0.4,346.6
+2022,278,63.2,Greenville,198.7,Taylors,74.5,,,,,,,,,0.4,336.8
+2022,279,63.2,Greenville,198.7,,,,,Piedmont Park,69.4,,,,,0.4,331.7
+2022,280,63.2,Greenville,198.7,,,,,,,,,,,0.4,262.3
+2022,281,63.2,Greenville,198.7,Berea,74.7,,,,,,,,,0.4,337.0
+2022,283,63.2,Greenville,198.7,Greer,23.5,,,,,,,,,0.4,285.8
+2022,285,63.2,Greenville,198.7,,,,,,,Greer,99.0,,,0.4,361.3
+2022,287,63.2,Greenville,198.7,Greer,23.5,,,,,,,,,0.4,285.8
+2022,288,63.2,Greenville,198.7,,,,,,,Greer,99.0,,,0.4,361.3
+2022,289,63.2,Greenville,198.7,,,,,Lake Cunningham,37.2,,,,,0.4,299.5
+2022,290,63.2,Greenville,198.7,,,,,,,,,,,0.4,262.3
+2022,291,63.2,Greenville,198.7,,,,,Pelham-Batesville,27.0,,,,,0.4,289.3
+2022,294,63.2,Greenville,198.7,,,,,Lake Cunningham,37.2,,,,,0.4,299.5
+2022,295,63.2,Greenville,198.7,,,,,,,,,,,0.4,262.3
+2022,297,63.2,Greenville,198.7,,,,,,,,,GGSD,14.9,0.4,277.2
+2022,302,63.2,Greenville,198.7,Parker,92.6,,,,,,,,,0.4,354.9
+2022,308,63.2,Greenville,198.7,Berea,74.7,,,,,,,GGSD,14.9,0.4,351.9
+2022,309,63.2,Greenville,198.7,Berea,74.7,,,,,,,GGSD,14.9,0.4,351.9
+2022,311,63.2,Greenville,198.7,,,,,Duncan Chapel,51.7,,,GGSD,14.9,0.4,328.9
+2022,312,63.2,Greenville,198.7,,,,,Duncan Chapel,51.7,,,,,0.4,314.0
+2022,316,63.2,Greenville,198.7,,,,,Lake Cunningham,37.2,,,,,,299.1
+2022,317,63.2,Greenville,198.7,Gowensville,32.0,,,,,,,,,,293.9
+2022,351,63.2,Greenville,198.7,Tigerville,41.5,,,,,,,,,,303.4
+2022,352,63.2,Greenville,198.7,,,,,Glassy Mountain,30.0,,,,,,291.9
+2022,354,63.2,Greenville,198.7,River Falls,27.1,,,,,,,,,,289.0
+2022,355,63.2,Greenville,198.7,,,,,,,,,,,,261.9
+2022,356,63.2,Greenville,198.7,,,,,North Greenville,42.5,,,,,,304.4
+2022,358,63.2,Greenville,198.7,,,,,Piedmont Park,69.4,,,,,,331.3
+2022,359,63.2,Greenville,198.7,Berea,74.7,,,,,,,,,,336.6
+2022,360,63.2,Greenville,198.7,,,,,Ceasars Head,24.3,,,,,,286.2
+2022,361,63.2,Greenville,198.7,,,,,,,Travelers Rest,88.9,,,0.4,351.2
+2022,364,63.2,Greenville,198.7,,,,,North Greenville,42.5,,,,,0.4,304.8
+2022,366,63.2,Greenville,198.7,,,,,,,Travelers Rest,88.9,,,0.4,351.2
+2022,367,63.2,Greenville,198.7,,,,,North Greenville,42.5,,,,,0.4,304.8
+2022,368,63.2,Greenville,198.7,,,,,Lake Cunningham,37.2,,,,,0.4,299.5
+2022,371,63.2,Greenville,198.7,,,,,Slater-Marietta,35.8,,,,,,297.7
+2022,373,63.2,Greenville,198.7,,,,,Slater-Marietta,35.8,,,,,,297.7
+2022,375,63.2,Greenville,198.7,,,Marietta Water,6.6,Slater-Marietta,35.8,,,,,0.4,304.7
+2022,376,63.2,Greenville,198.7,,,,,Slater-Marietta,35.8,,,,,0.4,298.1
+2022,377,63.2,Greenville,198.7,,,,,Slater-Marietta,35.8,,,,,0.4,298.1
+2022,399,63.2,Greenville,198.7,,,Marietta Water,6.6,Slater-Marietta,35.8,,,,,0.4,304.7
+2022,432,63.2,Spartanburg,308.3,,,,,Glassy Mountain,30.0,,,,,,401.5
+2022,435,63.2,Spartanburg,308.3,Foothills,19.9,,,,,,,,,,391.4
+2022,437,63.2,Spartanburg,308.3,Gowensville,32.0,,,,,,,,,,403.5
+2022,438,63.2,Spartanburg,308.3,Landrum,45.9,,,,,,,,,,417.4
+2022,500,63.2,Greenville,198.7,,,,,,,Greenville,81.4,,,0.4,343.7
+2022,501,63.2,Greenville,198.7,,,,,,,Greenville,81.4,,,0.4,343.7
+2022,502,63.2,Greenville,198.7,,,,,,,Greenville,81.4,,,0.4,343.7
+2022,511,63.2,Greenville,198.7,,,,,,,Greenville,81.4,,,0.4,343.7
+2022,512,63.2,Greenville,198.7,,,,,,,Greenville,81.4,,,0.4,343.7
+2022,515,63.2,Greenville,198.7,,,,,,,Greenville,81.4,,,0.4,343.7
+2022,696,63.2,Greenville,198.7,Fountain Inn,35.8,,,,,,,,,,297.7
+2022,697,63.2,Greenville,198.7,Fountain Inn,35.8,,,,,,,,,0.4,298.1
+2022,698,63.2,Greenville,198.7,,,,,,,Fountain Inn,68.7,,,0.4,331.0
+2022,699,63.2,Greenville,198.7,,,,,,,Fountain Inn,68.7,,,0.4,331.0
+2022,790,63.2,Greenville,198.7,Mauldin,29.0,,,,,,,,,0.4,291.3
+2022,795,63.2,Greenville,198.7,,,,,,,Mauldin,53.9,,,0.4,316.2
+2022,796,63.2,Greenville,198.7,,,,,,,Mauldin,53.9,,,0.4,316.2
+2022,799,63.2,Greenville,198.7,,,,,,,Mauldin,53.9,,,0.4,316.2
+2022,889,63.2,Greenville,198.7,Simpsonville,36.6,,,,,,,,,,298.5
+2022,890,63.2,Greenville,198.7,,,,,Clear Springs,29.8,,,,,0.4,292.1
+2022,891,63.2,Greenville,198.7,,,,,Clear Springs,29.8,,,,,,291.7
+2022,892,63.2,Greenville,198.7,,,,,Clear Springs,29.8,,,,,,291.7
+2022,893,63.2,Greenville,198.7,Simpsonville,36.6,,,,,,,,,,298.5
+2022,894,63.2,Greenville,198.7,Simpsonville,36.6,,,,,,,,,0.4,298.9
+2022,895,63.2,Greenville,198.7,Simpsonville,36.6,,,,,,,,,0.4,298.9
+2022,896,63.2,Greenville,198.7,Simpsonville,36.6,,,,,,,,,,298.5
+2022,897,63.2,Greenville,198.7,Simpsonville,36.6,,,,,,,,,0.4,298.9
+2022,898,63.2,Greenville,198.7,,,,,,,Simpsonville,59.8,,,0.4,322.1
+2022,899,63.2,Greenville,198.7,,,,,,,Simpsonville,59.8,,,0.4,322.1
+2023,005,70.3,Greenville,207.7,Dunklin,35.3,,,,,,,,,,313.3
+2023,025,70.3,Anderson,257.0,Dunklin,35.3,,,,,,,,,,362.6
+2023,026,70.3,Anderson,257.0,South Greenville,43.4,,,,,,,,,,370.7
+2023,046,70.3,Greenville,207.7,South Greenville,43.4,,,,,,,,,,321.4
+2023,047,70.3,Greenville,207.7,South Greenville,43.4,,,,,,,,,,321.4
+2023,048,70.3,Greenville,207.7,South Greenville,43.4,Canterbury,0.1,,,,,,,,321.5
+2023,049,70.3,Greenville,207.7,South Greenville,43.4,,,,,,,GGSD,14.9,,336.3
+2023,052,70.3,Greenville,207.7,Canebrake,40.7,,,,,,,,,,318.7
+2023,065,70.3,Greenville,207.7,,,,,,,,,,,0.3,278.3
+2023,066,70.3,Greenville,207.7,Greenville,31.9,,,,,,,,,0.3,310.2
+2023,090,70.3,Greenville,207.7,Piedmont,72.7,Piedmont Light,6.0,,,,,,,0.3,357.0
+2023,091,70.3,Greenville,207.7,Piedmont,72.7,,,,,,,,,0.3,351.0
+2023,092,70.3,Greenville,207.7,Piedmont,72.7,,,,,,,GGSD,14.9,0.3,365.9
+2023,100,70.3,Greenville,207.7,South Greenville,43.4,,,,,,,,,0.3,321.7
+2023,101,70.3,Greenville,207.7,South Greenville,43.4,,,,,,,GGSD,14.9,0.3,336.6
+2023,105,70.3,Greenville,207.7,Piedmont,72.7,,,,,,,,,,350.7
+2023,137,70.3,Greenville,207.7,Pelham-Batesville,27.0,,,,,,,,,,305.0
+2023,145,70.3,Greenville,207.7,Donaldson,77.3,,,,,,,,,0.3,355.6
+2023,150,70.3,Greenville,207.7,,,,,,,,,,,0.3,278.3
+2023,151,70.3,Greenville,207.7,Gantt,72.2,,,,,,,,,0.3,350.5
+2023,153,70.3,Greenville,207.7,Gantt,72.2,Chanticleer,17.7,,,,,GGSD,14.9,0.3,383.1
+2023,155,70.3,Greenville,207.7,Belmont,82.0,,,,,,,GGSD,14.9,0.3,375.2
+2023,156,70.3,Greenville,207.7,Gantt,72.2,,,,,,,GGSD,14.9,0.3,365.4
+2023,158,70.3,Greenville,207.7,Belmont,82.0,,,,,,,,,0.3,360.3
+2023,163,70.3,Greenville,207.7,,,,,,,,,,,0.3,278.3
+2023,166,70.3,Greenville,207.7,Parker,92.6,,,,,,,,,0.3,370.9
+2023,186,70.3,Greenville,207.7,Wade Hampton,53.2,,,,,,,GGSD,14.9,0.3,346.4
+2023,187,70.3,Greenville,207.7,Wade Hampton,53.2,,,,,,,GGSD,14.9,0.3,346.4
+2023,190,70.3,Greenville,207.7,,,,,,,Greer,99.0,,,0.3,377.3
+2023,193,70.3,Greenville,207.7,Boiling Springs,38.6,Brookfield,9.1,,,,,,,0.3,326.0
+2023,194,70.3,Greenville,207.7,Boiling Springs,38.6,Devenger,6.6,,,,,,,0.3,323.5
+2023,195,70.3,Greenville,207.7,Boiling Springs,38.6,,,,,,,,,0.3,316.9
+2023,196,70.3,Greenville,207.7,Boiling Springs,38.6,,,,,,,GGSD,14.9,0.3,331.8
+2023,197,70.3,Greenville,207.7,Boiling Springs,38.6,Devenger Point,3.9,,,,,,,0.3,320.8
+2023,198,70.3,Greenville,207.7,,,,,,,Greer,99.0,,,0.3,377.3
+2023,200,70.3,Greenville,207.7,Wade Hampton,53.2,,,,,,,,,0.3,331.5
+2023,201,70.3,Greenville,207.7,Wade Hampton,53.2,,,,,,,,,0.3,331.5
+2023,203,70.3,Greenville,207.7,Wade Hampton,53.2,,,,,,,,,0.3,331.5
+2023,204,70.3,Greenville,207.7,Wade Hampton,53.2,Brookfield,9.1,,,,,,,0.3,340.6
+2023,206,70.3,Greenville,207.7,Wade Hampton,53.2,,,,,,,GGSD,14.9,0.3,346.4
+2023,207,70.3,Greenville,207.7,Pelham-Batesville,27.0,,,,,,,,,0.3,305.3
+2023,208,70.3,Greenville,207.7,Wade Hampton,53.2,Devenger,6.6,,,,,,,0.3,338.1
+2023,209,70.3,Greenville,207.7,Wade Hampton,53.2,Ashwick,12.1,,,,,,,0.3,343.6
+2023,210,70.3,Greenville,207.7,Wade Hampton,53.2,Windstone,4.4,,,,,,,0.3,335.9
+2023,212,70.3,Greenville,207.7,Wade Hampton,53.2,,,,,,,,,0.3,331.5
+2023,230,70.3,Greenville,207.7,Parker,92.6,Sterling,11.2,,,,,GGSD,14.9,0.3,397.0
+2023,233,70.3,Greenville,207.7,Parker,92.6,Woodside,8.2,,,,,GGSD,14.9,0.3,394.0
+2023,234,70.3,Greenville,207.7,Parker,92.6,Buxton,12.0,,,,,GGSD,14.9,0.3,397.8
+2023,235,70.3,Greenville,207.7,Parker,92.6,,,,,,,GGSD,14.9,0.3,385.8
+2023,236,70.3,Greenville,207.7,Parker,92.6,Monaghan,0.1,,,,,GGSD,14.9,0.3,385.9
+2023,237,70.3,Greenville,207.7,Parker,92.6,Freetown,14.4,,,,,GGSD,14.9,0.3,400.2
+2023,238,70.3,Greenville,207.7,Parker,92.6,Dunean,0.1,,,,,GGSD,14.9,0.3,385.9
+2023,239,70.3,Greenville,207.7,Parker,92.6,City View Lights,11.3,,,,,GGSD,14.9,0.3,397.1
+2023,259,70.3,Greenville,207.7,Wade Hampton,53.2,,,,,,,GGSD,14.9,0.3,346.4
+2023,260,70.3,Greenville,207.7,Taylors,81.0,,,,,,,GGSD,14.9,0.3,374.2
+2023,263,70.3,Greenville,207.7,Duncan Chapel,51.6,,,,,,,,,0.3,329.9
+2023,266,70.3,Greenville,207.7,,,,,,,,,,,0.3,278.3
+2023,268,70.3,Greenville,207.7,Piedmont Park,67.4,,,,,,,,,0.3,345.7
+2023,269,70.3,Greenville,207.7,Piedmont Park,67.4,,,,,,,GGSD,14.9,0.3,360.6
+2023,271,70.3,Greenville,207.7,Wade Hampton,53.2,,,,,,,GGSD,14.9,0.3,346.4
+2023,272,70.3,Greenville,207.7,Piedmont Park,67.4,Linkside,5.1,,,,,,,0.3,350.8
+2023,273,70.3,Greenville,207.7,Piedmont Park,67.4,,,,,,,,,0.3,345.7
+2023,275,70.3,Greenville,207.7,Taylors,81.0,Old Mill Estates,7.9,,,,,,,0.3,367.2
+2023,276,70.3,Greenville,207.7,Taylors,81.0,,,,,,,,,0.3,359.3
+2023,277,70.3,Greenville,207.7,Piedmont Park,67.4,,,,,,,GGSD,14.9,0.3,360.6
+2023,278,70.3,Greenville,207.7,Taylors,81.0,,,,,,,,,0.3,359.3
+2023,279,70.3,Greenville,207.7,Piedmont Park,67.4,,,,,,,,,0.3,345.7
+2023,280,70.3,Greenville,207.7,,,,,,,,,,,0.3,278.3
+2023,281,70.3,Greenville,207.7,Berea,84.3,,,,,,,,,0.3,362.6
+2023,283,70.3,Greenville,207.7,Greer,23.5,,,,,,,,,0.3,301.8
+2023,285,70.3,Greenville,207.7,,,,,,,Greer,99.0,,,0.3,377.3
+2023,287,70.3,Greenville,207.7,Greer,23.5,,,,,,,,,0.3,301.8
+2023,288,70.3,Greenville,207.7,,,,,,,Greer,99.0,,,0.3,377.3
+2023,289,70.3,Greenville,207.7,Lake Cunningham,37.2,,,,,,,,,0.3,315.5
+2023,290,70.3,Greenville,207.7,,,,,,,,,,,0.3,278.3
+2023,291,70.3,Greenville,207.7,Pelham-Batesville,27.0,,,,,,,,,0.3,305.3
+2023,294,70.3,Greenville,207.7,Lake Cunningham,37.2,,,,,,,,,0.3,315.5
+2023,295,70.3,Greenville,207.7,,,,,,,,,,,0.3,278.3
+2023,297,70.3,Greenville,207.7,,,,,,,,,GGSD,14.9,0.3,293.2
+2023,302,70.3,Greenville,207.7,Parker,92.6,,,,,,,,,0.3,370.9
+2023,308,70.3,Greenville,207.7,Berea,84.3,,,,,,,GGSD,14.9,0.3,377.5
+2023,309,70.3,Greenville,207.7,Berea,84.3,,,,,,,GGSD,14.9,0.3,377.5
+2023,311,70.3,Greenville,207.7,Duncan Chapel,51.6,,,,,,,GGSD,14.9,0.3,344.8
+2023,312,70.3,Greenville,207.7,Duncan Chapel,51.6,,,,,,,,,0.3,329.9
+2023,316,70.3,Greenville,207.7,Lake Cunningham,37.2,,,,,,,,,,315.2
+2023,317,70.3,Greenville,207.7,Gowensville,35.2,,,,,,,,,,313.2
+2023,351,70.3,Greenville,207.7,Tigerville,40.5,,,,,,,,,,318.5
+2023,352,70.3,Greenville,207.7,Glassy Mountain,33.6,,,,,,,,,,311.6
+2023,354,70.3,Greenville,207.7,River Falls,30.6,,,,,,,,,,308.6
+2023,355,70.3,Greenville,207.7,,,,,,,,,,,,278.0
+2023,356,70.3,Greenville,207.7,North Greenville,42.8,,,,,,,,,,320.8
+2023,358,70.3,Greenville,207.7,Piedmont Park,67.4,,,,,,,,,,345.4
+2023,359,70.3,Greenville,207.7,Berea,84.3,,,,,,,,,,362.3
+2023,360,70.3,Greenville,207.7,Ceasars Head,24.3,,,,,,,,,,302.3
+2023,361,70.3,Greenville,207.7,,,,,,,Travelers Rest,88.9,,,0.3,367.2
+2023,364,70.3,Greenville,207.7,North Greenville,42.8,,,,,,,,,0.3,321.1
+2023,366,70.3,Greenville,207.7,,,,,,,Travelers Rest,88.9,,,0.3,367.2
+2023,367,70.3,Greenville,207.7,North Greenville,42.8,,,,,,,,,0.3,321.1
+2023,368,70.3,Greenville,207.7,Lake Cunningham,37.2,,,,,,,,,0.3,315.5
+2023,371,70.3,Greenville,207.7,Slater-Marietta,36.0,,,,,,,,,,314.0
+2023,373,70.3,Greenville,207.7,Slater-Marietta,36.0,,,,,,,,,,314.0
+2023,375,70.3,Greenville,207.7,Slater-Marietta,36.0,Marietta Water,6.6,,,,,,,0.3,320.9
+2023,376,70.3,Greenville,207.7,Slater-Marietta,36.0,,,,,,,,,0.3,314.3
+2023,377,70.3,Greenville,207.7,Slater-Marietta,36.0,,,,,,,,,0.3,314.3
+2023,399,70.3,Greenville,207.7,Slater-Marietta,36.0,Marietta Water,6.6,,,,,,,0.3,320.9
+2023,432,70.3,Spartanburg,279.2,Glassy Mountain,33.6,,,,,,,,,,383.1
+2023,435,70.3,Spartanburg,279.2,Foothills,20.5,,,,,,,,,,370.0
+2023,437,70.3,Spartanburg,279.2,Gowensville,35.2,,,,,,,,,,384.7
+2023,438,70.3,Spartanburg,279.2,Landrum,45.9,,,,,,,,,,395.4
+2023,500,70.3,Greenville,207.7,,,,,,,Greenville,81.4,,,0.3,359.7
+2023,501,70.3,Greenville,207.7,,,,,,,Greenville,81.4,,,0.3,359.7
+2023,502,70.3,Greenville,207.7,,,,,,,Greenville,81.4,,,0.3,359.7
+2023,511,70.3,Greenville,207.7,,,,,,,Greenville,81.4,,,0.3,359.7
+2023,512,70.3,Greenville,207.7,,,,,,,Greenville,81.4,,,0.3,359.7
+2023,515,70.3,Greenville,207.7,,,,,,,Greenville,81.4,,,0.3,359.7
+2023,696,70.3,Greenville,207.7,Fountain Inn,37.2,,,,,,,,,,315.2
+2023,697,70.3,Greenville,207.7,Fountain Inn,37.2,,,,,,,,,0.3,315.5
+2023,698,70.3,Greenville,207.7,,,,,,,Fountain Inn,68.7,,,0.3,347.0
+2023,699,70.3,Greenville,207.7,,,,,,,Fountain Inn,68.7,,,0.3,347.0
+2023,790,70.3,Greenville,207.7,Mauldin,27.7,,,,,,,,,0.3,306.0
+2023,795,70.3,Greenville,207.7,,,,,,,Mauldin,53.9,,,0.3,332.2
+2023,796,70.3,Greenville,207.7,,,,,,,Mauldin,53.9,,,0.3,332.2
+2023,799,70.3,Greenville,207.7,,,,,,,Mauldin,53.9,,,0.3,332.2
+2023,889,70.3,Greenville,207.7,Simpsonville,36.5,,,,,,,,,,314.5
+2023,890,70.3,Greenville,207.7,Clear Springs,29.6,,,,,,,,,0.3,307.9
+2023,891,70.3,Greenville,207.7,Clear Springs,29.6,,,,,,,,,,307.6
+2023,892,70.3,Greenville,207.7,Clear Springs,29.6,,,,,,,,,,307.6
+2023,893,70.3,Greenville,207.7,Simpsonville,36.5,,,,,,,,,,314.5
+2023,894,70.3,Greenville,207.7,Simpsonville,36.5,,,,,,,,,0.3,314.8
+2023,895,70.3,Greenville,207.7,Simpsonville,36.5,,,,,,,,,0.3,314.8
+2023,896,70.3,Greenville,207.7,Simpsonville,36.5,,,,,,,,,,314.5
+2023,897,70.3,Greenville,207.7,Simpsonville,36.5,,,,,,,,,0.3,314.8
+2023,898,70.3,Greenville,207.7,,,,,,,Simpsonville,59.8,,,0.3,338.1
+2023,899,70.3,Greenville,207.7,,,,,,,Simpsonville,59.8,,,0.3,338.1
+2024,005,70.3,Greenville,206.7,Dunklin,37.4,,,,,,,,,,314.4
+2024,025,70.3,Anderson,256.3,Dunklin,37.4,,,,,,,,,,364.0
+2024,026,70.3,Anderson,256.3,South Greenville,43.1,,,,,,,,,,369.7
+2024,046,70.3,Greenville,206.7,South Greenville,43.1,,,,,,,,,,320.1
+2024,048,70.3,Greenville,206.7,South Greenville,43.1,Canterbury,0.1,,,,,,,,320.2
+2024,049,70.3,Greenville,206.7,South Greenville,43.1,,,,,,,GGSD,14.9,,335.0
+2024,052,70.3,Greenville,206.7,Canebrake,40.7,,,,,,,,,,317.7
+2024,065,70.3,Greenville,206.7,,,,,,,,,,,0.4,277.4
+2024,066,70.3,Greenville,206.7,Greenville,31.9,,,,,,,,,0.4,309.3
+2024,090,70.3,Greenville,206.7,Piedmont,72.7,Piedmont Light,6.0,,,,,,,0.4,356.1
+2024,091,70.3,Greenville,206.7,Piedmont,72.7,,,,,,,,,0.4,350.1
+2024,092,70.3,Greenville,206.7,Piedmont,72.7,,,,,,,GGSD,14.9,0.4,365.0
+2024,100,70.3,Greenville,206.7,South Greenville,43.1,,,,,,,,,0.4,320.5
+2024,101,70.3,Greenville,206.7,South Greenville,43.1,,,,,,,GGSD,14.9,0.4,335.4
+2024,105,70.3,Greenville,206.7,Piedmont,72.7,,,,,,,,,,349.7
+2024,137,70.3,Greenville,206.7,Pelham-Batesville,27.0,,,,,,,,,,304.0
+2024,145,70.3,Greenville,206.7,Donaldson,85.3,,,,,,,,,0.4,362.7
+2024,150,70.3,Greenville,206.7,,,,,,,,,,,0.4,277.4
+2024,151,70.3,Greenville,206.7,Gantt,72.2,,,,,,,,,0.4,349.6
+2024,153,70.3,Greenville,206.7,Gantt,72.2,Chanticleer,17.7,,,,,GGSD,14.9,0.4,382.2
+2024,155,70.3,Greenville,206.7,Belmont,81.5,,,,,,,GGSD,14.9,0.4,373.8
+2024,156,70.3,Greenville,206.7,Gantt,72.2,,,,,,,GGSD,14.9,0.4,364.5
+2024,158,70.3,Greenville,206.7,Belmont,81.5,,,,,,,,,0.4,358.9
+2024,163,70.3,Greenville,206.7,,,,,,,,,,,0.4,277.4
+2024,166,70.3,Greenville,206.7,Parker,92.6,,,,,,,,,0.4,370.0
+2024,186,70.3,Greenville,206.7,Wade Hampton,53.2,,,,,,,GGSD,14.9,0.4,345.5
+2024,187,70.3,Greenville,206.7,Wade Hampton,53.2,,,,,,,GGSD,14.9,0.4,345.5
+2024,190,70.3,Greenville,206.7,,,,,,,Greer,113.0,,,0.4,390.4
+2024,193,70.3,Greenville,206.7,Boiling Springs,37.6,Brookfield,9.1,,,,,,,0.4,324.1
+2024,194,70.3,Greenville,206.7,Boiling Springs,37.6,Devenger,6.6,,,,,,,0.4,321.6
+2024,195,70.3,Greenville,206.7,Boiling Springs,37.6,,,,,,,,,0.4,315.0
+2024,196,70.3,Greenville,206.7,Boiling Springs,37.6,,,,,,,GGSD,14.9,0.4,329.9
+2024,197,70.3,Greenville,206.7,Boiling Springs,37.6,Devenger Point,3.9,,,,,,,0.4,318.9
+2024,198,70.3,Greenville,206.7,,,,,,,Greer,113.0,,,0.4,390.4
+2024,200,70.3,Greenville,206.7,Wade Hampton,53.2,,,,,,,,,0.4,330.6
+2024,201,70.3,Greenville,206.7,Wade Hampton,53.2,,,,,,,,,0.4,330.6
+2024,203,70.3,Greenville,206.7,Wade Hampton,53.2,,,,,,,,,0.4,330.6
+2024,204,70.3,Greenville,206.7,Wade Hampton,53.2,Brookfield,9.1,,,,,,,0.4,339.7
+2024,206,70.3,Greenville,206.7,Wade Hampton,53.2,,,,,,,GGSD,14.9,0.4,345.5
+2024,207,70.3,Greenville,206.7,Pelham-Batesville,27.0,,,,,,,,,0.4,304.4
+2024,208,70.3,Greenville,206.7,Wade Hampton,53.2,Devenger,6.6,,,,,,,0.4,337.2
+2024,209,70.3,Greenville,206.7,Wade Hampton,53.2,Ashwick,12.1,,,,,,,0.4,342.7
+2024,210,70.3,Greenville,206.7,Wade Hampton,53.2,Windstone,4.4,,,,,,,0.4,335.0
+2024,212,70.3,Greenville,206.7,Wade Hampton,53.2,,,,,,,,,0.4,330.6
+2024,230,70.3,Greenville,206.7,Parker,92.6,Sterling,11.2,,,,,GGSD,14.9,0.4,396.1
+2024,233,70.3,Greenville,206.7,Parker,92.6,Woodside,12.4,,,,,GGSD,14.9,0.4,397.3
+2024,234,70.3,Greenville,206.7,Parker,92.6,Buxton,12.0,,,,,GGSD,14.9,0.4,396.9
+2024,235,70.3,Greenville,206.7,Parker,92.6,,,,,,,GGSD,14.9,0.4,384.9
+2024,236,70.3,Greenville,206.7,Parker,92.6,Monaghan,8.7,,,,,GGSD,14.9,0.4,393.6
+2024,237,70.3,Greenville,206.7,Parker,92.6,Freetown,14.4,,,,,GGSD,14.9,0.4,399.3
+2024,238,70.3,Greenville,206.7,Parker,92.6,Dunean,0.1,,,,,GGSD,14.9,0.4,385.0
+2024,239,70.3,Greenville,206.7,Parker,92.6,City View Lights,11.3,,,,,GGSD,14.9,0.4,396.2
+2024,259,70.3,Greenville,206.7,Wade Hampton,53.2,,,,,,,GGSD,14.9,0.4,345.5
+2024,260,70.3,Greenville,206.7,Taylors,85.0,,,,,,,GGSD,14.9,0.4,377.3
+2024,266,70.3,Greenville,206.7,,,,,,,,,,,0.4,277.4
+2024,271,70.3,Greenville,206.7,Wade Hampton,53.2,,,,,,,GGSD,14.9,0.4,345.5
+2024,272,70.3,Greenville,206.7,Piedmont Park,69.4,Linkside,5.1,,,,,,,0.4,351.9
+2024,275,70.3,Greenville,206.7,Taylors,85.0,Old Mill Estates,7.9,,,,,,,0.4,370.3
+2024,276,70.3,Greenville,206.7,Taylors,85.0,,,,,,,,,0.4,362.4
+2024,277,70.3,Greenville,206.7,Piedmont Park,69.4,,,,,,,GGSD,14.9,0.4,361.7
+2024,278,70.3,Greenville,206.7,Taylors,85.0,,,,,,,,,0.4,362.4
+2024,279,70.3,Greenville,206.7,Piedmont Park,69.4,,,,,,,,,0.4,346.8
+2024,280,70.3,Greenville,206.7,,,,,,,,,,,0.4,277.4
+2024,281,70.3,Greenville,206.7,Berea,83.3,,,,,,,,,0.4,360.7
+2024,283,70.3,Greenville,206.7,Greer,23.5,,,,,,,,,0.4,300.9
+2024,285,70.3,Greenville,206.7,,,,,,,Greer,113.0,,,0.4,390.4
+2024,288,70.3,Greenville,206.7,,,,,,,Greer,113.0,,,0.4,390.4
+2024,289,70.3,Greenville,206.7,Lake Cunningham,43.8,,,,,,,,,0.4,321.2
+2024,290,70.3,Greenville,206.7,,,,,,,,,,,0.4,277.4
+2024,291,70.3,Greenville,206.7,Pelham-Batesville,27.0,,,,,,,,,0.4,304.4
+2024,295,70.3,Greenville,206.7,,,,,,,,,,,0.4,277.4
+2024,297,70.3,Greenville,206.7,,,,,,,,,GGSD,14.9,0.4,292.3
+2024,302,70.3,Greenville,206.7,Parker,92.6,,,,,,,,,0.4,370.0
+2024,308,70.3,Greenville,206.7,Berea,83.3,,,,,,,GGSD,14.9,0.4,375.6
+2024,311,70.3,Greenville,206.7,Duncan Chapel,51.3,,,,,,,GGSD,14.9,0.4,343.6
+2024,312,70.3,Greenville,206.7,Duncan Chapel,51.3,,,,,,,,,0.4,328.7
+2024,316,70.3,Greenville,206.7,Lake Cunningham,43.8,,,,,,,,,,320.8
+2024,317,70.3,Greenville,206.7,Gowensville,36.9,,,,,,,,,,313.9
+2024,351,70.3,Greenville,206.7,Tigerville,46.7,,,,,,,,,,323.7
+2024,352,70.3,Greenville,206.7,Glassy Mountain,29.0,,,,,,,,,,306.0
+2024,354,70.3,Greenville,206.7,River Falls,26.7,,,,,,,,,,303.7
+2024,355,70.3,Greenville,206.7,,,,,,,,,,,,277.0
+2024,356,70.3,Greenville,206.7,North Greenville,42.4,,,,,,,,,,319.4
+2024,358,70.3,Greenville,206.7,Piedmont Park,69.4,,,,,,,,,,346.4
+2024,359,70.3,Greenville,206.7,Berea,83.3,,,,,,,,,,360.3
+2024,360,70.3,Greenville,206.7,Caesars Head,24.3,,,,,,,,,,301.3
+2024,366,70.3,Greenville,206.7,,,,,,,Travelers Rest,88.9,,,0.4,366.3
+2024,367,70.3,Greenville,206.7,North Greenville,42.4,,,,,,,,,0.4,319.8
+2024,371,70.3,Greenville,206.7,Slater-Marietta,36.7,,,,,,,,,,313.7
+2024,373,70.3,Greenville,206.7,Slater-Marietta,36.7,,,,,,,,,,313.7
+2024,375,70.3,Greenville,206.7,Slater-Marietta,36.7,Marietta Water,6.6,,,,,,,0.4,320.7
+2024,376,70.3,Greenville,206.7,Slater-Marietta,36.7,,,,,,,,,0.4,314.1
+2024,377,70.3,Greenville,206.7,Slater-Marietta,36.7,,,,,,,,,0.4,314.1
+2024,399,70.3,Greenville,206.7,Slater-Marietta,36.7,Marietta Water,6.6,,,,,,,0.4,320.7
+2024,432,70.3,Spartanburg,285.2,Glassy Mountain,29.0,,,,,,,,,,384.5
+2024,435,70.3,Spartanburg,285.2,Foothills,26.6,,,,,,,,,,382.1
+2024,437,70.3,Spartanburg,285.2,Gowensville,36.9,,,,,,,,,,392.4
+2024,438,70.3,Spartanburg,285.2,Landrum,45.9,,,,,,,,,,401.4
+2024,500,70.3,Greenville,206.7,,,,,,,Greenville,81.4,,,0.4,358.8
+2024,501,70.3,Greenville,206.7,,,,,,,Greenville,81.4,,,0.4,358.8
+2024,502,70.3,Greenville,206.7,,,,,,,Greenville,81.4,,,0.4,358.8
+2024,511,70.3,Greenville,206.7,,,,,,,Greenville,81.4,,,0.4,358.8
+2024,512,70.3,Greenville,206.7,,,,,,,Greenville,81.4,,,0.4,358.8
+2024,515,70.3,Greenville,206.7,,,,,,,Greenville,81.4,,,0.4,358.8
+2024,696,70.3,Greenville,206.7,Fountain Inn,35.2,,,,,,,,,,312.2
+2024,697,70.3,Greenville,206.7,Fountain Inn,35.2,,,,,,,,,0.4,312.6
+2024,699,70.3,Greenville,206.7,,,,,,,Fountain Inn,68.7,,,0.4,346.1
+2024,790,70.3,Greenville,206.7,Mauldin,29.9,,,,,,,,,0.4,307.3
+2024,795,70.3,Greenville,206.7,,,,,,,Mauldin,59.9,,,0.4,337.3
+2024,796,70.3,Greenville,206.7,,,,,,,Mauldin,59.9,,,0.4,337.3
+2024,799,70.3,Greenville,206.7,,,,,,,Mauldin,59.9,,,0.4,337.3
+2024,890,70.3,Greenville,206.7,Clear Springs,30.5,,,,,,,,,0.4,307.9
+2024,892,70.3,Greenville,206.7,Clear Springs,30.5,,,,,,,,,,307.5
+2024,893,70.3,Greenville,206.7,Simpsonville,36.0,,,,,,,,,,313.0
+2024,897,70.3,Greenville,206.7,Simpsonville,36.0,,,,,,,,,0.4,313.4
+2024,899,70.3,Greenville,206.7,,,,,,,Simpsonville,59.8,,,0.4,337.2
+2025,005,60.1,Greenville,189.7,Dunklin,36.6,,,,,,,,,,286.4
+2025,025,60.1,Anderson,263.6,Dunklin,36.6,,,,,,,,,,360.3
+2025,026,60.1,Anderson,263.6,South Greenville,36.7,,,,,,,,,,360.4
+2025,046,60.1,Greenville,189.7,South Greenville,36.7,,,,,,,,,,286.5
+2025,048,60.1,Greenville,189.7,South Greenville,36.7,Canterbury,0.1,,,,,,,,286.6
+2025,049,60.1,Greenville,189.7,South Greenville,36.7,,,,,,,GGSD,16.0,,302.5
+2025,052,60.1,Greenville,189.7,Canebrake,37.8,,,,,,,,,,287.6
+2025,065,60.1,Greenville,189.7,,,,,,,,,,,0.3,250.1
+2025,066,60.1,Greenville,189.7,Greenville,27.4,,,,,,,,,0.3,277.5
+2025,090,60.1,Greenville,189.7,Piedmont,66.5,Piedmont Light,5.3,,,,,,,0.3,321.9
+2025,091,60.1,Greenville,189.7,Piedmont,66.5,,,,,,,,,0.3,316.6
+2025,092,60.1,Greenville,189.7,Piedmont,66.5,,,,,,,GGSD,16.0,0.3,332.6
+2025,100,60.1,Greenville,189.7,South Greenville,36.7,,,,,,,,,0.3,286.8
+2025,101,60.1,Greenville,189.7,South Greenville,36.7,,,,,,,GGSD,16.0,0.3,302.8
+2025,105,60.1,Greenville,189.7,Piedmont,66.5,,,,,,,,,,316.3
+2025,137,60.1,Greenville,189.7,Pelham-Batesville,24.4,,,,,,,,,,274.2
+2025,145,60.1,Greenville,189.7,Donaldson,75.8,,,,,,,,,0.3,325.9
+2025,150,60.1,Greenville,189.7,,,,,,,,,,,0.3,250.1
+2025,151,60.1,Greenville,189.7,Gantt,65.0,,,,,,,,,0.3,315.1
+2025,153,60.1,Greenville,189.7,Gantt,65.0,Chanticleer,15.0,,,,,GGSD,16.0,0.3,346.1
+2025,155,60.1,Greenville,189.7,Belmont,68.8,,,,,,,GGSD,16.0,0.3,334.9
+2025,156,60.1,Greenville,189.7,Gantt,65.0,,,,,,,GGSD,16.0,0.3,331.1
+2025,158,60.1,Greenville,189.7,Belmont,68.8,,,,,,,,,0.3,318.9
+2025,163,60.1,Greenville,189.7,,,,,,,,,,,0.3,250.1
+2025,166,60.1,Greenville,189.7,Parker,81.7,,,,,,,,,0.3,331.8
+2025,186,60.1,Greenville,189.7,Wade Hampton,47.2,,,,,,,GGSD,16.0,0.3,313.3
+2025,187,60.1,Greenville,189.7,Wade Hampton,47.2,,,,,,,GGSD,16.0,0.3,313.3
+2025,190,60.1,Greenville,189.7,,,,,,,Greer,111.0,,,0.3,361.1
+2025,193,60.1,Greenville,189.7,Boiling Springs,33.0,Brookfield,10.5,,,,,,,0.3,293.6
+2025,194,60.1,Greenville,189.7,Boiling Springs,33.0,Devenger,5.7,,,,,,,0.3,288.8
+2025,195,60.1,Greenville,189.7,Boiling Springs,33.0,,,,,,,,,0.3,283.1
+2025,196,60.1,Greenville,189.7,Boiling Springs,33.0,,,,,,,GGSD,16.0,0.3,299.1
+2025,197,60.1,Greenville,189.7,Boiling Springs,33.0,Devenger Point,3.3,,,,,,,0.3,286.4
+2025,198,60.1,Greenville,189.7,,,,,,,Greer,111.0,,,0.3,361.1
+2025,200,60.1,Greenville,189.7,Wade Hampton,47.2,,,,,,,,,0.3,297.3
+2025,201,60.1,Greenville,189.7,Wade Hampton,47.2,,,,,,,,,0.3,297.3
+2025,203,60.1,Greenville,189.7,Wade Hampton,47.2,,,,,,,,,0.3,297.3
+2025,204,60.1,Greenville,189.7,Wade Hampton,47.2,Brookfield,10.5,,,,,,,0.3,307.8
+2025,206,60.1,Greenville,189.7,Wade Hampton,47.2,,,,,,,GGSD,16.0,0.3,313.3
+2025,207,60.1,Greenville,189.7,Pelham-Batesville,24.4,,,,,,,,,0.3,274.5
+2025,208,60.1,Greenville,189.7,Wade Hampton,47.2,Devenger,5.7,,,,,,,0.3,303.0
+2025,209,60.1,Greenville,189.7,Wade Hampton,47.2,Ashwick,10.1,,,,,,,0.3,307.4
+2025,210,60.1,Greenville,189.7,Wade Hampton,47.2,Windstone,3.8,,,,,,,0.3,301.1
+2025,212,60.1,Greenville,189.7,Wade Hampton,47.2,,,,,,,,,0.3,297.3
+2025,230,60.1,Greenville,189.7,Parker,81.7,Sterling,9.6,,,,,GGSD,16.0,0.3,357.4
+2025,233,60.1,Greenville,189.7,Parker,81.7,Woodside,10.2,,,,,GGSD,16.0,0.3,358.0
+2025,234,60.1,Greenville,189.7,Parker,81.7,Buxton,10.6,,,,,GGSD,16.0,0.3,358.4
+2025,235,60.1,Greenville,189.7,Parker,81.7,,,,,,,GGSD,16.0,0.3,347.8
+2025,236,60.1,Greenville,189.7,Parker,81.7,Monaghan,7.7,,,,,GGSD,16.0,0.3,355.5
+2025,237,60.1,Greenville,189.7,Parker,81.7,Freetown,12.2,,,,,GGSD,16.0,0.3,360.0
+2025,238,60.1,Greenville,189.7,Parker,81.7,Dunean,0.1,,,,,GGSD,16.0,0.3,347.9
+2025,239,60.1,Greenville,189.7,Parker,81.7,City View Lights,10.4,,,,,GGSD,16.0,0.3,358.2
+2025,259,60.1,Greenville,189.7,Wade Hampton,47.2,,,,,,,GGSD,16.0,0.3,313.3
+2025,260,60.1,Greenville,189.7,Taylors,78.1,,,,,,,GGSD,16.0,0.3,344.2
+2025,266,60.1,Greenville,189.7,,,,,,,,,,,0.3,250.1
+2025,271,60.1,Greenville,189.7,Wade Hampton,47.2,,,,,,,GGSD,16.0,0.3,313.3
+2025,272,60.1,Greenville,189.7,Piedmont Park,62.1,Linkside,4.4,,,,,,,0.3,316.6
+2025,275,60.1,Greenville,189.7,Taylors,78.1,Old Mill Estates,6.7,,,,,,,0.3,334.9
+2025,276,60.1,Greenville,189.7,Taylors,78.1,,,,,,,,,0.3,328.2
+2025,277,60.1,Greenville,189.7,Piedmont Park,62.1,,,,,,,GGSD,16.0,0.3,328.2
+2025,278,60.1,Greenville,189.7,Taylors,78.1,,,,,,,,,0.3,328.2
+2025,279,60.1,Greenville,189.7,Piedmont Park,62.1,,,,,,,,,0.3,312.2
+2025,280,60.1,Greenville,189.7,,,,,,,,,,,0.3,250.1
+2025,281,60.1,Greenville,189.7,Berea,72.6,,,,,,,,,0.3,322.7
+2025,283,60.1,Greenville,189.7,Greer,24.1,,,,,,,,,0.3,274.2
+2025,285,60.1,Greenville,189.7,,,,,,,Greer,111.0,,,0.3,361.1
+2025,288,60.1,Greenville,189.7,,,,,,,Greer,111.0,,,0.3,361.1
+2025,289,60.1,Greenville,189.7,Lake Cunningham,37.9,,,,,,,,,0.3,288.0
+2025,290,60.1,Greenville,189.7,,,,,,,,,,,0.3,250.1
+2025,291,60.1,Greenville,189.7,Pelham-Batesville,24.4,,,,,,,,,0.3,274.5
+2025,295,60.1,Greenville,189.7,,,,,,,,,,,0.3,250.1
+2025,297,60.1,Greenville,189.7,,,,,,,,,GGSD,16.0,0.3,266.1
+2025,302,60.1,Greenville,189.7,Parker,81.7,,,,,,,,,0.3,331.8
+2025,308,60.1,Greenville,189.7,Berea,72.6,,,,,,,GGSD,16.0,0.3,338.7
+2025,311,60.1,Greenville,189.7,Duncan Chapel,45.4,,,,,,,GGSD,16.0,0.3,311.5
+2025,312,60.1,Greenville,189.7,Duncan Chapel,45.4,,,,,,,,,0.3,295.5
+2025,316,60.1,Greenville,189.7,Lake Cunningham,37.9,,,,,,,,,,287.7
+2025,317,60.1,Greenville,189.7,Gowensville,35.8,,,,,,,,,,285.6
+2025,351,60.1,Greenville,189.7,Tigerville,41.3,,,,,,,,,,291.1
+2025,352,60.1,Greenville,189.7,Glassy Mountain,27.7,,,,,,,,,,277.5
+2025,354,60.1,Greenville,189.7,River Falls,24.0,,,,,,,,,,273.8
+2025,355,60.1,Greenville,189.7,,,,,,,,,,,,249.8
+2025,356,60.1,Greenville,189.7,North Greenville,39.5,,,,,,,,,,289.3
+2025,358,60.1,Greenville,189.7,Piedmont Park,62.1,,,,,,,,,,311.9
+2025,359,60.1,Greenville,189.7,Berea,72.6,,,,,,,,,,322.4
+2025,360,60.1,Greenville,189.7,Caesars Head,24.7,,,,,,,,,,274.5
+2025,366,60.1,Greenville,189.7,,,,,,,Travelers Rest,82.9,,,0.3,333.0
+2025,367,60.1,Greenville,189.7,North Greenville,39.5,,,,,,,,,0.3,289.6
+2025,371,60.1,Greenville,189.7,Slater-Marietta,37.2,,,,,,,,,,287.0
+2025,373,60.1,Greenville,189.7,Slater-Marietta,37.2,,,,,,,,,,287.0
+2025,375,60.1,Greenville,189.7,Slater-Marietta,37.2,Marietta Water,5.8,,,,,,,0.3,293.1
+2025,376,60.1,Greenville,189.7,Slater-Marietta,37.2,,,,,,,,,0.3,287.3
+2025,377,60.1,Greenville,189.7,Slater-Marietta,37.2,,,,,,,,,0.3,287.3
+2025,399,60.1,Greenville,189.7,Slater-Marietta,37.2,Marietta Water,5.8,,,,,,,0.3,293.1
+2025,432,60.1,Spartanburg,285.2,Glassy Mountain,27.7,,,,,,,,,,373.0
+2025,435,60.1,Spartanburg,285.2,Foothills,20.1,,,,,,,,,,365.4
+2025,437,60.1,Spartanburg,285.2,Gowensville,35.8,,,,,,,,,,381.1
+2025,438,60.1,Spartanburg,285.2,Landrum,45.9,,,,,,,,,,391.2
+2025,500,60.1,Greenville,189.7,,,,,,,Greenville,81.4,,,0.3,331.5
+2025,501,60.1,Greenville,189.7,,,,,,,Greenville,81.4,,,0.3,331.5
+2025,502,60.1,Greenville,189.7,,,,,,,Greenville,81.4,,,0.3,331.5
+2025,511,60.1,Greenville,189.7,,,,,,,Greenville,81.4,,,0.3,331.5
+2025,512,60.1,Greenville,189.7,,,,,,,Greenville,81.4,,,0.3,331.5
+2025,515,60.1,Greenville,189.7,,,,,,,Greenville,81.4,,,0.3,331.5
+2025,516,60.1,Greenville,189.7,,,,,,,Greenville,81.4,,,0.3,331.5
+2025,517,60.1,Greenville,189.7,,,,,,,Greenville,81.4,,,0.3,331.5
+2025,696,60.1,Greenville,189.7,Fountain Inn,37.3,,,,,,,,,,287.1
+2025,697,60.1,Greenville,189.7,Fountain Inn,37.3,,,,,,,,,0.3,287.4
+2025,699,60.1,Greenville,189.7,,,,,,,Fountain Inn,68.7,,,0.3,318.8
+2025,790,60.1,Greenville,189.7,Mauldin,26.6,,,,,,,,,0.3,276.7
+2025,794,60.1,Greenville,189.7,,,,,,,Mauldin,53.7,,,0.3,303.8
+2025,795,60.1,Greenville,189.7,,,,,,,Mauldin,53.7,,,0.3,303.8
+2025,796,60.1,Greenville,189.7,,,,,,,Mauldin,53.7,,,0.3,303.8
+2025,797,60.1,Greenville,189.7,,,,,,,Mauldin,53.7,,,0.3,303.8
+2025,799,60.1,Greenville,189.7,,,,,,,Mauldin,53.7,,,0.3,303.8
+2025,890,60.1,Greenville,189.7,Clear Springs,27.6,,,,,,,,,0.3,277.7
+2025,892,60.1,Greenville,189.7,Clear Springs,27.6,,,,,,,,,,277.4
+2025,893,60.1,Greenville,189.7,Simpsonville,31.4,,,,,,,,,,281.2
+2025,897,60.1,Greenville,189.7,Simpsonville,31.4,,,,,,,,,0.3,281.5
+2025,899,60.1,Greenville,189.7,,,,,,,Simpsonville,53.4,,,0.3,303.5

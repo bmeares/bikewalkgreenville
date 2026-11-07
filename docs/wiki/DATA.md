@@ -31,6 +31,7 @@ Anything served to the app must `ST_Transform(geom, 4326)`. `pcc.stress_levels.g
 | OSM shortcut paths | `MapLayers.osm_paths` | 4,873 | Overpass cycleway/path/pedestrian/footway + street tunnels; way_id PK; daily `osm-paths` job; feeds the routing graph (`projects/osm-paths.yaml`) |
 | Collisions | `Ped.crashes_vulnerable` (1,650) + pedalcycle/pedestrian splits; `SCDPS.sql_bwg_collisions_*` map-ready points | | rich attrs: lighting, junction, contributing factor |
 | Boundaries | `Boundaries.boundaries` (6 municipalities), `county_council_districts` (12) | | |
+| Tax per acre (web page, not the app) | `public.taxmap_*`: `taxmap_parcels_county_greenville` (244,473, current bills), `taxmap_lots_greenville` (239,868 stacked lots + zone/municipality), `taxmap_parcel_taxes_greenville` (tax by PIN and year), zoning, zone families, millage, grid | | Live county parcel layer, not the stale `county."CAD_PARCEL_MP"` copy. `plugins/taxmap.py`, `projects/tax-per-acre.yaml`; see `docs/wiki/TAX-PER-ACRE.md` |
 | Bonus | `deflock.cameras_greenville` (83 ALPR), `brokenspoke.neighborhood_overall_scores` (23 BNA), `duke.lighting` (63k streetlights), `Events.events_greenville` | | |
 
 ## Auth model (release 1.22, `plugins/bwg-auth.py` v0.1.0)

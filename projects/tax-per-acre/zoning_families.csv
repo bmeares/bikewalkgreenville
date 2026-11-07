@@ -1,0 +1,145 @@
+jurisdiction,zone,family,name,source,lots
+(none),(none),Unclassified,No zoning polygon,none,13
+FOUNTAIN INN,C-1,Mixed-use,Central Business District,list,66
+FOUNTAIN INN,C-2,Commercial & office,Commercial District,list,317
+FOUNTAIN INN,D-MU,Mixed-use,Downtown Mixed Use (guess),inferred,71
+FOUNTAIN INN,FRD,Planned development,Flexible Review District,list,982
+FOUNTAIN INN,GR-1,Residential,General Residential (guess),inferred,1049
+FOUNTAIN INN,GR-2,Residential,General Residential (guess),inferred,1455
+FOUNTAIN INN,I-1,Industrial & services,Industrial District,list,36
+FOUNTAIN INN,NC,Commercial & office,Neighborhood Commercial District,list,5
+FOUNTAIN INN,O-S,"Civic, parks & special",Open Space (guess),inferred,6
+FOUNTAIN INN,R-C,Residential,Residential (guess),inferred,154
+FOUNTAIN INN,R-M,Residential,Residential Multifamily District,list,347
+FOUNTAIN INN,R-MHP,Residential,Residential Manufactured Home Park District,list,1
+FOUNTAIN INN,R-TR,Residential,Residential (guess),inferred,56
+FOUNTAIN INN,S-1,Industrial & services,Services District,list,28
+GREENVILLE,BG,Commercial & office,Business General,list,460
+GREENVILLE,BH,Commercial & office,Business Heavy,list,129
+GREENVILLE,CM,"Civic, parks & special",Special - Campus,list,244
+GREENVILLE,CV,"Civic, parks & special",Special - Civic,list,79
+GREENVILLE,IG,Industrial & services,Industrial General,list,106
+GREENVILLE,IX,Industrial & services,Industrial Flex,list,186
+GREENVILLE,MX-2,Mixed-use,Mixed Use,list,864
+GREENVILLE,MX-3,Mixed-use,Mixed Use,list,330
+GREENVILLE,MX-5,Mixed-use,Mixed Use,list,85
+GREENVILLE,MX-D,Mixed-use,Downtown Mixed Use,list,347
+GREENVILLE,MXS-2,Mixed-use,Shopfront,list,57
+GREENVILLE,MXS-3,Mixed-use,Shopfront,list,13
+GREENVILLE,MXS-D,Mixed-use,Downtown Shopfront,list,269
+GREENVILLE,PD,Planned development,Planned Development (not in the list for the city),list,870
+GREENVILLE,PK,"Civic, parks & special",Special - Parks,list,182
+GREENVILLE,RC-2,Residential,Community Scale,list,1062
+GREENVILLE,RC-3,Residential,Community Scale,list,595
+GREENVILLE,RC-5,Residential,Community Scale,list,17
+GREENVILLE,RH-A,Residential,House Scale,list,981
+GREENVILLE,RH-B,Residential,House Scale,list,3495
+GREENVILLE,RH-C,Residential,House Scale,list,8067
+GREENVILLE,RH-D,Residential,House Scale,list,3168
+GREENVILLE,RN-A,Residential,Neighborhood Scale,list,1846
+GREENVILLE,RN-B,Residential,Neighborhood Scale,list,548
+GREENVILLE,RN-C,Residential,Neighborhood Scale,list,493
+GREENVILLE,RNX-B,Residential,"Neighborhood Scale - Neighborhood Flex (residential, limited commercial)",list,432
+GREENVILLE,RNX-C,Residential,"Neighborhood Scale - Neighborhood Flex (residential, limited commercial)",list,439
+GREENVILLE,UNZONED,Unzoned,Area Not Zoned (as listed for another jurisdiction),list-other,2
+GREENVILLE COUNTY,AG,Agricultural,Agricultural Preservation,list,154
+GREENVILLE COUNTY,BG,Commercial & office,Business General (as listed for another jurisdiction),list-other,4
+GREENVILLE COUNTY,BH,Commercial & office,Business Heavy (as listed for another jurisdiction),list-other,6
+GREENVILLE COUNTY,BTD,Commercial & office,Business Technology District,list,10
+GREENVILLE COUNTY,C-1,Commercial & office,Commercial District,list,562
+GREENVILLE COUNTY,C-2,Commercial & office,Commercial District,list,2737
+GREENVILLE COUNTY,C-3,Commercial & office,Commercial District,list,335
+GREENVILLE COUNTY,CC,Unclassified,Not in the county list,unknown,2
+GREENVILLE COUNTY,ESD-PM,"Civic, parks & special",Environmentally Sensitive District Paris Mountain,list,533
+GREENVILLE COUNTY,FRD,Planned development,Flexible Review District,list,811
+GREENVILLE COUNTY,I-1,Industrial & services,Industrial District,list,1308
+GREENVILLE COUNTY,I-2,Industrial & services,Industrial Park District,list,32
+GREENVILLE COUNTY,IX,Industrial & services,Industrial Flex (as listed for another jurisdiction),list-other,2
+GREENVILLE COUNTY,NC,Commercial & office,Neighborhood Commercial District,list,35
+GREENVILLE COUNTY,O-D,Commercial & office,Office District,list,210
+GREENVILLE COUNTY,PD,Planned development,Planned Development District,list,8035
+GREENVILLE COUNTY,PD-R,Planned development,Planned Development - Residential (guess),inferred,2
+GREENVILLE COUNTY,PK,"Civic, parks & special",Special - Parks (as listed for another jurisdiction),list-other,1
+GREENVILLE COUNTY,POD,Commercial & office,Planned Office District,list,122
+GREENVILLE COUNTY,R-10,Residential,Single-Family Residential District,list,12542
+GREENVILLE COUNTY,R-12,Residential,Single-Family Residential District,list,26560
+GREENVILLE COUNTY,R-15,Residential,Single-Family Residential District,list,15842
+GREENVILLE COUNTY,R-20,Residential,Single-Family Residential District,list,11038
+GREENVILLE COUNTY,R-20A,Residential,Single-Family Residential District,list,17
+GREENVILLE COUNTY,R-6,Residential,Single-Family Residential District,list,76
+GREENVILLE COUNTY,R-7.5,Residential,Single-Family Residential District,list,10567
+GREENVILLE COUNTY,R-D,Residential,Residential Duplex District (as listed for another jurisdiction),list-other,36
+GREENVILLE COUNTY,R-M,Residential,Residential Multifamily District (as listed for another jurisdiction),list-other,3
+GREENVILLE COUNTY,R-M10,Residential,Multifamily Residential District,list,612
+GREENVILLE COUNTY,R-M12,Residential,Multifamily Residential District,list,1
+GREENVILLE COUNTY,R-M14,Residential,Multifamily Residential District,list,1
+GREENVILLE COUNTY,R-M16,Residential,Multifamily Residential District,list,4
+GREENVILLE COUNTY,R-M2,Residential,Multifamily Residential District,list,112
+GREENVILLE COUNTY,R-M20,Residential,Multifamily Residential District,list,6539
+GREENVILLE COUNTY,R-M4,Residential,Multifamily Residential District,list,119
+GREENVILLE COUNTY,R-M5,Residential,Multifamily Residential District,list,204
+GREENVILLE COUNTY,R-M6,Residential,Multifamily Residential District,list,1
+GREENVILLE COUNTY,R-M7,Residential,Multifamily Residential District,list,56
+GREENVILLE COUNTY,R-M8,Residential,Multifamily Residential District,list,74
+GREENVILLE COUNTY,R-MA,Residential,Multifamily Residential District,list,4192
+GREENVILLE COUNTY,R-MHP,Residential,Residential Manufactured Home Park District,list,37
+GREENVILLE COUNTY,R-R1,Residential,Rural Residential District,list,2257
+GREENVILLE COUNTY,R-R3,Residential,Rural Residential District,list,853
+GREENVILLE COUNTY,R-S,Residential,Residential Suburban District,list,17694
+GREENVILLE COUNTY,RN-A,Residential,Neighborhood Scale (as listed for another jurisdiction),list-other,4
+GREENVILLE COUNTY,S-1,Industrial & services,Services District,list,1809
+GREENVILLE COUNTY,UNZONED,Unzoned,Area Not Zoned,list,39593
+GREER,CC,Unclassified,Not in the county list,unknown,287
+GREER,CG,Unclassified,Not in the county list,unknown,264
+GREER,DRD,Planned development,Design Review District,list,1636
+GREER,GS,Unclassified,Not in the county list,unknown,168
+GREER,MD,Residential,"Medium Density Residential (per a listing, unconfirmed)",inferred,1299
+GREER,ML,Unclassified,Not in the county list,unknown,130
+GREER,OP,Unclassified,Not in the county list,unknown,75
+GREER,PD,Planned development,Planned Development District,list,3469
+GREER,RC,Unclassified,Not in the county list,unknown,8
+GREER,RR,Unclassified,Not in the county list,unknown,466
+GREER,SN,Residential,"Suburban Neighborhood (per a listing, unconfirmed)",inferred,3450
+GREER,TN,Unclassified,Not in the county list,unknown,1367
+MAULDIN,C-1,Commercial & office,Commercial District,list,47
+MAULDIN,C-2,Commercial & office,Highway Commercial District,list,310
+MAULDIN,CRD,Mixed-use,Central Redevelopment District,list,36
+MAULDIN,I-1,Industrial & services,Industrial District,list,66
+MAULDIN,O-D,Commercial & office,Office District,list,19
+MAULDIN,PD,Planned development,Planned Development,list,1219
+MAULDIN,PD-R,Planned development,Planned Development - Residential (guess),inferred,787
+MAULDIN,POD,Commercial & office,Planned Office District,list,1
+MAULDIN,R-10,Residential,Residential District,list,1240
+MAULDIN,R-12,Residential,Residential District,list,2363
+MAULDIN,R-15,Residential,Residential District,list,1058
+MAULDIN,R-20,Residential,Residential District,list,1005
+MAULDIN,R-6,Residential,Single-Family Residential District (as listed for another jurisdiction),list-other,39
+MAULDIN,R-8,Residential,Residential (guess),inferred,132
+MAULDIN,R-M,Residential,Residential Multifamily District,list,2677
+MAULDIN,R-M1,Residential,Mixed Residential District,list,1275
+MAULDIN,S-1,Industrial & services,Services District,list,160
+MAULDIN,UVD,Unclassified,Not in the county list,unknown,8
+SIMPSONVILLE,B-G,Commercial & office,Business - General District,list,407
+SIMPSONVILLE,B-I,Industrial & services,Business - Industrial District,list,58
+SIMPSONVILLE,B-L,Commercial & office,Business - Limited District,list,52
+SIMPSONVILLE,B-U,Mixed-use,Business - Urban District,list,47
+SIMPSONVILLE,ID,Planned development,Innovated Development District,list,2606
+SIMPSONVILLE,R-E,Residential,Residential - Estate District,list,1475
+SIMPSONVILLE,R-HI,Residential,Residential - High Density District,list,683
+SIMPSONVILLE,R-LO,Residential,Residential - Low Density District,list,3504
+SIMPSONVILLE,R-MID,Residential,Residential - Medium Density District,list,736
+SIMPSONVILLE,R-OI,Commercial & office,Residential - Neighborhood Office and Institutional District,list,190
+TRAVELERS REST,C-1,Commercial & office,Commercial District,list,21
+TRAVELERS REST,C-2,Commercial & office,Commercial District,list,227
+TRAVELERS REST,CBD,Mixed-use,Central Business District,list,8
+TRAVELERS REST,FRD,Planned development,Flexible Review District,list,29
+TRAVELERS REST,I-1,Industrial & services,Industrial District,list,36
+TRAVELERS REST,O-D,Commercial & office,Office District,list,4
+TRAVELERS REST,PD-R,Planned development,Planned Development - Residential (guess),inferred,110
+TRAVELERS REST,R-10,Residential,Residential District,list,775
+TRAVELERS REST,R-15,Residential,Residential District,list,583
+TRAVELERS REST,R-7.5,Residential,Residential District,list,437
+TRAVELERS REST,R-D,Residential,Residential Duplex District,list,2
+TRAVELERS REST,R-M,Residential,Residential Multifamily District,list,405
+TRAVELERS REST,S-1,Industrial & services,Services District,list,9
+TRAVELERS REST,TH,Residential,Townhouse District,list,61

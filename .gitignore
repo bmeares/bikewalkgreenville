@@ -6,6 +6,8 @@ data/
 root/
 *.db
 *.csv
+# Reviewed tax-per-acre tables (small, hand-checked; loaded by projects/tax-per-acre.yaml).
+!projects/tax-per-acre/*.csv
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

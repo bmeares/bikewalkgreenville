@@ -1,0 +1,161 @@
+### See https://meerschaum.io/reference/compose/ for the compose schema.
+###
+### Greenville County property tax per acre (Urban3-style).
+### The `taxmap` plugin (plugins/taxmap.py) serves the 3D map at /dash/tax-per-acre
+### (embed: /taxmap/map) on bwg.mrsm.io. Docs: docs/wiki/TAX-PER-ACRE.md.
+###
+###   mrsm compose sync pipes --file projects/tax-per-acre.yaml
+###     parcels -> parcel_taxes, zoning, zone_families, millage, municipalities, srt -> lots -> grid
+
+project_name: tax-per-acre
+
+root_dir: ../root
+
+plugins_dir:
+  - ../.installed_plugins
+  - ../plugins
+
+pipes:
+
+  ### Every county parcel as drawn, with its current tax bill, straight from the county's public
+  ### parcel layer (GreenvilleNJ/QueryLayers layer 0, CAD_PARCEL_MP_VW), paged by plugins/taxmap.py
+  ### (`fetch_county_parcels()`), EPSG:3857 with true acres from EPSG:6570.
+  ### taxmap:tax_year says which year the county's TOTTAX is (it isn't in the layer): bump it when
+  ### the county switches to new bills, then sync parcels -> parcel_taxes -> lots -> grid.
+  ### (BWG's own county."CAD_PARCEL_MP" copy is stale: tax bills paid through Jan 2025.)
+  - connector: "plugin:taxmap"
+    metric: "parcels"
+    location: "greenville"
+    target: "taxmap_parcels_county_greenville"
+    parameters:
+      taxmap:
+        tax_year: 2025
+
+  ### Each parcel's tax and values by tax year (one row per PIN and year): the history the map
+  ### itself doesn't keep. Each sync records the current year; 2024 was seeded from the older copy.
+  - connector: "sql:bwg"
+    metric: "parcel_taxes"
+    location: "greenville"
+    target: "taxmap_parcel_taxes_greenville"
+    columns:
+      pin: "pin"
+      tax_year: "tax_year"
+    dtypes:
+      pin: "string"
+      tax_year: "int"
+      tax: "float"
+      acres: "float"
+    upsert: true
+    parameters:
+      query: |-
+        SELECT pin, tax_year, tax, taxable_market_value, fair_market_value, land_value,
+               building_value, acres, landuse, proptype, tax_district
+        FROM "taxmap_parcels_county_greenville"
+
+  ### Zoning districts from the county's public ArcGIS MapServer (GreenvilleNJ/Search_and_Select_Query,
+  ### layer 3 'Zoning'), paged with plain GETs by plugins/taxmap.py (`fetch_zoning()`). Countywide:
+  ### each polygon's JCODE is the government whose zoning applies (45045 = Greenville County for
+  ### unincorporated land, which is 'UNZONED' where the county has no zoning). EPSG:6570 (feet), so
+  ### overlap areas are true areas. Lots get the zone that covers most of them.
+  - connector: "plugin:taxmap"
+    metric: "zoning"
+    location: "greenville"
+    target: "taxmap_zoning_greenville"
+
+  ### Zoning families: (zoning jurisdiction, zone code) -> Residential / Mixed-use / Commercial & office / ...
+  ### from projects/tax-per-acre/zoning_families.csv (scripts/taxmap_zoning_families.py, built from the county GIS
+  ### zoning abbreviations list; `family_source` = list | list-other | inferred | unknown).
+  ### Re-sync after editing the CSV.
+  - connector: "plugin:taxmap"
+    metric: "zone_families"
+    location: "greenville"
+    target: "taxmap_zone_families_greenville"
+
+  ### The County Auditor's millage sheets by year and tax district (DIST), from
+  ### projects/tax-per-acre/millage.csv (scripts/taxmap_parse_millage.py). Names tax districts:
+  ### a district is the city whose millage it carries, else unincorporated.
+  - connector: "plugin:taxmap"
+    metric: "millage"
+    location: "greenville"
+    target: "taxmap_millage_greenville"
+
+  ### Municipal limits (Greenville County GIS BND_MUNICIPAL), dissolved by name, EPSG:6570.
+  ### Lots outside every municipality are 'UNINCORPORATED'.
+  - connector: "sql:bwg"
+    metric: "municipalities"
+    location: "greenville"
+    target: "taxmap_municipalities_greenville"
+    columns:
+      primary: "municipality"
+    dtypes:
+      municipality: "string"
+      jcode: "string"
+      geometry: "geometry[MULTIPOLYGON, 6570]"
+    upsert: true
+    parameters:
+      query: |-
+        SELECT
+          trim("NAME") AS municipality,
+          MIN("JCODE")::text AS jcode,
+          ST_Multi(ST_CollectionExtract(ST_MakeValid(ST_Union(geometry)), 3)) AS geometry
+        FROM "county"."BND_MUNICIPAL"
+        WHERE geometry IS NOT NULL
+        GROUP BY trim("NAME")
+
+  ### Swamp Rabbit Trail overlay (county GIS "PRISMA Health Swamp Rabbit Trail", via BWG),
+  ### merged by section (Green/Blue/Orange Line) and kind (trail vs. access spur), in WGS84
+  ### for the map's GeoJSON source. Served at /taxmap/srt.geojson.
+  - connector: "sql:bwg"
+    metric: "srt"
+    location: "greenville"
+    target: "taxmap_srt_greenville"
+    columns:
+      primary: "segment"
+    dtypes:
+      segment: "string"
+      section: "string"
+      kind: "string"
+      miles: "float"
+      geometry: "geometry[MULTILINESTRING, 4326]"
+    upsert: true
+    parameters:
+      query: |-
+        SELECT
+          trim("SECTION") || ' / ' || CASE WHEN "NAME" ILIKE '%access%' THEN 'access' ELSE 'trail' END AS segment,
+          trim("SECTION") AS section,
+          CASE WHEN "NAME" ILIKE '%access%' THEN 'access' ELSE 'trail' END AS kind,
+          SUM(ST_Length(geometry)) / 5280.0 AS miles,
+          ST_Multi(ST_LineMerge(ST_Collect(ST_Transform(geometry, 4326)))) AS geometry
+        FROM gcgis."PRISMA Health Swamp Rabbit Trail"
+        WHERE geometry IS NOT NULL
+        GROUP BY 1, 2, 3
+
+  ### Lots: condo, garage and "building only" units stacked onto the land they sit on
+  ### (inside a land parcel's outline, else their PIN base lot, else the land under their
+  ### building). Every other parcel is its own lot. See the docstring in plugins/taxmap.py.
+  - connector: "plugin:taxmap"
+    metric: "lots"
+    location: "greenville"
+    target: "taxmap_lots_greenville"
+    parameters:
+      taxmap:
+        parcels:
+          connector: "plugin:taxmap"
+          metric: "parcels"
+          location: "greenville"
+
+  ### Overview grids (~100/200/400 m cells) for the zoomed-out map:
+  ### area-weighted tax per acre of the lots in each cell.
+  - connector: "plugin:taxmap"
+    metric: "grid"
+    location: "greenville"
+    target: "taxmap_grid_greenville"
+
+config:
+  meerschaum:
+    instance: "sql:bwg"
+    connectors:
+      sql:
+        bwg: MRSM{meerschaum:connectors:sql:bwg}
+
+environment: {}
