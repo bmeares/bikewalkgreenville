@@ -27,11 +27,9 @@ anything.
   jobs can take >30 s. `greenville-county.py` 0.2.1 fixes all four (wait is now
   300 s). The prod job was recreated with `fetch layer 'Street Centerline' -f`
   (the old `…In` step refreshed a dir the pipe never read) and the split
-  `ro ads_us_highway` drop-list typo fixed. Backup in the container:
-  `/meerschaum/plugins/greenville-county.py.bak-0.2.0`.
+  `ro ads_us_highway` drop-list typo fixed.
 - **`bike-parking`** got Overpass `429` (it and `osm-paths` both hit Overpass at
   00:52). `bike-parking.py` 0.3.1 retries 429/5xx with backoff + `Retry-After`.
-  Backup: `bike-parking.py.bak-0.3.0`.
 - **`events-watcher`** (CivicClerk → `Events.events_greenville`) had an empty
   stored command (`target.args == [[]]`) → "The job has no action to run" on every
   launch, and no `restart` flag, so it stayed down after the 2026-11-06 image
