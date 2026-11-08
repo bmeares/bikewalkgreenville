@@ -23,15 +23,20 @@ Submissions land in the `app/feedback/BikeParking` pipe (schema
 """
 
 import math
+import time
 
 import meerschaum as mrsm
 from meerschaum.plugins import api_plugin
 
-__version__ = '0.3.0'
+__version__ = '0.3.1'
 
 #: Greenville County-ish bbox (south, west, north, east) for the OSM fetch.
 OSM_BBOX = (34.58, -82.65, 35.10, -82.10)
 OVERPASS_URL = 'https://overpass-api.de/api/interpreter'
+#: Overpass answers 429/504 when its per-IP slots are busy (e.g. the 00:52 daily
+#: jobs `bike-parking` and `osm-paths` both hit it at once), so back off and retry.
+OVERPASS_RETRY_STATUSES = (429, 502, 503, 504)
+OVERPASS_RETRY_DELAYS_S = (15, 30, 60, 120)
 
 # Parking points, synced via this plugin's `fetch()` (OSM Overpass).
 # Registered + synced through projects/bike-parking.yaml:
@@ -83,6 +88,26 @@ FEEDBACK_PIPE: mrsm.Pipe = mrsm.Pipe(
 )
 
 
+def _overpass_query(requests, query: str, sleep=time.sleep) -> dict:
+    """POST an Overpass query, retrying with backoff while the server is busy."""
+    for delay in (*OVERPASS_RETRY_DELAYS_S, None):
+        resp = requests.post(
+            OVERPASS_URL,
+            data={'data': query},
+            headers={'User-Agent': f'bwg-bike-parking/{__version__} (data@bikewalkgreenville.org)'},
+            timeout=90,
+        )
+        if resp.status_code not in OVERPASS_RETRY_STATUSES or delay is None:
+            break
+        try:
+            delay = max(delay, int(resp.headers.get('Retry-After', 0)))
+        except ValueError:
+            pass
+        sleep(delay)
+    resp.raise_for_status()
+    return resp.json()
+
+
 def fetch(pipe: mrsm.Pipe, debug: bool = False, **kwargs):
     """Fetch OSM amenity points for greater Greenville (Overpass API).
     The amenity tag is chosen by the pipe's metric (see METRICS_AMENITIES)."""
@@ -95,14 +120,7 @@ def fetch(pipe: mrsm.Pipe, debug: bool = False, **kwargs):
     nwr["amenity"="{amenity}"]({south},{west},{north},{east});
     out center tags;
     """
-    resp = requests.post(
-        OVERPASS_URL,
-        data={'data': query},
-        headers={'User-Agent': f'bwg-bike-parking/{__version__} (data@bikewalkgreenville.org)'},
-        timeout=90,
-    )
-    resp.raise_for_status()
-    elements = resp.json().get('elements', [])
+    elements = _overpass_query(requests, query).get('elements', [])
 
     docs = []
     for el in elements:

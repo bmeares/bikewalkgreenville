@@ -66,3 +66,39 @@ def test_submit_requires_sign_in_and_hides_photo_until_approved(client):
         assert client.post('/bike-parking/submit', data=data, headers=ALICE).status_code == 200
     assert client.post('/bike-parking/submit', data=data, headers=ALICE).status_code == 429
     assert client.get('/bike-parking/photos/..%2Fsecret.jpg').status_code == 404
+
+
+class _Resp:
+    def __init__(self, status, payload=None, headers=None):
+        self.status_code, self._payload, self.headers = status, payload or {}, headers or {}
+
+    def json(self):
+        return self._payload
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f'{self.status_code} error')
+
+
+class _Requests:
+    def __init__(self, *responses):
+        self.responses, self.calls = list(responses), 0
+
+    def post(self, *args, **kwargs):
+        self.calls += 1
+        return self.responses.pop(0)
+
+
+def test_overpass_query_backs_off_when_rate_limited():
+    sleeps = []
+    reqs = _Requests(_Resp(429, headers={'Retry-After': '40'}), _Resp(504), _Resp(200, {'elements': [1]}))
+    assert bp._overpass_query(reqs, 'q', sleep=sleeps.append) == {'elements': [1]}
+    assert reqs.calls == 3 and sleeps == [40, 30]
+
+
+def test_overpass_query_gives_up_after_retries():
+    sleeps = []
+    reqs = _Requests(*[_Resp(429) for _ in range(len(bp.OVERPASS_RETRY_DELAYS_S) + 1)])
+    with pytest.raises(RuntimeError, match='429'):
+        bp._overpass_query(reqs, 'q', sleep=sleeps.append)
+    assert sleeps == list(bp.OVERPASS_RETRY_DELAYS_S)

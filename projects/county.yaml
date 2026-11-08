@@ -601,7 +601,7 @@ pipes:
       rcitycode: "RCITYCODE"
     tags: ["TRA"]
     greenville-county:
-      layer: "Street Centerline In"
+      layer: "Street Centerline"
 
 - connector: "plugin:greenville-county"
   metric: "sidewalks"

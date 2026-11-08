@@ -16,15 +16,18 @@ import meerschaum as mrsm
 from meerschaum.utils.warnings import info
 from meerschaum.plugins import make_action
 
-__version__ = '0.2.0'
+__version__ = '0.2.1'
 
 bwg = mrsm.Plugin('bwg')
 
 required = ['geopandas', 'pyogrio', 'pandas[pyarrow]', 'requests']
 
 BASE_URL = "https://www.gcgis.org"
-SUBMIT_JOB_URL: str = f"{BASE_URL}/arcgis/rest/services/GreenvilleJS/ExportLayers/GPServer/ExportLayers/submitJob"
-OUTPUT_URL_TEMPLATE: str = f"{BASE_URL}/arcgis/rest/services/GreenvilleJS/ExportLayers/GPServer/ExportLayers/jobs/" + "{job_id}"
+### The county moved its services from `arcgis/.../GreenvilleJS` to `arcgis3/.../GreenvilleNJ`
+### (Nov 2026); the old path now answers "Service ... not found".
+EXPORT_LAYERS_URL: str = f"{BASE_URL}/arcgis3/rest/services/GreenvilleNJ/ExportLayers/GPServer/ExportLayers"
+SUBMIT_JOB_URL: str = f"{EXPORT_LAYERS_URL}/submitJob"
+OUTPUT_URL_TEMPLATE: str = f"{EXPORT_LAYERS_URL}/jobs/" + "{job_id}"
 LAYER_NAMES: list[str] = [
     'PRISMA Health Swamp Rabbit Trail',
 ]
@@ -191,7 +194,7 @@ def resolve_layer_id(mapserver_url: str, layer_name: str) -> int:
 def fetch_layer(
     action: list[str],
     force: bool = False,
-    timeout_seconds: int = 30,
+    timeout_seconds: int = 300,
 ) -> pathlib.Path:
     """
     Scrape the county GIS website.
@@ -248,11 +251,16 @@ def submit_job(layer: str) -> str:
             'clip': 'False',
         },
         headers={'Referer': 'https://www.gcgis.org/apps/greenvillejs/'},
+        timeout=60,
     )
-    return response.json()['jobId']
+    data = response.json()
+    job_id = data.get('jobId')
+    if not job_id:
+        raise Exception(f"Failed to submit export job for layer '{layer}':\n{data}")
+    return job_id
  
 
-def download_job_output(job_id: str, timeout: float | int = 30) -> pathlib.Path:
+def download_job_output(job_id: str, timeout: float | int = 300) -> pathlib.Path:
     """
     Download a job's export file.
     """
@@ -304,6 +312,8 @@ def check_job_output(job_id: str) -> str | None:
     response = requests.get(out_zip_url, params={'f': 'json', 'returnType': 'data'})
 
     data = response.json()
-    download_rel_url = data['value']
-    download_url = urljoin(BASE_URL, download_rel_url)
+    ### The new server returns a root-relative path with Windows separators, e.g.
+    ### `arcgis3/rest/directories/arcgisjobs/.../ExportLayers_gpserver\\<job>\\scratch/Export_Shapefile.zip`.
+    download_rel_url = data['value'].replace('\\', '/')
+    download_url = urljoin(BASE_URL + '/', download_rel_url.lstrip('/'))
     return download_url
